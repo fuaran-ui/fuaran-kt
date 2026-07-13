@@ -65,14 +65,14 @@ if (-not ($Java -and (Test-Path $Java)) -or -not $Kotlinc) {
 Write-Host "fuaran-kt :: JDK $JavaHome" -ForegroundColor Cyan
 
 # --- Gather sources ------------------------------------------------------------------
-$MainKt = Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\main\kotlin"),
+$MainKt = @(Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\main\kotlin"),
     (Join-Path $Repo "fuaran-core\src\main\kotlin") -Filter *.kt -ErrorAction SilentlyContinue |
-    ForEach-Object FullName
-$TestKt = Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\test\kotlin"),
+    ForEach-Object FullName)
+$TestKt = @(Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\test\kotlin"),
     (Join-Path $Repo "fuaran-core\src\test\kotlin") -Filter *.kt -ErrorAction SilentlyContinue |
-    ForEach-Object FullName
-$JavaSrc = Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-core\src\main\java") -Filter *.java -ErrorAction SilentlyContinue |
-    ForEach-Object FullName
+    ForEach-Object FullName)
+$JavaSrc = @(Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-core\src\main\java") -Filter *.java -ErrorAction SilentlyContinue |
+    ForEach-Object FullName)
 
 # --- Build -------------------------------------------------------------------------- #
 if (-not $SkipBuild) {
