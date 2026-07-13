@@ -23,9 +23,12 @@
   Compile only; do not run the harnesses.
 
 .PARAMETER Package
-  Assemble the Android per-ABI `.so` / AAR `jniLibs` packaging. Requires the Android
-  NDK + cargo-ndk, which are absent on the reference box — this leg skips with a named
-  message (mirrors fuaran-rs `run.ps1 -Package`).
+  Build the Android per-ABI native libraries (Rust core via cargo-ndk + the JNI shim via
+  the NDK per-ABI clang) into the `fuaran-core` `jniLibs/` layout and assemble a
+  `fuaran-core.aar`, verifying per-ABI page alignment (16KB on the 64-bit ABIs). Requires
+  the Android NDK (`ANDROID_NDK_HOME`) + cargo-ndk + the Rust android targets; the leg
+  skips cleanly with a named message when they are absent (mirrors fuaran-rs
+  `run.ps1 -CrossTargets`). See dev-scripts/build-android-aar.ps1.
 #>
 [CmdletBinding()]
 param(
@@ -125,7 +128,24 @@ if ($HasSessionTest) {
 
 # --- Android packaging leg (opt-in) ------------------------------------------------- #
 if ($Package) {
-    Write-Host "`nSKIP: Android jniLibs/AAR packaging requires the Android SDK/NDK + cargo-ndk, which are absent on this machine. Build the per-ABI .so legs on a machine with the Android NDK (mirror fuaran-rs run.ps1 -CrossTargets/-Package)." -ForegroundColor Yellow
+    Write-Host "`n== Phase 543 :: Android per-ABI .so + AAR packaging ==" -ForegroundColor Cyan
+    # A runtime-free main-classes tree for the AAR's classes.jar (no -include-runtime, no tests).
+    $AarClasses = Join-Path $BuildDir "aar-classes"
+    Remove-Item -Recurse -Force $AarClasses -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force $AarClasses | Out-Null
+    if ($JavaSrc) {
+        & $Javac -h $JniGenDir -d $AarClasses @JavaSrc
+        if ($LASTEXITCODE -ne 0) { throw "javac (aar classes) failed" }
+    }
+    $mainCp = if ($JavaSrc) { @("-classpath", $AarClasses) } else { @() }
+    & $Kotlinc @MainKt @mainCp "-d" $AarClasses
+    if ($LASTEXITCODE -ne 0) { throw "kotlinc (aar classes) failed" }
+
+    $aar = & (Join-Path $Repo "dev-scripts\build-android-aar.ps1") -Repo $Repo -ClassesDir $AarClasses
+    if ($LASTEXITCODE -ne 0) { throw "Android AAR packaging failed" }
+    if (-not $aar) {
+        Write-Host "Android packaging skipped (NDK/cargo-ndk absent) — see message above." -ForegroundColor Yellow
+    }
 }
 
 Write-Host "`nAll available legs green." -ForegroundColor Green

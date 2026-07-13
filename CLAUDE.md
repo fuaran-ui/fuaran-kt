@@ -106,9 +106,22 @@ honours:
 
 The desktop test leg builds a host-native `.dll` (Rust cdylib + a clang-compiled JNI
 shim) and `System.load`s it, so `run.ps1` exercises a live Rust session without an
-emulator. The **Android leg** (per-ABI `.so`s via cargo-ndk into an AAR's `jniLibs/`,
-16KB-page-aligned) requires the Android NDK + cargo-ndk and is Android-only — it skips
-cleanly on this box with a named message (mirrors fuaran-rs `run.ps1 -CrossTargets`).
+emulator. The **Android leg** (`run.ps1 -Package` → `dev-scripts/build-android-aar.ps1`)
+cross-builds, for `arm64-v8a` / `armeabi-v7a` / `x86_64`: the Rust core
+(`libfuaran_rs.so`) via **cargo-ndk**, plus the JNI shim (`libfuaran_jni.so`) via the NDK
+per-ABI clang, into `fuaran-core/src/main/jniLibs/<abi>/`, and assembles a
+`build/fuaran-core.aar` (`AndroidManifest.xml` + `classes.jar` + `R.txt` +
+`jni/<abi>/*.so`). It verifies **per-ABI page alignment — 16KB (`0x4000`) on the 64-bit
+ABIs (arm64-v8a, x86_64) where Google requires it; 4KB (`0x1000`) on 32-bit armeabi-v7a**,
+and that each shim exports the `Java_fuaran_core_FuaranNative_*` symbols. Requires
+`ANDROID_NDK_HOME` + cargo-ndk + the Rust android targets; it **skips cleanly** with a
+named message when absent (mirrors fuaran-rs `run.ps1 -CrossTargets`). The `.so`s and the
+`.aar` are build outputs (gitignored). Two gotchas baked into the script: invoke
+cargo-ndk as the cargo subcommand `cargo ndk` (calling `cargo-ndk.exe` bare mis-parses —
+cargo supplies the `ndk` first-arg); and 16KB alignment is a 64-bit-only concern, so
+`-Wl,-z,max-page-size=16384` is applied to the 64-bit ABIs only. Runtime behaviour is
+covered by the desktop JNI leg (the Android `.so`s can't run without a device/emulator, so
+the Android leg's bar is build + correct symbols + alignment).
 
 ## Public vocabulary discipline
 
