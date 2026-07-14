@@ -30,8 +30,32 @@ function Find-Tool([string] $Name) {
     return $null
 }
 
+# Locate a Visual Studio `vcvars64.bat` (the MSVC host-toolchain env) — the fallback C compiler when a
+# host `clang` is not on PATH. Tries `vswhere` first, then globs the standard install roots. The NDK's
+# cross-`clang` is NOT a host compiler (no host libc headers — `stdio.h` not found), so on a box with
+# only the NDK, MSVC `cl.exe` under this env is the correct desktop-shim compiler (rustc's default host
+# on Windows is `x86_64-pc-windows-msvc`, so the fuaran-rs import lib is MSVC-ABI regardless).
+function Find-Vcvars {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+        $root = & $vswhere -latest -products * -property installationPath 2>$null | Select-Object -First 1
+        if ($root) {
+            $v = Join-Path $root "VC\Auxiliary\Build\vcvars64.bat"
+            if (Test-Path $v) { return $v }
+        }
+    }
+    foreach ($pf in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+        if (-not $pf) { continue }
+        $hits = Get-ChildItem (Join-Path $pf "Microsoft Visual Studio") -Recurse -Filter "vcvars64.bat" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'VC\\Auxiliary\\Build\\vcvars64.bat$' } | Select-Object -First 1
+        if ($hits) { return $hits.FullName }
+    }
+    return $null
+}
+
 $cargo = Find-Tool "cargo"
 $cc = Find-Tool "clang"
+$vcvars = if ($cc) { $null } else { Find-Vcvars }
 $javaHome = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine')
 if (-not $javaHome) { $javaHome = $env:JAVA_HOME }
 
@@ -39,12 +63,12 @@ if (-not $cargo) {
     Write-Host "SKIP (native): Rust toolchain (cargo) not found — the desktop JNI session leg requires it." -ForegroundColor Yellow
     return
 }
-if (-not $cc) {
-    Write-Host "SKIP (native): no C compiler (clang) found — cannot build the JNI shim." -ForegroundColor Yellow
+if (-not $cc -and -not $vcvars) {
+    Write-Host "SKIP (native): no C compiler (host clang / MSVC cl.exe) found — cannot build the JNI shim." -ForegroundColor Yellow
     return
 }
-if (-not $javaHome) {
-    Write-Host "SKIP (native): JAVA_HOME not set — need the JDK jni.h headers." -ForegroundColor Yellow
+if (-not $javaHome -or -not (Test-Path (Join-Path $javaHome "include\jni.h"))) {
+    Write-Host "SKIP (native): JAVA_HOME has no include\jni.h — need a full JDK's headers (a headless JRE/JBR will not do)." -ForegroundColor Yellow
     return
 }
 
@@ -81,24 +105,36 @@ if (-not (Test-Path $importLib) -or -not (Test-Path $coreDll)) {
     return
 }
 
-# 2. Compile + link the JNI shim.
+# 2. Compile + link the JNI shim — host clang if present, else MSVC cl.exe under vcvars64.
 $nativeOut = Join-Path $Repo "build\native"
 New-Item -ItemType Directory -Force $nativeOut | Out-Null
 $shim = Join-Path $Repo "fuaran-core\src\main\jni\fuaran_jni.c"
 $shimDir = Split-Path $shim -Parent
 $jniShim = Join-Path $nativeOut "fuaran_jni.dll"
+Remove-Item $jniShim -ErrorAction SilentlyContinue
+$incJni = Join-Path $javaHome "include"
+$incWin32 = Join-Path $javaHome "include\win32"
 
-$ccArgs = @(
-    "-shared",
-    "-o", $jniShim,
-    $shim,
-    $importLib,
-    "-I", $shimDir,
-    "-I", (Join-Path $javaHome "include"),
-    "-I", (Join-Path $javaHome "include\win32")
-)
-Write-Host "clang :: JNI shim -> $jniShim"
-& $cc @ccArgs 2>&1 | ForEach-Object { Write-Verbose $_ }
+if ($cc) {
+    $ccArgs = @(
+        "-shared",
+        "-o", $jniShim,
+        $shim,
+        $importLib,
+        "-I", $shimDir,
+        "-I", $incJni,
+        "-I", $incWin32
+    )
+    Write-Host "clang :: JNI shim -> $jniShim"
+    & $cc @ccArgs 2>&1 | ForEach-Object { Write-Verbose $_ }
+} else {
+    # MSVC path: run vcvars64 then cl in one cmd shell (cl builds a DLL with /LD; the JNI functions are
+    # `JNIEXPORT` = `__declspec(dllexport)` on win32, so cl exports the Java_* symbols without a .def).
+    $clLine = "call `"$vcvars`" && cd /d `"$nativeOut`" && cl /nologo /LD /Fe:fuaran_jni.dll `"$shim`" " +
+        "/I `"$shimDir`" /I `"$incJni`" /I `"$incWin32`" `"$importLib`""
+    Write-Host "cl.exe (MSVC) :: JNI shim -> $jniShim"
+    cmd /c $clLine 2>&1 | ForEach-Object { Write-Verbose $_ }
+}
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jniShim)) {
     Write-Host "SKIP (native): JNI shim compile failed." -ForegroundColor Yellow
     return

@@ -78,9 +78,16 @@ Write-Host "fuaran-kt :: JDK $JavaHome" -ForegroundColor Cyan
 $MainKt = @(Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\main\kotlin"),
     (Join-Path $Repo "fuaran-core\src\main\kotlin") -Filter *.kt -ErrorAction SilentlyContinue |
     ForEach-Object FullName)
-$TestKt = @(Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\test\kotlin"),
-    (Join-Path $Repo "fuaran-core\src\test\kotlin") -Filter *.kt -ErrorAction SilentlyContinue |
-    ForEach-Object FullName)
+# The direct kotlinc build runs the two `main()`-driven harnesses (`CorpusDecodeTest`, `SessionTest`)
+# via `java`; it deliberately compiles ONLY those, not every test file. The Gradle-only JUnit gates
+# (e.g. `:fuaran-core` `InteractionRoundTripTest`, which pulls JUnit + `:fuaran-driver`) are built and
+# run by Gradle — they are absent from this no-Gradle-binary classpath by design.
+$TestKt = @(
+    Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\test\kotlin") -Filter "CorpusDecodeTest.kt" -ErrorAction SilentlyContinue |
+        ForEach-Object FullName
+    Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-core\src\test\kotlin") -Filter "SessionTest.kt" -ErrorAction SilentlyContinue |
+        ForEach-Object FullName
+)
 $JavaSrc = @(Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-core\src\main\java") -Filter *.java -ErrorAction SilentlyContinue |
     ForEach-Object FullName)
 
@@ -167,6 +174,32 @@ if (-not $SkipTests -and -not $SkipRenderer) {
         & $Gradlew ":fuaran-renderer:testDebugUnitTest" "--console=plain"
         if ($LASTEXITCODE -ne 0) { throw "Phase 544 render-coverage gate failed" }
         Write-Host "Phase 544 render-coverage gate green." -ForegroundColor Green
+
+        # --- Phase 545: interaction round-trip + server-driven driver + Material tone bridge ------ #
+        # The renderer gate above already covers the Phase 545 Theme + Interaction Robolectric tests
+        # (they are in the `:fuaran-renderer` unit-test source set). Here we add the pure-JVM driver
+        # gate and the live-native interaction round-trip. The interaction leg reuses the desktop shim
+        # `$nativeDll` the Phase 543 leg built; when it is absent the Gradle test cleanly skips.
+        Write-Host "`n== Phase 545 :: server-driven driver gate (Gradle) ==" -ForegroundColor Cyan
+        & $Gradlew ":fuaran-driver:test" "--console=plain"
+        if ($LASTEXITCODE -ne 0) { throw "Phase 545 driver gate failed" }
+
+        Write-Host "`n== Phase 545 :: live interaction round-trip (Gradle + JNI) ==" -ForegroundColor Cyan
+        if ($nativeDll) {
+            & $Gradlew ":fuaran-core:test" "-Pfuaran.lib=$nativeDll" "--console=plain"
+            if ($LASTEXITCODE -ne 0) { throw "Phase 545 live interaction round-trip failed" }
+            Write-Host "Phase 545 live interaction round-trip green." -ForegroundColor Green
+        }
+        else {
+            & $Gradlew ":fuaran-core:test" "--console=plain"
+            if ($LASTEXITCODE -ne 0) { throw "Phase 545 interaction gate failed" }
+            Write-Host "Phase 545 interaction round-trip skipped cleanly (desktop native shim absent)." -ForegroundColor Yellow
+        }
+
+        Write-Host "`n== Phase 545 :: sample app build (assembleDebug) ==" -ForegroundColor Cyan
+        & $Gradlew ":samples:assembleDebug" "--console=plain"
+        if ($LASTEXITCODE -ne 0) { throw "Phase 545 sample app build failed" }
+        Write-Host "Phase 545 sample app assembled." -ForegroundColor Green
     }
 }
 
