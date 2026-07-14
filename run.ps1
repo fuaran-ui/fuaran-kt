@@ -29,12 +29,19 @@
   the Android NDK (`ANDROID_NDK_HOME`) + cargo-ndk + the Rust android targets; the leg
   skips cleanly with a named message when they are absent (mirrors fuaran-rs
   `run.ps1 -CrossTargets`). See dev-scripts/build-android-aar.ps1.
+
+.PARAMETER SkipRenderer
+  Skip the Phase 544 Jetpack Compose render-coverage leg (the Gradle `:fuaran-renderer`
+  Robolectric gate). That leg needs an Android SDK + the Gradle wrapper; it is
+  auto-skipped when the SDK is absent, so this switch is only for forcing it off when the
+  toolchain IS present.
 #>
 [CmdletBinding()]
 param(
     [switch] $SkipBuild,
     [switch] $SkipTests,
-    [switch] $Package
+    [switch] $Package,
+    [switch] $SkipRenderer
 )
 
 $ErrorActionPreference = "Stop"
@@ -123,6 +130,43 @@ if ($HasSessionTest) {
         $env:Path = "$libDir;$env:Path"
         & $Java "-Dfuaran.lib=$nativeDll" -cp $Classpath $SessionTestClass
         if ($LASTEXITCODE -ne 0) { throw "Phase 543 session round-trip failed" }
+    }
+}
+
+# --- Phase 544: Jetpack Compose render-coverage leg (Gradle + Robolectric) ---------- #
+# The render floor is an Android library (Compose), so its coverage gate runs through the
+# Gradle wrapper under Robolectric (headless JVM, no emulator). Auto-skips when the Android
+# SDK is absent so the repo stays green on a plain JDK-only box.
+function Find-AndroidSdk {
+    foreach ($env in @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT)) {
+        if ($env -and (Test-Path (Join-Path $env "platforms"))) { return $env }
+    }
+    $lp = Join-Path $Repo "local.properties"
+    if (Test-Path $lp) {
+        $line = Get-Content $lp | Where-Object { $_ -match '^\s*sdk\.dir\s*=' } | Select-Object -First 1
+        if ($line) {
+            $dir = (($line -replace '^\s*sdk\.dir\s*=', '').Trim() -replace '\\\\', '\' -replace '\\:', ':')
+            if (Test-Path (Join-Path $dir "platforms")) { return $dir }
+        }
+    }
+    return $null
+}
+
+if (-not $SkipTests -and -not $SkipRenderer) {
+    Write-Host "`n== Phase 544 :: Jetpack Compose render-coverage (Gradle + Robolectric) ==" -ForegroundColor Cyan
+    $Gradlew = Join-Path $Repo "gradlew.bat"
+    $Sdk = Find-AndroidSdk
+    if (-not (Test-Path $Gradlew)) {
+        Write-Host "SKIP: no Gradle wrapper (gradlew.bat) — renderer leg needs the Gradle build." -ForegroundColor Yellow
+    }
+    elseif (-not $Sdk) {
+        Write-Host "SKIP: no Android SDK (set ANDROID_HOME or local.properties sdk.dir) — renderer leg needs it." -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "Android SDK :: $Sdk"
+        & $Gradlew ":fuaran-renderer:testDebugUnitTest" "--console=plain"
+        if ($LASTEXITCODE -ne 0) { throw "Phase 544 render-coverage gate failed" }
+        Write-Host "Phase 544 render-coverage gate green." -ForegroundColor Green
     }
 }
 

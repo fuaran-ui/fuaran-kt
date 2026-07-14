@@ -1,0 +1,606 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Diametrical Ltd.
+package fuaran.renderer
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import fuaran.ui.AutoLayout
+import fuaran.ui.Badge
+import fuaran.ui.Box
+import fuaran.ui.BoxLayout
+import fuaran.ui.BoxRole
+import fuaran.ui.Button
+import fuaran.ui.ButtonVariant
+import fuaran.ui.Callout
+import fuaran.ui.Chart
+import fuaran.ui.CheckboxField
+import fuaran.ui.ChoiceField
+import fuaran.ui.CodeBlock
+import fuaran.ui.Custom
+import fuaran.ui.DataGrid
+import fuaran.ui.DateField
+import fuaran.ui.Disclosure
+import fuaran.ui.Drawing
+import fuaran.ui.ErrorBoundary
+import fuaran.ui.FileUpload
+import fuaran.ui.Filters
+import fuaran.ui.FlexLayout
+import fuaran.ui.Form
+import fuaran.ui.FormField
+import fuaran.ui.FormFieldKind
+import fuaran.ui.FragmentDecl
+import fuaran.ui.FragmentRef
+import fuaran.ui.GridLayout
+import fuaran.ui.Heading
+import fuaran.ui.Image
+import fuaran.ui.LabelShape
+import fuaran.ui.LabelValueRow
+import fuaran.ui.Link
+import fuaran.ui.ListNode
+import fuaran.ui.Markdown
+import fuaran.ui.MapNode
+import fuaran.ui.Math
+import fuaran.ui.Metric
+import fuaran.ui.Modal
+import fuaran.ui.Mount
+import fuaran.ui.Node
+import fuaran.ui.NodeKind
+import fuaran.ui.NumberField
+import fuaran.ui.Orientation
+import fuaran.ui.Progress
+import fuaran.ui.RangedNumberField
+import fuaran.ui.ScrollArea
+import fuaran.ui.Select
+import fuaran.ui.SegmentedChoiceField
+import fuaran.ui.Skeleton
+import fuaran.ui.Sparkline
+import fuaran.ui.SplitPanel
+import fuaran.ui.Stepper
+import fuaran.ui.SummaryList
+import fuaran.ui.Switch
+import fuaran.ui.Tabs
+import fuaran.ui.TextAreaField
+import fuaran.ui.TextField
+import fuaran.ui.Toast
+import fuaran.ui.discriminator
+import androidx.compose.foundation.layout.Box as CBox
+import androidx.compose.material3.Button as M3Button
+
+// --------------------------------------------------------------------------- //
+// Public entry — the else-free exhaustive dispatch spine
+// --------------------------------------------------------------------------- //
+
+/**
+ * Render a decoded [Node] as Jetpack Compose. A **pure projection** of the sealed model — no
+ * wire-JSON parsing happens here (decode ran first, in `:fuaran-ui`). The `when` over the sealed
+ * [NodeKind] is **exhaustive with no `else`**, so a new wire kind is a compile error until its arm
+ * lands (the render-floor twin of Phase 542's decode spine).
+ */
+@Composable
+fun FuaranNode(node: Node, ctx: BindingContext = BindingContext.Empty) {
+    LocalRenderCoverage.current?.count(node.kind.discriminator())
+    when (val k = node.kind) {
+        // Layout
+        is Box -> RenderBox(k, ctx)
+        is SplitPanel -> RenderSplitPanel(k, ctx)
+        is Tabs -> RenderTabs(k, ctx)
+        is Stepper -> RenderStepper(k, ctx)
+        is SummaryList -> RenderSummaryList(k, ctx)
+        is Disclosure -> RenderDisclosure(k, ctx)
+        is Modal -> RenderModal(k, ctx)
+        is ScrollArea -> RenderScrollArea(k, ctx)
+        is Mount -> InfoCard("Mount", k.scopeId + " · " + k.capabilities.joinToString(","))
+        is Switch -> RenderSwitch(k, ctx)
+        // Display
+        is Heading -> RenderHeading(k, ctx)
+        is Markdown -> Text(ctx.resolveText(k.text), modifier = Modifier.padding(2.dp))
+        is Metric -> RenderMetric(k, ctx)
+        is Badge -> RenderBadge(k, ctx)
+        is Sparkline -> RenderSparkline()
+        is Callout -> RenderCallout(k, ctx)
+        is Progress -> RenderProgress(k, ctx)
+        is Skeleton -> RenderSkeleton(k)
+        is LabelValueRow -> RenderLabelValueRow(k, ctx)
+        is Link -> RenderLink(k, ctx)
+        is Image -> RenderImage(k, ctx)
+        is ListNode -> RenderList(k, ctx)
+        is Toast -> RenderToast(k, ctx)
+        is CodeBlock -> RenderCodeBlock(k)
+        is Math -> Text(k.source, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(2.dp))
+        is Drawing -> RenderDrawing(k, ctx)
+        // Input
+        is Form -> RenderForm(k, ctx)
+        is Button -> RenderButton(k, ctx)
+        is FileUpload -> OutlinedButton(onClick = {}, enabled = !ctx.resolveBool(k.disabled)) { Text(ctx.resolveText(k.label)) }
+        is Select -> RenderSelect(k, ctx)
+        is Filters -> RenderFilters(k, ctx)
+        // Visualisation
+        is DataGrid -> RenderDataGrid(k, ctx)
+        is Chart -> RenderChart(k, ctx)
+        is MapNode -> InfoCard("Map", "lat ${k.centreLatitude}, lng ${k.centreLongitude} · z${k.zoom}")
+        // Structural
+        is Custom -> InfoCard("Custom", k.moduleId + "/" + k.componentId)
+        is ErrorBoundary -> FuaranNode(k.child, ctx)
+        is FragmentDecl -> FuaranNode(k.body, ctx)
+        is FragmentRef -> InfoCard("Fragment", k.name)
+    }
+}
+
+/**
+ * The defined visible development placeholder for a kind a host deliberately leaves unimplemented
+ * (never a silent skip). Structurally unreachable from [FuaranNode]'s exhaustive spine — a new kind
+ * is a compile error — it exists so hosts have a loud, coverage-tracked fallback rather than a blank.
+ */
+@Composable
+fun FallbackPlaceholder(discriminator: String) {
+    LocalRenderCoverage.current?.fallback(discriminator)
+    CBox(
+        Modifier
+            .border(1.dp, Color.Red, RoundedCornerShape(4.dp))
+            .padding(6.dp)
+            .testTag("fuaran-fallback"),
+    ) {
+        Text("⚠ unrendered node kind: $discriminator", color = Color.Red, fontSize = 12.sp)
+    }
+}
+
+// --------------------------------------------------------------------------- //
+// Shared helpers
+// --------------------------------------------------------------------------- //
+
+@Composable
+private fun InfoCard(title: String, subtitle: String) {
+    Card(Modifier.padding(2.dp)) {
+        Column(Modifier.padding(8.dp)) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            if (subtitle.isNotEmpty()) Text(subtitle, fontSize = 12.sp, color = Color.Gray)
+        }
+    }
+}
+
+@Composable
+private fun RenderChildren(children: List<Node>, layout: BoxLayout, ctx: BindingContext) {
+    when (layout) {
+        is FlexLayout -> {
+            val gap = (layout.gap ?: 4).dp
+            if (layout.direction == Orientation.Horizontal) {
+                Row(horizontalArrangement = Arrangement.spacedBy(gap)) { children.forEach { FuaranNode(it, ctx) } }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(gap)) { children.forEach { FuaranNode(it, ctx) } }
+            }
+        }
+        is GridLayout -> {
+            val cols = layout.cols.coerceAtLeast(1)
+            val gap = (layout.gap ?: 4).dp
+            Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+                children.chunked(cols).forEach { rowItems ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(gap)) { rowItems.forEach { FuaranNode(it, ctx) } }
+                }
+            }
+        }
+        AutoLayout -> Column { children.forEach { FuaranNode(it, ctx) } }
+    }
+}
+
+// --------------------------------------------------------------------------- //
+// Layout
+// --------------------------------------------------------------------------- //
+
+@Composable
+private fun RenderBox(k: Box, ctx: BindingContext) {
+    val body: @Composable () -> Unit = {
+        k.heading?.let { Text(ctx.resolveText(it), fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 2.dp)) }
+        RenderChildren(k.children, k.layout, ctx)
+    }
+    when (k.role) {
+        BoxRole.Card -> Card(Modifier.padding(4.dp)) { Column(Modifier.padding(10.dp)) { body() } }
+        BoxRole.Dashboard -> Column(Modifier.padding(8.dp)) { body() }
+        BoxRole.Group -> Column(Modifier.padding(2.dp)) { body() }
+        BoxRole.Separator -> HorizontalDivider(Modifier.padding(vertical = 4.dp))
+    }
+}
+
+@Composable
+private fun RenderSplitPanel(k: SplitPanel, ctx: BindingContext) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        k.children.forEach { CBox(Modifier.padding(2.dp)) { FuaranNode(it, ctx) } }
+    }
+}
+
+@Composable
+private fun RenderTabs(k: fuaran.ui.Tabs, ctx: BindingContext) {
+    val active = ctx.resolveInt(k.activeIndex, 0).coerceIn(0, (k.children.size - 1).coerceAtLeast(0))
+    Column {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            k.children.indices.forEach { i ->
+                val label = k.tabHeaders?.getOrNull(i)?.let { ctx.resolveText(it.label) } ?: "Tab ${i + 1}"
+                Text(
+                    label,
+                    fontWeight = if (i == active) FontWeight.Bold else FontWeight.Normal,
+                    modifier = Modifier.padding(4.dp),
+                )
+            }
+        }
+        HorizontalDivider()
+        k.children.getOrNull(active)?.let { FuaranNode(it, ctx) }
+    }
+}
+
+@Composable
+private fun RenderStepper(k: Stepper, ctx: BindingContext) {
+    val active = ctx.resolveInt(k.activeStep, 0)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        k.children.forEachIndexed { i, child ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("${i + 1}. ", fontWeight = if (i == active) FontWeight.Bold else FontWeight.Normal)
+                FuaranNode(child, ctx)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RenderSummaryList(k: SummaryList, ctx: BindingContext) {
+    Column {
+        k.heading?.let { Text(ctx.resolveText(it), fontWeight = FontWeight.SemiBold) }
+        k.children.forEach { FuaranNode(it, ctx) }
+    }
+}
+
+@Composable
+private fun RenderDisclosure(k: Disclosure, ctx: BindingContext) {
+    val open = if (k.open is fuaran.ui.StaticBinding) ctx.resolveBool(k.open) else k.defaultOpen
+    Column {
+        Text((if (open) "▼ " else "▶ ") + ctx.resolveText(k.heading), fontWeight = FontWeight.SemiBold)
+        if (open) Column(Modifier.padding(start = 12.dp)) { k.children.forEach { FuaranNode(it, ctx) } }
+    }
+}
+
+@Composable
+private fun RenderModal(k: Modal, ctx: BindingContext) {
+    Card(Modifier.padding(4.dp)) {
+        Column(Modifier.padding(10.dp)) {
+            k.heading?.let { Text(ctx.resolveText(it), fontWeight = FontWeight.Bold) }
+            k.children.forEach { FuaranNode(it, ctx) }
+        }
+    }
+}
+
+@Composable
+private fun RenderScrollArea(k: ScrollArea, ctx: BindingContext) {
+    Column(Modifier.verticalScroll(rememberScrollState())) {
+        k.children.forEach { FuaranNode(it, ctx) }
+    }
+}
+
+@Composable
+private fun RenderSwitch(k: Switch, ctx: BindingContext) {
+    val current = ctx.resolve(fuaran.ui.StateBinding(k.stateKey))
+    val chosen = k.cases.firstOrNull { it.match == current }?.child ?: k.default
+    FuaranNode(chosen, ctx)
+}
+
+// --------------------------------------------------------------------------- //
+// Display
+// --------------------------------------------------------------------------- //
+
+@Composable
+private fun RenderHeading(k: Heading, ctx: BindingContext) {
+    val size = when (k.level.coerceIn(1, 6)) {
+        1 -> 26.sp
+        2 -> 22.sp
+        3 -> 19.sp
+        4 -> 17.sp
+        5 -> 15.sp
+        else -> 13.sp
+    }
+    Text(ctx.resolveText(k.text), fontSize = size, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 2.dp))
+}
+
+@Composable
+private fun RenderMetric(k: Metric, ctx: BindingContext) {
+    Column(Modifier.padding(4.dp)) {
+        Text(ctx.resolveText(k.label), fontSize = 12.sp, color = Color.Gray)
+        Text(ctx.resolve(k.source), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        k.subtext?.let { Text(ctx.resolveText(it), fontSize = 11.sp, color = Color.Gray) }
+        k.trend?.let { Text(ctx.resolve(it), fontSize = 11.sp) }
+    }
+}
+
+@Composable
+private fun RenderBadge(k: Badge, ctx: BindingContext) {
+    CBox(
+        Modifier
+            .background(Color(0xFFE0E0E0), RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    ) {
+        Text(ctx.resolveText(k.label), fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun RenderSparkline() {
+    CBox(
+        Modifier
+            .width(80.dp)
+            .height(16.dp)
+            .background(Color(0xFFB0BEC5), RoundedCornerShape(2.dp)),
+    ) {}
+}
+
+@Composable
+private fun RenderCallout(k: Callout, ctx: BindingContext) {
+    Card(Modifier.padding(4.dp)) {
+        Column(Modifier.padding(10.dp)) {
+            Text(ctx.resolveText(k.heading), fontWeight = FontWeight.Bold)
+            Text(ctx.resolveText(k.body))
+        }
+    }
+}
+
+@Composable
+private fun RenderProgress(k: Progress, ctx: BindingContext) {
+    Column {
+        Text(ctx.resolveText(k.label), fontSize = 12.sp)
+        if (k.indeterminate) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+        } else {
+            LinearProgressIndicator(progress = { ctx.resolveFloat(k.fraction, 0f).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+@Composable
+private fun RenderSkeleton(k: Skeleton) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        repeat(k.rows.coerceIn(0, 20)) {
+            CBox(
+                Modifier
+                    .fillMaxWidth()
+                    .height(12.dp)
+                    .background(Color(0xFFEEEEEE), RoundedCornerShape(2.dp)),
+            ) {}
+        }
+    }
+}
+
+@Composable
+private fun RenderLabelValueRow(k: LabelValueRow, ctx: BindingContext) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(ctx.resolveText(k.label), color = Color.Gray)
+        Text(ctx.resolve(k.source), fontWeight = if (k.emphasis) FontWeight.Bold else FontWeight.Normal)
+    }
+}
+
+@Composable
+private fun RenderLink(k: Link, ctx: BindingContext) {
+    Text(ctx.resolveText(k.label), color = Color(0xFF1565C0), modifier = Modifier.padding(2.dp))
+}
+
+@Composable
+private fun RenderImage(k: Image, ctx: BindingContext) {
+    // Render floor has no network image loader — a labelled placeholder box (visible, non-fallback).
+    CBox(
+        Modifier
+            .size(72.dp)
+            .background(Color(0xFFF0F0F0), RoundedCornerShape(4.dp))
+            .border(1.dp, Color(0xFFCCCCCC), RoundedCornerShape(4.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(ctx.resolveText(k.alt).ifEmpty { "image" }, fontSize = 10.sp, color = Color.Gray)
+    }
+}
+
+@Composable
+private fun RenderList(k: ListNode, ctx: BindingContext) {
+    Column {
+        k.items.forEachIndexed { i, item ->
+            val marker = if (k.ordered) "${i + 1}. " else "• "
+            Text(marker + ctx.resolveText(item))
+        }
+    }
+}
+
+@Composable
+private fun RenderToast(k: Toast, ctx: BindingContext) {
+    Card(Modifier.padding(4.dp)) { Text(ctx.resolveText(k.message), modifier = Modifier.padding(8.dp)) }
+}
+
+@Composable
+private fun RenderCodeBlock(k: CodeBlock) {
+    CBox(Modifier.background(Color(0xFFF5F5F5), RoundedCornerShape(4.dp)).padding(8.dp)) {
+        Text(k.code, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun RenderDrawing(k: Drawing, ctx: BindingContext) {
+    Card(Modifier.padding(2.dp)) {
+        Column(Modifier.padding(8.dp)) {
+            k.title?.let { Text(ctx.resolveText(it), fontWeight = FontWeight.SemiBold) }
+            Text("Drawing · ${k.shapes.size} shape(s)", fontSize = 12.sp, color = Color.Gray)
+            k.shapes.filterIsInstance<LabelShape>().forEach { Text(ctx.resolveText(it.text), fontSize = 12.sp) }
+        }
+    }
+}
+
+// --------------------------------------------------------------------------- //
+// Input (render-only — interaction is Phase 545)
+// --------------------------------------------------------------------------- //
+
+@Composable
+private fun RenderForm(k: Form, ctx: BindingContext) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(4.dp)) {
+        k.fields.forEach { RenderFormField(it, ctx) }
+        M3Button(onClick = {}, enabled = !ctx.resolveBool(k.disabled)) { Text(ctx.resolveText(k.submitLabel)) }
+    }
+}
+
+@Composable
+private fun RenderFormField(field: FormField, ctx: BindingContext) {
+    val label = ctx.resolveText(field.label) + if (field.required) " *" else ""
+    when (val kind = field.kind) {
+        is TextField -> {
+            var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
+            OutlinedTextField(value = v, onValueChange = { v = it }, label = { Text(label) }, modifier = Modifier.fillMaxWidth())
+        }
+        is NumberField -> {
+            var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
+            OutlinedTextField(value = v, onValueChange = { v = it }, label = { Text(label) }, modifier = Modifier.fillMaxWidth())
+        }
+        is TextAreaField -> {
+            var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
+            OutlinedTextField(
+                value = v,
+                onValueChange = { v = it },
+                label = { Text(label) },
+                minLines = kind.rows.coerceIn(1, 12),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        is CheckboxField -> {
+            var checked by remember { mutableStateOf(ctx.resolveBool(kind.value)) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = checked, onCheckedChange = { checked = it })
+                Text(label)
+            }
+        }
+        is ChoiceField -> {
+            var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
+            OutlinedTextField(value = v, onValueChange = { v = it }, label = { Text(label) }, readOnly = true, modifier = Modifier.fillMaxWidth())
+        }
+        is SegmentedChoiceField -> {
+            val selected = ctx.resolve(kind.value)
+            val options = ctx.resolve(kind.options).split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            Column {
+                Text(label, fontSize = 12.sp, color = Color.Gray)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    options.ifEmpty { listOf(selected.ifEmpty { "—" }) }.forEach { opt ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = opt == selected, onClick = {})
+                            Text(opt)
+                        }
+                    }
+                }
+            }
+        }
+        is RangedNumberField -> {
+            var v by remember { mutableStateOf(ctx.resolveFloat(kind.value, (kind.min ?: 0.0).toFloat())) }
+            Column {
+                Text("$label: $v", fontSize = 12.sp)
+                Slider(
+                    value = v,
+                    onValueChange = { v = it },
+                    valueRange = (kind.min ?: 0.0).toFloat()..(kind.max ?: 100.0).toFloat(),
+                )
+            }
+        }
+        is DateField -> {
+            var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
+            OutlinedTextField(value = v, onValueChange = { v = it }, label = { Text("$label (${kind.variant})") }, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+@Composable
+private fun RenderButton(k: Button, ctx: BindingContext) {
+    val enabled = !ctx.resolveBool(k.disabled)
+    val label = ctx.resolveText(k.label)
+    when (k.variant) {
+        ButtonVariant.Primary, ButtonVariant.Destructive -> M3Button(onClick = {}, enabled = enabled) { Text(label) }
+        ButtonVariant.Secondary -> OutlinedButton(onClick = {}, enabled = enabled) { Text(label) }
+        ButtonVariant.Tertiary -> TextButton(onClick = {}, enabled = enabled) { Text(label) }
+    }
+}
+
+@Composable
+private fun RenderSelect(k: Select, ctx: BindingContext) {
+    val display = k.value?.let { ctx.resolve(it) }.orEmpty().ifEmpty { k.placeholder?.let { ctx.resolveText(it) }.orEmpty() }
+    OutlinedTextField(
+        value = display,
+        onValueChange = {},
+        label = { Text(ctx.resolveText(k.label)) },
+        readOnly = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
+private fun RenderFilters(k: Filters, ctx: BindingContext) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        k.items.forEach { item ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(ctx.resolveText(item.label) + ": ", fontSize = 12.sp, color = Color.Gray)
+                Text(item.name, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+// --------------------------------------------------------------------------- //
+// Visualisation
+// --------------------------------------------------------------------------- //
+
+@Composable
+private fun RenderDataGrid(k: DataGrid, ctx: BindingContext) {
+    Column(Modifier.border(1.dp, Color(0xFFDDDDDD), RoundedCornerShape(4.dp)).padding(4.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            k.columns.forEach { col -> Text(col.label, fontWeight = FontWeight.SemiBold, fontSize = 12.sp) }
+        }
+        HorizontalDivider()
+        val static = k.staticRows
+        if (static != null) {
+            static.rows.forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    row.forEach { cell -> Text(ctx.resolveText(cell), fontSize = 12.sp) }
+                }
+            }
+        } else {
+            Text("(data-bound rows)", fontSize = 11.sp, color = Color.Gray)
+        }
+    }
+}
+
+@Composable
+private fun RenderChart(k: Chart, ctx: BindingContext) {
+    Card(Modifier.padding(2.dp)) {
+        Column(Modifier.padding(8.dp)) {
+            k.title?.let { Text(ctx.resolveText(it), fontWeight = FontWeight.SemiBold) }
+            Text("${k.kind} chart · ${k.xField} × ${k.yFields.joinToString(",")}", fontSize = 12.sp, color = Color.Gray)
+        }
+    }
+}
