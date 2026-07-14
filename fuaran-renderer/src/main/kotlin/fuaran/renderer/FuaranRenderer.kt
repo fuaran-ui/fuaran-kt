@@ -485,14 +485,29 @@ private fun RenderForm(k: Form, ctx: BindingContext) {
 @Composable
 private fun RenderFormField(field: FormField, ctx: BindingContext) {
     val label = ctx.resolveText(field.label) + if (field.required) " *" else ""
+    // Write-back (Phase 545): a state-backed field edit writes through the session's $state channel
+    // when a live host is present; the session (Rust validator) is the authority on acceptance.
+    val sink = LocalActionSink.current
     when (val kind = field.kind) {
         is TextField -> {
             var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
-            OutlinedTextField(value = v, onValueChange = { v = it }, label = { Text(label) }, modifier = Modifier.fillMaxWidth())
+            val key = stateKeyOf(kind.value)
+            OutlinedTextField(
+                value = v,
+                onValueChange = { v = it; if (key != null) sink?.writeBack(key, it) },
+                label = { Text(label) },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
         is NumberField -> {
             var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
-            OutlinedTextField(value = v, onValueChange = { v = it }, label = { Text(label) }, modifier = Modifier.fillMaxWidth())
+            val key = stateKeyOf(kind.value)
+            OutlinedTextField(
+                value = v,
+                onValueChange = { v = it; if (key != null) sink?.writeBack(key, it) },
+                label = { Text(label) },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
         is TextAreaField -> {
             var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
@@ -506,8 +521,9 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
         }
         is CheckboxField -> {
             var checked by remember { mutableStateOf(ctx.resolveBool(kind.value)) }
+            val key = stateKeyOf(kind.value)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = checked, onCheckedChange = { checked = it })
+                Checkbox(checked = checked, onCheckedChange = { checked = it; if (key != null) sink?.writeBack(key, it) })
                 Text(label)
             }
         }
@@ -552,10 +568,14 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
 private fun RenderButton(k: Button, ctx: BindingContext) {
     val enabled = !ctx.resolveBool(k.disabled)
     val label = ctx.resolveText(k.label)
+    // Interaction round-trip (Phase 545): dispatch onClick through the live host when one is present;
+    // inert (the pre-545 static-render behaviour) when LocalActionSink is null.
+    val sink = LocalActionSink.current
+    val onClick: () -> Unit = { sink?.dispatch(k.onClick) }
     when (k.variant) {
-        ButtonVariant.Primary, ButtonVariant.Destructive -> M3Button(onClick = {}, enabled = enabled) { Text(label) }
-        ButtonVariant.Secondary -> OutlinedButton(onClick = {}, enabled = enabled) { Text(label) }
-        ButtonVariant.Tertiary -> TextButton(onClick = {}, enabled = enabled) { Text(label) }
+        ButtonVariant.Primary, ButtonVariant.Destructive -> M3Button(onClick = onClick, enabled = enabled) { Text(label) }
+        ButtonVariant.Secondary -> OutlinedButton(onClick = onClick, enabled = enabled) { Text(label) }
+        ButtonVariant.Tertiary -> TextButton(onClick = onClick, enabled = enabled) { Text(label) }
     }
 }
 
