@@ -37,4 +37,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "fuaran-kt"
 
-include("fuaran-ui", "fuaran-renderer", "fuaran-driver", "fuaran-core")
+include("fuaran-ui", "fuaran-renderer", "fuaran-driver", "fuaran-core", "samples")
