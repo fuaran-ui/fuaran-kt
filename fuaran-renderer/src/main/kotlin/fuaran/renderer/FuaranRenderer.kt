@@ -333,9 +333,11 @@ private fun RenderHeading(k: Heading, ctx: BindingContext) {
 
 @Composable
 private fun RenderMetric(k: Metric, ctx: BindingContext) {
+    // The metric value carries the tone accent — server-emitted tone, native styling.
+    val accent = tone(k.tone).accent
     Column(Modifier.padding(4.dp)) {
         Text(ctx.resolveText(k.label), fontSize = 12.sp, color = Color.Gray)
-        Text(ctx.resolve(k.source), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text(ctx.resolve(k.source), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = accent)
         k.subtext?.let { Text(ctx.resolveText(it), fontSize = 11.sp, color = Color.Gray) }
         k.trend?.let { Text(ctx.resolve(it), fontSize = 11.sp) }
     }
@@ -343,12 +345,13 @@ private fun RenderMetric(k: Metric, ctx: BindingContext) {
 
 @Composable
 private fun RenderBadge(k: Badge, ctx: BindingContext) {
+    val swatch = badge(k.variant)
     CBox(
         Modifier
-            .background(Color(0xFFE0E0E0), RoundedCornerShape(8.dp))
+            .background(swatch.container, RoundedCornerShape(8.dp))
             .padding(horizontal = 8.dp, vertical = 2.dp),
     ) {
-        Text(ctx.resolveText(k.label), fontSize = 12.sp)
+        Text(ctx.resolveText(k.label), fontSize = 12.sp, color = swatch.onContainer)
     }
 }
 
@@ -364,10 +367,11 @@ private fun RenderSparkline() {
 
 @Composable
 private fun RenderCallout(k: Callout, ctx: BindingContext) {
-    Card(Modifier.padding(4.dp)) {
+    val swatch = tone(k.tone)
+    CBox(Modifier.background(swatch.container, RoundedCornerShape(6.dp)).padding(4.dp)) {
         Column(Modifier.padding(10.dp)) {
-            Text(ctx.resolveText(k.heading), fontWeight = FontWeight.Bold)
-            Text(ctx.resolveText(k.body))
+            Text(ctx.resolveText(k.heading), fontWeight = FontWeight.Bold, color = swatch.onContainer)
+            Text(ctx.resolveText(k.body), color = swatch.onContainer)
         }
     }
 }
@@ -376,10 +380,15 @@ private fun RenderCallout(k: Callout, ctx: BindingContext) {
 private fun RenderProgress(k: Progress, ctx: BindingContext) {
     Column {
         Text(ctx.resolveText(k.label), fontSize = 12.sp)
+        val accent = tone(k.tone).accent
         if (k.indeterminate) {
-            LinearProgressIndicator(Modifier.fillMaxWidth())
+            LinearProgressIndicator(Modifier.fillMaxWidth(), color = accent)
         } else {
-            LinearProgressIndicator(progress = { ctx.resolveFloat(k.fraction, 0f).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+            LinearProgressIndicator(
+                progress = { ctx.resolveFloat(k.fraction, 0f).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+                color = accent,
+            )
         }
     }
 }
@@ -437,7 +446,10 @@ private fun RenderList(k: ListNode, ctx: BindingContext) {
 
 @Composable
 private fun RenderToast(k: Toast, ctx: BindingContext) {
-    Card(Modifier.padding(4.dp)) { Text(ctx.resolveText(k.message), modifier = Modifier.padding(8.dp)) }
+    val swatch = tone(k.tone)
+    CBox(Modifier.background(swatch.container, RoundedCornerShape(6.dp)).padding(4.dp)) {
+        Text(ctx.resolveText(k.message), color = swatch.onContainer, modifier = Modifier.padding(8.dp))
+    }
 }
 
 @Composable
