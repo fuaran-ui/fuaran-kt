@@ -27,3 +27,7 @@
 *.zip   binary
 *.tar   binary
 *.gz    binary
+
+# Gradle wrapper — the batch launcher needs CRLF on Windows; the POSIX launcher stays LF.
+gradlew      text eol=lf
+gradlew.bat  text eol=crlf
