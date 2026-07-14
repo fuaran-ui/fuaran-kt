@@ -39,6 +39,70 @@ data object JsonNull : JsonValue
 /** Thrown when the input is not syntactically valid JSON. Maps to the `INVALID_JSON` decode code. */
 class JsonSyntaxException(message: String) : Exception(message)
 
+/**
+ * Serialise a [JsonValue] back to compact JSON text. The render-projection path never re-encodes a
+ * *node* (there is no canonical Kotlin encoder — that is the Rust core's job), but the interaction /
+ * write-back path (Phase 545) must marshal a wire-parsed payload [JsonValue] (a `SetState` action's
+ * value, a form-field edit) back into the JSON string the session's `set_state` channel takes. This
+ * is that minimal, dependency-free writer — RFC 8259 string escaping, source number lexemes preserved.
+ */
+fun JsonValue.encode(): String {
+    val sb = StringBuilder()
+    encodeInto(sb)
+    return sb.toString()
+}
+
+private fun JsonValue.encodeInto(sb: StringBuilder) {
+    when (this) {
+        is JsonString -> encodeJsonString(value, sb)
+        is JsonNumber -> sb.append(raw)
+        is JsonBool -> sb.append(if (value) "true" else "false")
+        JsonNull -> sb.append("null")
+        is JsonArray -> {
+            sb.append('[')
+            items.forEachIndexed { i, item ->
+                if (i > 0) sb.append(',')
+                item.encodeInto(sb)
+            }
+            sb.append(']')
+        }
+        is JsonObject -> {
+            sb.append('{')
+            var first = true
+            for ((k, v) in members) {
+                if (!first) sb.append(',')
+                first = false
+                encodeJsonString(k, sb)
+                sb.append(':')
+                v.encodeInto(sb)
+            }
+            sb.append('}')
+        }
+    }
+}
+
+private fun encodeJsonString(s: String, sb: StringBuilder) {
+    sb.append('"')
+    for (c in s) {
+        when (c) {
+            '"' -> sb.append("\\\"")
+            '\\' -> sb.append("\\\\")
+            '\b' -> sb.append("\\b")
+            '\n' -> sb.append("\\n")
+            '\r' -> sb.append("\\r")
+            '\t' -> sb.append("\\t")
+            else ->
+                if (c < ' ') {
+                    sb.append("\\u")
+                    sb.append(c.code.toString(16).padStart(4, '0'))
+                } else {
+                    sb.append(c)
+                }
+        }
+    }
+    sb.append('"')
+}
+
 /** A single-pass recursive-descent JSON reader (RFC 8259). */
 object Json {
     fun parse(text: String): JsonValue {

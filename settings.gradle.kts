@@ -3,14 +3,16 @@
 //
 // The live Gradle module graph for the fuaran-kt build.
 //
-// Phase 544 scope: only `fuaran-ui` (the pure-JVM sealed model + decoder, Phase 542) and
-// `fuaran-renderer` (the Jetpack Compose renderer floor) participate. `fuaran-core` — the
-// Phase 543 JNI binding — is DELIBERATELY EXCLUDED here: it needs the cross-built native
-// `.so`/`.dll` (cargo-ndk + NDK), which the render-only Phase 544 does not depend on (544 is
-// render-over-static-tree, exercising the decoder alone — see the phase's "not dependent on
-// 543" note). `fuaran-core` keeps its own scaffold and the `run.ps1` desktop-JNI leg; it is
-// simply not wired into this Gradle graph. Re-add `include("fuaran-core")` once its Android
-// AAR assembly is driven from Gradle.
+// Phase 545 scope: the full graph now participates.
+//  - `fuaran-ui`       — the pure-JVM sealed model + decoder + interaction seam (542 / 545).
+//  - `fuaran-renderer` — the Jetpack Compose renderer floor + tone bridge + interaction host (544 / 545).
+//  - `fuaran-driver`   — the server-driven (SDUI) driver over the session seam (545); pure JVM.
+//  - `fuaran-core`     — the Phase 543 JNI binding. WIRED IN at Phase 545 so the live-session
+//    interaction round-trip can be exercised through Gradle. Its `:fuaran-core:test` runs a
+//    JUnit round-trip that **cleanly skips** unless the desktop native shim is supplied via
+//    `-Dfuaran.lib` (built by `dev-scripts/build-native-desktop.ps1`), so the graph stays green
+//    on a box without the Rust toolchain. The Android AAR assembly stays in `run.ps1 -Package`.
+//  - `samples`         — a minimal Android sample app driving a live tree end-to-end (545).
 pluginManagement {
     repositories {
         google {
@@ -35,4 +37,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "fuaran-kt"
 
-include("fuaran-ui", "fuaran-renderer")
+include("fuaran-ui", "fuaran-renderer", "fuaran-driver", "fuaran-core")

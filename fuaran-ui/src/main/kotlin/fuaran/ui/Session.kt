@@ -30,13 +30,13 @@ class FuaranSession private constructor(
     private val bridge: FuaranNativeBridge,
     private val executor: ExecutorService,
     private val handle: Long,
-) : AutoCloseable {
+) : AutoCloseable, TreeSession {
     @Volatile
     private var closed = false
     private val cleanable: Cleaner.Cleanable = CLEANER.register(this, ReleaseState(bridge, executor, handle))
 
     /** The current tree, re-encoded to canonical wire JSON — the round-trip exit point. */
-    fun treeJson(): String = onExecutor { bridge.sessionTreeJson(handle).toString(UTF_8) }
+    override fun treeJson(): String = onExecutor { bridge.sessionTreeJson(handle).toString(UTF_8) }
 
     /** The current tree rendered to a body-fragment HTML string. */
     fun render(): String = onExecutor { bridge.sessionRender(handle).toString(UTF_8) }
@@ -46,19 +46,19 @@ class FuaranSession private constructor(
      * on failure the held tree is untouched and a typed [FuaranException] is raised with
      * the canonical code + path.
      */
-    fun applyOp(opJson: String) {
+    override fun applyOp(opJson: String) {
         val result = onExecutor { bridge.sessionApplyOp(handle, opJson.toByteArray(UTF_8)).toString(UTF_8) }
         throwIfError(result)
     }
 
     /** Write a reactive `$state.<key>` slot from a JSON value. Re-read [treeJson] / [render] to observe. */
-    fun setState(key: String, valueJson: String) = writeSlot(key, valueJson, bridge::sessionSetState)
+    override fun setState(key: String, valueJson: String) = writeSlot(key, valueJson, bridge::sessionSetState)
 
     /** Write a `$filters.<name>` slot from a JSON value. */
-    fun setFilter(key: String, valueJson: String) = writeSlot(key, valueJson, bridge::sessionSetFilter)
+    override fun setFilter(key: String, valueJson: String) = writeSlot(key, valueJson, bridge::sessionSetFilter)
 
     /** Seed a `$queries.<name>` result slot from a JSON value. */
-    fun setQuery(key: String, valueJson: String) = writeSlot(key, valueJson, bridge::sessionSetQuery)
+    override fun setQuery(key: String, valueJson: String) = writeSlot(key, valueJson, bridge::sessionSetQuery)
 
     override fun close() {
         if (closed) return
