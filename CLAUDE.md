@@ -1,12 +1,8 @@
 # CLAUDE.md — fuaran-kt (native Kotlin surface)
 
 This repo is the **native Kotlin surface of the Fuaran UI wire format**, over the Rust
-reference core — the JVM / Android twin of the native Swift surface. It is a sibling
-under the Fuaran-UI sub-estate at `../`, alongside `fuaran`, `fuaran-ts`, `fuaran-py`,
-`fuaran-go`, and `fuaran-rs`. Cross-repo conventions (Sync All, the formatting mandate,
-the language-baseline pinning, the OSS publication boundary, port allocation) live in the
-workspace `CLAUDE.md` (`../../../CLAUDE.md`) and the Fuaran-UI sub-estate `CLAUDE.md`
-(`../CLAUDE.md`). Read those first.
+reference core — the JVM / Android twin of the native Swift surface. It sits alongside `fuaran`, `fuaran-ts`, `fuaran-py`, `fuaran-go`, and `fuaran-rs`.
+Cross-repo development conventions (port allocation, formatting, language-baseline pinning) live at the maintainers' workspace level and are not shipped here.
 
 ## Framing — load-bearing, do not regress
 
