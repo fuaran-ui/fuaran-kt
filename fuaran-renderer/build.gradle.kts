@@ -48,6 +48,14 @@ android {
     }
 }
 
+// Robolectric composes against the ComponentActivity that `ui-test-manifest` merges into the
+// DEBUG manifest (debugImplementation below — it must not ship in the release AAR). The release
+// unit-test variant therefore has no test activity and every Compose test fails with "Unable to
+// resolve activity"; the JVM/Robolectric gate is variant-independent, so run it once, on debug.
+androidComponents {
+    beforeVariants(selector().withBuildType("release")) { it.enableUnitTest = false }
+}
+
 kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
