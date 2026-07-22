@@ -17,6 +17,17 @@ interface TreeSession : AutoCloseable {
     /** The current tree as canonical wire JSON — the re-projection entry point ([decodeNode] it). */
     fun treeJson(): String
 
+    /**
+     * The current tree as a **resolved projection** — [treeJson] with every scalar-slot
+     * `Binding.Transform` folded to the value it evaluates to (Phase 650). The *render* path
+     * decodes this, so a decode-only surface renders resolved compute values. Defaults to
+     * [treeJson] for a conformer with no evaluator (an in-memory fake / a Transform-free tree);
+     * the live [FuaranSession] overrides it with the core's resolved projection. A Kotlin
+     * interface default is overridden by the class member unambiguously, so no evaluator leaks
+     * into the pure surface.
+     */
+    fun projectResolved(): String = treeJson()
+
     /** Apply a canonical `TreeOp` JSON; throws [FuaranException] on a validator reject. */
     fun applyOp(opJson: String)
 

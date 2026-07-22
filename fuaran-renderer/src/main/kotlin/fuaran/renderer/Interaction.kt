@@ -43,8 +43,12 @@ import fuaran.ui.decodeNode
  * `tree`-as-state surface.
  */
 class FuaranHost(private val session: TreeSession) {
-    /** The current re-projected tree, as Compose state. Reading it in a composable subscribes to it. */
-    var tree by mutableStateOf(decodeNode(session.treeJson()))
+    /**
+     * The current re-projected tree, as Compose state. Reading it in a composable subscribes to it.
+     * The render tree is the **resolved projection** (Phase 650), so a scalar `Transform` renders
+     * its evaluated value — the core resolves it, the decode-only surface renders what it decodes.
+     */
+    var tree by mutableStateOf(decodeNode(session.projectResolved()))
         private set
 
     /** The last validator reject, or `null` when the last write succeeded. Also Compose state. */
@@ -93,7 +97,9 @@ class FuaranHost(private val session: TreeSession) {
     }
 
     private fun reproject() {
-        tree = decodeNode(session.treeJson())
+        // Re-read the RESOLVED projection so a state / filter / selection write that feeds a
+        // scalar `Transform` param re-evaluates it (Phase 650).
+        tree = decodeNode(session.projectResolved())
     }
 }
 

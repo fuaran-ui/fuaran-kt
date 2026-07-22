@@ -45,6 +45,14 @@ public final class FuaranNative {
 
     public static native byte[] sessionTreeJson(long handle);
 
+    /**
+     * The current tree as a RESOLVED PROJECTION (Phase 650): {@code tree_json} with every
+     * scalar-slot {@code Binding.Transform} folded to the value it evaluates to, so a
+     * decode-only surface renders resolved compute values. Additive — {@code sessionTreeJson}
+     * is unchanged.
+     */
+    public static native byte[] sessionProjectResolved(long handle);
+
     public static native byte[] sessionApplyOp(long handle, byte[] opJson);
 
     public static native byte[] sessionSetState(long handle, byte[] key, byte[] value);

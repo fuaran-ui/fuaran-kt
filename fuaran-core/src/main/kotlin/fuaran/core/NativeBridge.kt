@@ -29,6 +29,8 @@ object NativeBridge : FuaranNativeBridge {
 
     override fun sessionTreeJson(handle: Long): ByteArray = FuaranNative.sessionTreeJson(handle)
 
+    override fun sessionProjectResolved(handle: Long): ByteArray = FuaranNative.sessionProjectResolved(handle)
+
     override fun sessionApplyOp(handle: Long, opJson: ByteArray): ByteArray = FuaranNative.sessionApplyOp(handle, opJson)
 
     override fun sessionSetState(handle: Long, key: ByteArray, value: ByteArray): ByteArray =

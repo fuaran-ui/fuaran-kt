@@ -38,6 +38,14 @@ class FuaranSession private constructor(
     /** The current tree, re-encoded to canonical wire JSON — the round-trip exit point. */
     override fun treeJson(): String = onExecutor { bridge.sessionTreeJson(handle).toString(UTF_8) }
 
+    /**
+     * The current tree as a **resolved projection** (Phase 650): `treeJson` with every
+     * scalar-slot `Binding.Transform` folded to the value it evaluates to against the live
+     * sources. The decode-only surface cannot evaluate a `Transform` itself, so this is the
+     * read the render path decodes — the Rust core resolves compute values.
+     */
+    override fun projectResolved(): String = onExecutor { bridge.sessionProjectResolved(handle).toString(UTF_8) }
+
     /** The current tree rendered to a body-fragment HTML string. */
     fun render(): String = onExecutor { bridge.sessionRender(handle).toString(UTF_8) }
 
@@ -155,6 +163,9 @@ interface FuaranNativeBridge {
     fun sessionRender(handle: Long): ByteArray
 
     fun sessionTreeJson(handle: Long): ByteArray
+
+    /** The current tree as a resolved projection — `tree_json` with scalar Transforms folded (Phase 650). */
+    fun sessionProjectResolved(handle: Long): ByteArray
 
     fun sessionApplyOp(handle: Long, opJson: ByteArray): ByteArray
 

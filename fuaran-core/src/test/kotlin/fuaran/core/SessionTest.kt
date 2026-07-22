@@ -2,12 +2,20 @@
 // Copyright Diametrical Ltd.
 package fuaran.core
 
+import fuaran.ui.Badge
+import fuaran.ui.BoundText
+import fuaran.ui.Box
+import fuaran.ui.Callout
+import fuaran.ui.Fact
 import fuaran.ui.FuaranException
 import fuaran.ui.FuaranSession
 import fuaran.ui.LiteralText
 import fuaran.ui.Markdown
 import fuaran.ui.Metric
+import fuaran.ui.Node
+import fuaran.ui.SelectionBinding
 import fuaran.ui.decodeNode
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -61,6 +69,40 @@ private const val SEED_STATE_METRIC =
     """{"id":"m","kind":{"${'$'}type":"Metric","label":"Live",""" +
         """"value":{"${'$'}type":"State","defaultValue":0,"key":"n"}}}"""
 
+// A Badge whose label is a scalar Transform (count of a 2-row embedded frame). The
+// decode-only surface cannot evaluate the Transform — the resolved projection (Phase
+// 650) folds it to the literal "2".
+private const val SEED_SCALAR_TRANSFORM =
+    """{"id":"root","kind":{"${'$'}type":"Box","children":[{"id":"count-badge","kind":{"${'$'}type":"Badge",""" +
+        """"label":{"${'$'}type":"Bound","binding":{"${'$'}type":"Transform","pipeline":[{"${'$'}type":"groupBy",""" +
+        """"aggs":[{"fn":"count","name":"n","of":"id"}],"keys":[]}],"source":{"columns":{"id":{"values":["A","B"]}},""" +
+        """"schema":[{"name":"id","type":"string"}]}}},"variant":"Neutral"}}],"layout":{"${'$'}type":"Auto"},"role":"Group"}}"""
+
+/** Depth-first search for a node by id (recurses [Box] children — enough for the fixtures). */
+private fun findNode(node: Node, id: String): Node? {
+    if (node.id == id) return node
+    val kind = node.kind
+    if (kind is Box) {
+        for (child in kind.children) {
+            findNode(child, id)?.let { return it }
+        }
+    }
+    return null
+}
+
+/** Locate the shared corpus `nodes/` dir, or null on a standalone checkout. */
+private fun locateCorpusNodes(): File? {
+    System.getenv("FUARAN_CORPUS")?.let {
+        val f = File(it, "nodes")
+        if (f.isDirectory) return f
+    }
+    for (c in listOf("../wire-format-fixtures", "../../wire-format-fixtures", "wire-format-fixtures")) {
+        val f = File(File(c), "nodes")
+        if (File(c, "manifest.json").isFile && f.isDirectory) return f
+    }
+    return null
+}
+
 fun main() {
     val libPath = System.getProperty("fuaran.lib")
     if (libPath.isNullOrBlank()) {
@@ -93,6 +135,70 @@ fun main() {
         FuaranSession.create(NativeBridge, SEED_METRIC).use { session ->
             val html = session.render()
             require(html.isNotBlank()) { "render() returned blank HTML" }
+        }
+    }
+
+    // --- Resolved projection (Phase 650): the core folds a scalar Transform to a literal ---
+    runner.check("project-resolved/folds-scalar-transform") {
+        FuaranSession.create(NativeBridge, SEED_SCALAR_TRANSFORM).use { session ->
+            // Additive: the raw tree_json still carries the unresolved Transform.
+            require(session.treeJson().contains(""""${'$'}type":"Transform"""")) {
+                "tree_json must keep the raw Transform (the resolved projection is additive)"
+            }
+            val projected = decodeNode(session.projectResolved())
+            val badge = findNode(projected, "count-badge") ?: error("count-badge missing from projection")
+            val kind = badge.kind
+            require(kind is Badge) { "expected a Badge, was ${kind::class.simpleName}" }
+            val label = kind.label
+            require(label is LiteralText && label.text == "2") {
+                "the Badge label Transform must fold to the literal count 2, was $label"
+            }
+        }
+    }
+
+    // --- Render-coverage-shaped: the two corpus fixtures project resolved scalar values ---
+    val corpusNodes = locateCorpusNodes()
+    if (corpusNodes == null) {
+        println("  skip project-resolved/corpus-fixtures (wire-format-fixtures corpus not found)")
+    } else {
+        runner.check("project-resolved/scalar-transform-composition") {
+            val raw = File(corpusNodes, "scalar-transform-composition.json").readText()
+            FuaranSession.create(NativeBridge, raw).use { session ->
+                val tree = decodeNode(session.projectResolved())
+                // Badge label — a global-aggregate scalar Transform → the count 2.
+                val badge = findNode(tree, "critical-count-badge") ?: error("critical-count-badge missing")
+                val bk = badge.kind
+                require(bk is Badge) { "expected a Badge, was ${bk::class.simpleName}" }
+                val bl = bk.label
+                require(bl is LiteralText && bl.text == "2") { "Badge must resolve the critical count 2, was $bl" }
+                // Callout body — a param-defaulted row-field lookup → the defaulted alert text.
+                val callout = findNode(tree, "sla-warning") ?: error("sla-warning missing")
+                val ck = callout.kind
+                require(ck is Callout) { "expected a Callout, was ${ck::class.simpleName}" }
+                val cb = ck.body
+                require(cb is LiteralText && cb.text == "TCK-2041 breaches SLA in 2 hours") {
+                    "Callout body must resolve the defaulted row's alert text, was $cb"
+                }
+            }
+        }
+
+        runner.check("project-resolved/master-detail-preselected") {
+            val raw = File(corpusNodes, "master-detail-preselected.json").readText()
+            FuaranSession.create(NativeBridge, raw).use { session ->
+                val tree = decodeNode(session.projectResolved())
+                // The detail Fact value is a Selection(defaultValue 'TCK-2041') — NOT a Transform —
+                // so the projection leaves it intact; the surface's BindingContext resolves the
+                // seeded default to TCK-2041 at render time.
+                val fact = findNode(tree, "detail-ticket") ?: error("detail-ticket missing")
+                val fk = fact.kind
+                require(fk is Fact) { "expected a Fact, was ${fk::class.simpleName}" }
+                val value = fk.value
+                require(value is BoundText && value.binding is SelectionBinding) {
+                    "the Fact value stays a Selection binding, was $value"
+                }
+                val sel = value.binding as SelectionBinding
+                require(sel.defaultValue != null) { "the Selection default (TCK-2041) survives the projection" }
+            }
         }
     }
 

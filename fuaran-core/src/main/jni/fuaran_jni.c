@@ -30,6 +30,7 @@ extern FuaranSession *fuaran_session_new(const uint8_t *ptr, size_t len);
 extern void fuaran_session_free(FuaranSession *session);
 extern FuaranBuf fuaran_session_render(FuaranSession *session);
 extern FuaranBuf fuaran_session_tree_json(FuaranSession *session);
+extern FuaranBuf fuaran_session_project_resolved(FuaranSession *session);
 extern FuaranBuf fuaran_session_apply_op(FuaranSession *session, const uint8_t *ptr, size_t len);
 extern FuaranBuf fuaran_session_set_state(FuaranSession *session, const uint8_t *k_ptr, size_t k_len,
                                           const uint8_t *v_ptr, size_t v_len);
@@ -114,6 +115,12 @@ JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionRender(JNIEnv 
 JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionTreeJson(JNIEnv *env, jclass cls, jlong handle) {
     (void)cls;
     return buf_to_jarray(env, fuaran_session_tree_json(as_session(handle)));
+}
+
+JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionProjectResolved(JNIEnv *env, jclass cls,
+                                                                                  jlong handle) {
+    (void)cls;
+    return buf_to_jarray(env, fuaran_session_project_resolved(as_session(handle)));
 }
 
 JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionApplyOp(JNIEnv *env, jclass cls, jlong handle,
