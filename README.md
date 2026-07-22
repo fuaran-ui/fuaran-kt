@@ -8,6 +8,34 @@ corpus-certified Rust core.
 
 Apache-2.0 from day one.
 
+## Get started
+
+```kotlin
+dependencies {
+    implementation("io.fuaran:fuaran-ui:0.1.0")   // Maven Central
+}
+```
+
+Decode a session's canonical tree JSON into the sealed model and match over it with
+`when` — an unmodelled `$type` throws a structured `FuaranDecodeException`:
+
+```kotlin
+import fuaran.ui.*
+
+val root: Node = decodeNode(json)
+val box = root.kind as? Box ?: return          // box.role == BoxRole.Dashboard
+for (child in box.children) {
+    when (val k = child.kind) {
+        is Heading -> println("${k.level} ${k.text}")   // 2, LiteralText("Channel performance")
+        is Markdown -> println(k.text)
+        else -> {}
+    }
+}
+```
+
+Full walkthrough — decode → render projection → Jetpack Compose:
+<https://fuaran-ui.io/get-started/kotlin>.
+
 ## What this is — and is not
 
 - **A render projection, not a seventh conformant host.** The Rust reference core owns
