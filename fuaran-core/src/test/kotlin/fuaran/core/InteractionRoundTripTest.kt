@@ -60,18 +60,18 @@ class InteractionRoundTripTest {
             }
         }
 
+        // 0.2.0 canonical seeds: bare-string Literals; the scalar displayed value is `value`
+        // (the retired `source` spelling is a hard decode error in the core).
         private val SEED_METRIC =
-            """{"id":"metric-1","kind":{"${'$'}type":"Metric","emphasis":"Normal","format":{"${'$'}type":"Currency","code":"GBP"},""" +
-                """"label":{"${'$'}type":"Literal","text":"Revenue"},"source":{"${'$'}type":"Static","value":1234.5},""" +
-                """"tone":"Brand","weight":"Standard"}}"""
+            """{"id":"metric-1","kind":{"${'$'}type":"Metric","format":{"${'$'}type":"Currency","code":"GBP"},""" +
+                """"label":"Revenue","tone":"Brand","value":{"${'$'}type":"Static","value":1234.5}}}"""
 
         private val EDIT_TO_MARKDOWN =
             """{"${'$'}type":"EditNode","newKind":{"${'$'}type":"Markdown","text":{"${'$'}type":"Literal","text":"Edited"}},"target":"metric-1"}"""
 
         private val SEED_STATE_METRIC =
-            """{"id":"m","kind":{"${'$'}type":"Metric","emphasis":"Normal","format":{"${'$'}type":"None"},""" +
-                """"label":{"${'$'}type":"Literal","text":"Live"},"source":{"${'$'}type":"State","defaultValue":0,"key":"n"},""" +
-                """"tone":"Default","weight":"Standard"}}"""
+            """{"id":"m","kind":{"${'$'}type":"Metric","label":"Live",""" +
+                """"value":{"${'$'}type":"State","defaultValue":0,"key":"n"}}}"""
     }
 
     @Test
@@ -96,7 +96,7 @@ class InteractionRoundTripTest {
     fun actionDispatchWritesStateThroughTheLiveCore() {
         FuaranSession.create(NativeBridge, SEED_STATE_METRIC).use { session ->
             // A wire SetState action dispatched through the state channel — the control-interaction path.
-            ActionDispatch.apply(session, SetStateAction(key = "n", payload = JsonNumber("99")))
+            ActionDispatch.apply(session, SetStateAction(key = "n", value = JsonNumber("99")))
             // Re-projection still round-trips after the store write.
             val node = decodeNode(session.treeJson())
             assertEquals("m", node.id)

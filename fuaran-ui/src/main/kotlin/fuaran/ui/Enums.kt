@@ -38,7 +38,7 @@ enum class RelativeTimeUnit { Second, Minute, Hour, Day, Week, Month, Year }
 
 enum class FileReadEncoding { Text, Base64, DataUrl }
 
-enum class HashStrictness { StrictReplay, AdvisoryWarning }
+enum class HashStrictness { StrictReplay, AdvisoryWarning, Enforced }
 
 enum class BoxRole { Group, Card, Dashboard, Separator }
 

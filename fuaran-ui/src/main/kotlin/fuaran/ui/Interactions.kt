@@ -55,17 +55,10 @@ object ActionDispatch {
     private fun applyInto(session: TreeSession, action: Action, host: MutableList<Action>) {
         when (action) {
             is ChainAction -> action.ops.forEach { applyInto(session, it, host) }
-            is SetStateAction -> {
-                val key = action.key
-                if (key == null) {
-                    host.add(action)
-                } else {
-                    session.setState(key, action.payload?.encode() ?: "null")
-                }
-            }
+            is SetStateAction -> session.setState(action.key, action.value.encode())
             // Host / closure actions — no wire-survivable session effect; hand back for host routing.
             DispatchAction,
-            CommitLocalAction,
+            is CommitLocalAction,
             is CallAction,
             is NotifyAction,
             is NavigateAction,

@@ -79,7 +79,8 @@ data class SplitPanel(val children: List<Node>, val weight: Double) : NodeKind
 data class Tabs(
     val activeIndex: Binding,
     val children: List<Node>,
-    val orientation: Orientation,
+    /** 0.2.0 — omitted on the wire at the default (`Horizontal`). */
+    val orientation: Orientation = Orientation.Horizontal,
     val activeTag: Binding? = null,
     val tabTags: List<String>? = null,
     val tabHeaders: List<TabHeader>? = null,
@@ -138,11 +139,17 @@ data class Markdown(val text: TextSource) : NodeKind
 
 data class Metric(
     val label: TextSource,
-    val source: Binding,
-    val format: ValueFormat,
-    val emphasis: Emphasis,
-    val tone: ToneVariant,
-    val weight: StyleWeight,
+    /**
+     * 0.2.0 rename law — a *scalar displayed value* is named `value` on the wire
+     * (`source` is reserved for collection feeds); the retired `Metric.source`
+     * spelling is a hard decode error in the reference core.
+     */
+    val value: Binding,
+    /** 0.2.x — the stylistic fields are omitted on the wire at their defaults. */
+    val format: ValueFormat = NoValueFormat,
+    val emphasis: Emphasis = Emphasis.Normal,
+    val tone: ToneVariant = ToneVariant.Default,
+    val weight: StyleWeight = StyleWeight.Standard,
     val icon: String? = null,
     val subtext: TextSource? = null,
     val trend: Binding? = null,
@@ -155,27 +162,46 @@ data class Sparkline(val source: Binding) : NodeKind
 
 data class Callout(
     val body: TextSource,
-    val heading: TextSource,
-    val tone: ToneVariant,
-    val dismissable: Boolean,
+    /** 0.2.0 — omitted on the wire when `false`. */
+    val dismissable: Boolean = false,
+    val tone: ToneVariant = ToneVariant.Default,
+    val heading: TextSource? = null,
     val icon: String? = null,
 ) : NodeKind
 
 data class Progress(
     val fraction: Binding,
-    val indeterminate: Boolean,
-    val label: TextSource,
-    val tone: ToneVariant,
+    /** 0.2.0 — omitted on the wire when `false`. */
+    val indeterminate: Boolean = false,
+    val tone: ToneVariant = ToneVariant.Default,
+    val label: TextSource? = null,
+    val caveat: TextSource? = null,
 ) : NodeKind
 
 data class Skeleton(val rows: Int) : NodeKind
 
 data class LabelValueRow(
     val label: TextSource,
-    val source: Binding,
-    val format: ValueFormat,
-    val emphasis: Boolean,
+    /** 0.2.0 rename law — scalar displayed value ⇒ `value` (see [Metric.value]). */
+    val value: Binding,
+    val format: ValueFormat = NoValueFormat,
+    /** The behavioural bool (not the [Emphasis] style DU); 0.2.2 — omitted when `false`. */
+    val emphasis: Boolean = false,
     val help: TextSource? = null,
+) : NodeKind
+
+/**
+ * The labeled TEXT fact — [Metric]'s complementary kind (0.2.x). `value` is a
+ * [TextSource] (the same vocabulary the labels use); `emphasis` is the behavioural
+ * bool (omit-when-false), `tone` omit-when-default; `help` / `icon` optional.
+ */
+data class Fact(
+    val label: TextSource,
+    val value: TextSource,
+    val emphasis: Boolean = false,
+    val tone: ToneVariant = ToneVariant.Default,
+    val help: TextSource? = null,
+    val icon: String? = null,
 ) : NodeKind
 
 data class Link(
@@ -191,10 +217,11 @@ data class Image(val alt: TextSource, val src: Binding, val variant: ImageVarian
 data class ListNode(val items: List<TextSource>, val ordered: Boolean) : NodeKind
 
 data class Toast(
-    val dismissable: Boolean,
     val message: TextSource,
     val open: Binding,
-    val tone: ToneVariant,
+    val tone: ToneVariant = ToneVariant.Default,
+    /** 0.2.0 — omitted on the wire when `true` (the one inverted default). */
+    val dismissable: Boolean = true,
 ) : NodeKind
 
 data class CodeBlock(
@@ -259,14 +286,21 @@ data class Select(
 
 data class Filters(val items: List<FilterItem>) : NodeKind
 
-data class FilterItem(val name: String, val label: TextSource, val kind: FilterKind)
+/**
+ * 0.2.0 filters-unification: a filter chip's control is an ordinary [FormFieldKind] —
+ * the parallel `FilterKind` DU (`TextFilter` / `ChoiceFilter` / `RangeFilter` /
+ * `SegmentedFilter`) is retired; its discriminators are a hard `UNKNOWN_DU_CASE`.
+ * A chip control with no `value` key decodes to the auto binding `Filter(<name>)`.
+ */
+data class FilterItem(val name: String, val label: TextSource, val kind: FormFieldKind)
 
 // --- Visualisation --------------------------------------------------------- //
 
 data class DataGrid(
     val columns: List<GridColumn>,
-    val editable: Boolean,
     val source: Binding,
+    /** 0.2.0 — omitted on the wire when `false`. */
+    val editable: Boolean = false,
     val rowKeyField: String? = null,
     val staticRows: StaticRows? = null,
 ) : NodeKind
@@ -274,8 +308,10 @@ data class DataGrid(
 data class GridColumn(
     val label: String,
     val kind: CellKind,
-    val format: ValueFormat,
-    val width: ColumnWidth,
+    /** 0.2.x — `format` / `width` omitted on the wire at their defaults. */
+    val format: ValueFormat = NoValueFormat,
+    val width: ColumnWidth = AutoWidth,
+    /** The declarative row-field projection; `value` (a closure) is presence-only and dropped. */
     val field: String? = null,
 )
 
@@ -284,9 +320,10 @@ data class StaticRows(val headers: List<TextSource>, val rows: List<List<TextSou
 data class Chart(
     val kind: ChartKind,
     val source: Binding,
-    val stacked: Boolean,
     val xField: String,
     val yFields: List<String>,
+    /** Round-trips when present; absent (the legacy wire) defaults to `false`. */
+    val stacked: Boolean = false,
     val title: TextSource? = null,
 ) : NodeKind
 
@@ -362,9 +399,19 @@ data class StateBinding(val key: String, val defaultValue: JsonValue? = null) : 
 
 data class QueryBinding(val name: String, val dependsOn: List<String>? = null) : Binding
 
-data class FilterBinding(val name: String) : Binding
+/** 0.2.0 — optional `defaultValue`: yielded (raw) before the filter is first written. */
+data class FilterBinding(val name: String, val defaultValue: JsonValue? = null) : Binding
 
-data class SelectionBinding(val name: String? = null) : Binding
+/**
+ * A row-selection source over the grid at [nodeId]. 0.2.9 — optional `defaultValue`
+ * (the `Filter.defaultValue` convention); 0.2.10 — optional `field` (the declarative
+ * row-field projection: present ⇒ the accessor projects that field off the clicked row).
+ */
+data class SelectionBinding(
+    val nodeId: String,
+    val defaultValue: JsonValue? = null,
+    val field: String? = null,
+) : Binding
 
 data object ComputedBinding : Binding
 
@@ -409,15 +456,15 @@ data object DispatchAction : Action
 
 data class CallAction(val endpoint: String, val into: CallTarget? = null) : Action
 
-data class NotifyAction(val channel: String? = null, val payload: JsonValue? = null) : Action
+data class NotifyAction(val channel: String, val payload: JsonValue) : Action
 
-data class NavigateAction(val href: String? = null, val payload: JsonValue? = null) : Action
+data class NavigateAction(val route: String) : Action
 
-data class SetStateAction(val key: String? = null, val payload: JsonValue? = null) : Action
+data class SetStateAction(val key: String, val value: JsonValue) : Action
 
-data class AiToolAction(val payload: JsonValue? = null) : Action
+data class AiToolAction(val toolName: String, val args: JsonValue) : Action
 
-data object CommitLocalAction : Action
+data class CommitLocalAction(val nodeId: String) : Action
 
 data class WriteToClipboardAction(val text: String) : Action
 
@@ -445,6 +492,13 @@ data class NumberValueFormat(val decimals: Int? = null) : ValueFormat
 data class CurrencyValueFormat(val code: String) : ValueFormat
 
 data class PercentValueFormat(val decimals: Int? = null) : ValueFormat
+
+data class SignificantDigitsValueFormat(val digits: Int) : ValueFormat
+
+data class DateValueFormat(val format: String) : ValueFormat
+
+/** The formatter is a closure — presence only. */
+data object CustomValueFormat : ValueFormat
 
 /** The `Binding.Format` numeric format DU (`isoCode`-carrying currency; adds Date / RelativeTime). */
 sealed interface NumberFormat
@@ -484,10 +538,23 @@ data class TextAreaField(val value: Binding, val rows: Int) : FormFieldKind
 data class SegmentedChoiceField(
     val options: Binding,
     val value: Binding,
-    val orientation: Orientation,
+    /** Decode-optional (0.2.0) — absent restores the language default `Horizontal`. */
+    val orientation: Orientation = Orientation.Horizontal,
 ) : FormFieldKind
 
 data class RangedNumberField(
+    val value: Binding,
+    val min: Double? = null,
+    val max: Double? = null,
+    val step: Double? = null,
+) : FormFieldKind
+
+/**
+ * 0.2.0 — the dual-thumb numeric range control (absorbed the retired
+ * `FilterKind.RangeFilter`). A `Static` pair rides as the bare `{"max":…,"min":…}`
+ * object (no `$type`); optional bounds omitted when absent.
+ */
+data class RangeField(
     val value: Binding,
     val min: Double? = null,
     val max: Double? = null,
@@ -503,26 +570,6 @@ data class DateField(
 ) : FormFieldKind
 
 // --------------------------------------------------------------------------- //
-// Filter kinds
-// --------------------------------------------------------------------------- //
-
-sealed interface FilterKind
-
-data class TextFilter(val value: Binding) : FilterKind
-
-data class ChoiceFilter(val options: Binding, val value: Binding) : FilterKind
-
-data class RangeFilter(val value: RangeValue) : FilterKind
-
-data class SegmentedFilter(
-    val options: Binding,
-    val value: Binding,
-    val orientation: Orientation,
-) : FilterKind
-
-data class RangeValue(val min: Double, val max: Double)
-
-// --------------------------------------------------------------------------- //
 // Local flush trigger
 // --------------------------------------------------------------------------- //
 
@@ -530,7 +577,9 @@ sealed interface LocalFlushTrigger
 
 data object OnBlur : LocalFlushTrigger
 
-data object OnEnter : LocalFlushTrigger
+data object OnSubmit : LocalFlushTrigger
+
+data object OnCommitAction : LocalFlushTrigger
 
 data class OnDebounce(val milliseconds: Int) : LocalFlushTrigger
 
@@ -542,11 +591,36 @@ sealed interface CellKind
 
 data object TextCell : CellKind
 
+data object NumericCell : CellKind
+
+data object DateCell : CellKind
+
+/** `onEdit` closure — always emitted; presence only. */
+data object EditableCell : CellKind
+
+/** `get` + `onToggle` closures — always emitted; presence only. */
+data object CheckboxCell : CellKind
+
+/** The `onClick` closure is always emitted; only the label survives the wire. */
+data class ButtonCell(val label: TextSource) : CellKind
+
+data class ButtonGroupCell(val labels: List<TextSource>) : CellKind
+
+data object LinkCell : CellKind
+
+data object PillCell : CellKind
+
+data object ProgressCell : CellKind
+
+data object CustomCell : CellKind
+
 sealed interface ColumnWidth
 
 data object AutoWidth : ColumnWidth
 
 data class FixedWidth(val pixels: Int) : ColumnWidth
+
+data class FlexWidth(val weight: Double) : ColumnWidth
 
 // --------------------------------------------------------------------------- //
 // Drawing
@@ -569,6 +643,12 @@ data class DrawStyle(
     val fontFamily: String? = null,
     val fontSize: Double? = null,
     val textAnchor: String? = null,
+    /**
+     * Phase 642 — keyed mark identity: a data-bearing shape's derivation-based id
+     * (`series-field|category-key`), stable under row reorder and data refresh
+     * (object constancy). Omitted when absent; chrome shapes stay unstamped.
+     */
+    val markId: String? = null,
 )
 
 sealed interface Shape

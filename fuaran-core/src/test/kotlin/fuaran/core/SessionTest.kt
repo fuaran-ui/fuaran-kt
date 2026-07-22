@@ -48,18 +48,18 @@ private fun require(cond: Boolean, msg: String) {
     if (!cond) error(msg)
 }
 
+// 0.2.0 canonical seeds: bare-string Literals; the scalar displayed value is `value`
+// (the retired `source` spelling is a hard decode error in the core).
 private const val SEED_METRIC =
-    """{"id":"metric-1","kind":{"${'$'}type":"Metric","emphasis":"Normal","format":{"${'$'}type":"Currency","code":"GBP"},""" +
-        """"label":{"${'$'}type":"Literal","text":"Revenue"},"source":{"${'$'}type":"Static","value":1234.5},""" +
-        """"tone":"Brand","weight":"Standard"}}"""
+    """{"id":"metric-1","kind":{"${'$'}type":"Metric","format":{"${'$'}type":"Currency","code":"GBP"},""" +
+        """"label":"Revenue","tone":"Brand","value":{"${'$'}type":"Static","value":1234.5}}}"""
 
 private const val EDIT_TO_MARKDOWN =
     """{"${'$'}type":"EditNode","newKind":{"${'$'}type":"Markdown","text":{"${'$'}type":"Literal","text":"Edited"}},"target":"metric-1"}"""
 
 private const val SEED_STATE_METRIC =
-    """{"id":"m","kind":{"${'$'}type":"Metric","emphasis":"Normal","format":{"${'$'}type":"None"},""" +
-        """"label":{"${'$'}type":"Literal","text":"Live"},"source":{"${'$'}type":"State","defaultValue":0,"key":"n"},""" +
-        """"tone":"Default","weight":"Standard"}}"""
+    """{"id":"m","kind":{"${'$'}type":"Metric","label":"Live",""" +
+        """"value":{"${'$'}type":"State","defaultValue":0,"key":"n"}}}"""
 
 fun main() {
     val libPath = System.getProperty("fuaran.lib")

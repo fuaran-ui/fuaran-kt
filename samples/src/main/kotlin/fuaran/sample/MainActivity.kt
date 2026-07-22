@@ -58,11 +58,11 @@ private val SEED_TREE =
     """
     {"id":"root","kind":{"${'$'}type":"Box","role":"Dashboard","layout":{"${'$'}type":"Flex","direction":"Vertical","wrap":false,"gap":8},
       "children":[
-        {"id":"title","kind":{"${'$'}type":"Heading","level":1,"variant":"Standard","text":{"${'$'}type":"Literal","text":"Fuaran Sample"}}},
+        {"id":"title","kind":{"${'$'}type":"Heading","level":1,"variant":"Standard","text":"Fuaran Sample"}},
         {"id":"rev","kind":{"${'$'}type":"Metric","emphasis":"Loud","format":{"${'$'}type":"Currency","code":"GBP"},
-          "label":{"${'$'}type":"Literal","text":"Revenue"},"source":{"${'$'}type":"Static","value":1234.5},"tone":"Brand","weight":"Standard"}},
-        {"id":"refresh","kind":{"${'$'}type":"Button","variant":"Primary","label":{"${'$'}type":"Literal","text":"Refresh"},
-          "onClick":{"${'$'}type":"SetState","key":"n","payload":1}}}
+          "label":"Revenue","tone":"Brand","value":{"${'$'}type":"Static","value":1234.5}}},
+        {"id":"refresh","kind":{"${'$'}type":"Button","variant":"Primary","label":"Refresh",
+          "onClick":{"${'$'}type":"SetState","key":"n","value":1}}}
       ]}}
     """.trimIndent()
 

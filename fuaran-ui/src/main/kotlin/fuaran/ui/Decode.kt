@@ -56,6 +56,11 @@ private fun JsonValue.array(path: String): List<JsonValue> =
 private fun JsonObject.req(key: String, path: String): JsonValue =
     this[key] ?: throw FuaranDecodeException(FuaranDecodeException.MISSING_FIELD, "$path.$key", "required field absent")
 
+/** A required field with one accepted decode-side alias; the error names the canonical key. */
+private fun JsonObject.reqAliased(key: String, alias: String, path: String): JsonValue =
+    this[key] ?: this[alias]
+        ?: throw FuaranDecodeException(FuaranDecodeException.MISSING_FIELD, "$path.$key", "required field absent")
+
 private fun JsonObject.discriminator(path: String): String =
     (req("\$type", path) as? JsonString)?.value
         ?: throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, "$path.\$type", "expected string discriminator")
@@ -145,9 +150,13 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             )
         "Tabs" ->
             Tabs(
-                activeIndex = decodeBinding(o.req("activeIndex", path), "$path.activeIndex"),
+                // `activeIndex` round-trips; absent (legacy wire) defaults to Static 0.
+                activeIndex = o["activeIndex"]?.let { decodeBinding(it, "$path.activeIndex") }
+                    ?: StaticBinding(JsonNumber("0")),
                 children = decodeNodeList(o.req("children", path), "$path.children"),
-                orientation = enumOf<Orientation>(o.req("orientation", path).str("$path.orientation"), "$path.orientation"),
+                // 0.2.0 — omitted-when-default (Horizontal).
+                orientation = o.optStr("orientation", path)?.let { enumOf<Orientation>(it, "$path.orientation") }
+                    ?: Orientation.Horizontal,
                 activeTag = o["activeTag"]?.let { decodeBinding(it, "$path.activeTag") },
                 tabTags = o.optStrList("tabTags", path),
                 tabHeaders = o["tabHeaders"]?.array("$path.tabHeaders")?.mapIndexed { i, v ->
@@ -216,11 +225,14 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         "Metric" ->
             Metric(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
-                source = decodeBinding(o.req("source", path), "$path.source"),
-                format = decodeValueFormat(o.req("format", path), "$path.format"),
-                emphasis = enumOf<Emphasis>(o.req("emphasis", path).str("$path.emphasis"), "$path.emphasis"),
-                tone = enumOf<ToneVariant>(o.req("tone", path).str("$path.tone"), "$path.tone"),
-                weight = enumOf<StyleWeight>(o.req("weight", path).str("$path.weight"), "$path.weight"),
+                // 0.2.0 rename law — scalar displayed value ⇒ `value` (`data` alias kept;
+                // the retired `source` spelling is a hard MISSING_FIELD, mirroring the core).
+                value = decodeBinding(o.reqAliased("value", "data", path), "$path.value"),
+                // 0.2.x — stylistic fields omitted-when-default.
+                format = o["format"]?.let { decodeValueFormat(it, "$path.format") } ?: NoValueFormat,
+                emphasis = o.optStr("emphasis", path)?.let { enumOf<Emphasis>(it, "$path.emphasis") } ?: Emphasis.Normal,
+                tone = o.optStr("tone", path)?.let { enumOf<ToneVariant>(it, "$path.tone") } ?: ToneVariant.Default,
+                weight = o.optStr("weight", path)?.let { enumOf<StyleWeight>(it, "$path.weight") } ?: StyleWeight.Standard,
                 icon = o.optStr("icon", path),
                 subtext = o["subtext"]?.let { decodeTextSource(it, "$path.subtext") },
                 trend = o["trend"]?.let { decodeBinding(it, "$path.trend") },
@@ -235,26 +247,40 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         "Callout" ->
             Callout(
                 body = decodeTextSource(o.req("body", path), "$path.body"),
-                heading = decodeTextSource(o.req("heading", path), "$path.heading"),
-                tone = enumOf<ToneVariant>(o.req("tone", path).str("$path.tone"), "$path.tone"),
-                dismissable = o.req("dismissable", path).bool("$path.dismissable"),
+                // 0.2.0 — omitted-when-false; heading is optional.
+                dismissable = o.optBool("dismissable", path) ?: false,
+                tone = o.optStr("tone", path)?.let { enumOf<ToneVariant>(it, "$path.tone") } ?: ToneVariant.Default,
+                heading = o["heading"]?.let { decodeTextSource(it, "$path.heading") },
                 icon = o.optStr("icon", path),
             )
         "Progress" ->
             Progress(
                 fraction = decodeBinding(o.req("fraction", path), "$path.fraction"),
-                indeterminate = o.req("indeterminate", path).bool("$path.indeterminate"),
-                label = decodeTextSource(o.req("label", path), "$path.label"),
-                tone = enumOf<ToneVariant>(o.req("tone", path).str("$path.tone"), "$path.tone"),
+                // 0.2.0 — omitted-when-false; label is optional; `caveat` added.
+                indeterminate = o.optBool("indeterminate", path) ?: false,
+                tone = o.optStr("tone", path)?.let { enumOf<ToneVariant>(it, "$path.tone") } ?: ToneVariant.Default,
+                label = o["label"]?.let { decodeTextSource(it, "$path.label") },
+                caveat = o["caveat"]?.let { decodeTextSource(it, "$path.caveat") },
             )
         "Skeleton" -> Skeleton(rows = o.req("rows", path).int("$path.rows"))
         "LabelValueRow" ->
             LabelValueRow(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
-                source = decodeBinding(o.req("source", path), "$path.source"),
-                format = decodeValueFormat(o.req("format", path), "$path.format"),
-                emphasis = o.req("emphasis", path).bool("$path.emphasis"),
+                // 0.2.0 rename law — scalar displayed value ⇒ `value` (`data` alias kept).
+                value = decodeBinding(o.reqAliased("value", "data", path), "$path.value"),
+                format = o["format"]?.let { decodeValueFormat(it, "$path.format") } ?: NoValueFormat,
+                // The behavioural bool; 0.2.2 — omitted-when-false.
+                emphasis = o.optBool("emphasis", path) ?: false,
                 help = o["help"]?.let { decodeTextSource(it, "$path.help") },
+            )
+        "Fact" ->
+            Fact(
+                label = decodeTextSource(o.req("label", path), "$path.label"),
+                value = decodeTextSource(o.req("value", path), "$path.value"),
+                emphasis = o.optBool("emphasis", path) ?: false,
+                tone = o.optStr("tone", path)?.let { enumOf<ToneVariant>(it, "$path.tone") } ?: ToneVariant.Default,
+                help = o["help"]?.let { decodeTextSource(it, "$path.help") },
+                icon = o.optStr("icon", path),
             )
         "Link" ->
             Link(
@@ -277,10 +303,11 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             )
         "Toast" ->
             Toast(
-                dismissable = o.req("dismissable", path).bool("$path.dismissable"),
                 message = decodeTextSource(o.req("message", path), "$path.message"),
                 open = decodeBinding(o.req("open", path), "$path.open"),
-                tone = enumOf<ToneVariant>(o.req("tone", path).str("$path.tone"), "$path.tone"),
+                tone = o.optStr("tone", path)?.let { enumOf<ToneVariant>(it, "$path.tone") } ?: ToneVariant.Default,
+                // 0.2.0 — omitted-when-TRUE (the one inverted default).
+                dismissable = o.optBool("dismissable", path) ?: true,
             )
         "CodeBlock" ->
             CodeBlock(
@@ -298,7 +325,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         "Drawing" ->
             Drawing(
                 shapes = o.req("shapes", path).array("$path.shapes").mapIndexed { i, v -> decodeShape(v, "$path.shapes[$i]") },
-                style = decodeDrawStyle(o.req("style", path), "$path.style"),
+                style = o["style"]?.let { decodeDrawStyle(it, "$path.style") } ?: DrawStyle(),
                 viewBox = decodeViewBox(o.req("viewBox", path), "$path.viewBox"),
                 title = o["title"]?.let { decodeTextSource(it, "$path.title") },
                 description = o["description"]?.let { decodeTextSource(it, "$path.description") },
@@ -344,8 +371,9 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         "DataGrid" ->
             DataGrid(
                 columns = o.req("columns", path).array("$path.columns").mapIndexed { i, v -> decodeGridColumn(v, "$path.columns[$i]") },
-                editable = o.req("editable", path).bool("$path.editable"),
                 source = decodeBinding(o.req("source", path), "$path.source"),
+                // 0.2.0 — omitted-when-false.
+                editable = o.optBool("editable", path) ?: false,
                 rowKeyField = o.optStr("rowKeyField", path),
                 staticRows = o["staticRows"]?.let { decodeStaticRows(it, "$path.staticRows") },
             )
@@ -353,9 +381,10 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             Chart(
                 kind = enumOf<ChartKind>(o.req("kind", path).str("$path.kind"), "$path.kind"),
                 source = decodeBinding(o.req("source", path), "$path.source"),
-                stacked = o.req("stacked", path).bool("$path.stacked"),
                 xField = o.req("xField", path).str("$path.xField"),
                 yFields = o.strList("yFields", path),
+                // Round-trips when present; absent (legacy wire) defaults to false.
+                stacked = o.optBool("stacked", path) ?: false,
                 title = o["title"]?.let { decodeTextSource(it, "$path.title") },
             )
         "Map" ->
@@ -425,6 +454,9 @@ private fun decodeMountChannel(value: JsonValue, path: String): MountChannel {
 // --------------------------------------------------------------------------- //
 
 private fun decodeTextSource(value: JsonValue, path: String): TextSource {
+    // 0.2.0 canonical form (§16, normative): a bare JSON string IS `TextSource.Literal` —
+    // the `{"$type":"Literal"}` envelope stays decode-accepted and normalises down.
+    if (value is JsonString) return LiteralText(value.value)
     val o = value.obj(path)
     return when (val t = o.discriminator(path)) {
         "Literal" -> LiteralText(o.req("text", path).str("$path.text"))
@@ -439,18 +471,32 @@ private fun decodeTextSource(value: JsonValue, path: String): TextSource {
 // --------------------------------------------------------------------------- //
 
 private fun decodeBinding(value: JsonValue, path: String): Binding {
+    // Lenient shape coercion (§3.6, mirrored from the reference core): a bare array or
+    // scalar where a Binding is expected reads as `Static` with that value — unambiguous,
+    // since every Binding case is a `$type`-discriminated object. Objects stay strict.
+    when (value) {
+        is JsonArray, is JsonString, is JsonNumber, is JsonBool -> return StaticBinding(value)
+        else -> {}
+    }
     val o = value.obj(path)
     return when (val t = o.discriminator(path)) {
         "Static" -> StaticBinding(o.req("value", path))
         "State" -> StateBinding(o.req("key", path).str("$path.key"), o["defaultValue"])
         "Query" -> QueryBinding(o.req("name", path).str("$path.name"), o.optStrList("dependsOn", path))
-        "Filter" -> FilterBinding(o.req("name", path).str("$path.name"))
-        "Selection" -> SelectionBinding(o.optStr("name", path))
+        // 0.2.0 — optional `defaultValue`, held raw (the render projection never types it).
+        "Filter" -> FilterBinding(o.req("name", path).str("$path.name"), o["defaultValue"])
+        // 0.2.9/0.2.10 — `nodeId` + optional `defaultValue` / `field`.
+        "Selection" ->
+            SelectionBinding(
+                nodeId = o.req("nodeId", path).str("$path.nodeId"),
+                defaultValue = o["defaultValue"],
+                field = o.optStr("field", path),
+            )
         "Computed" -> ComputedBinding
         "I18n" -> I18nBinding(o.req("key", path).str("$path.key"), o["args"])
         "Local" ->
             LocalBinding(
-                flushOn = decodeLocalFlushTrigger(o.req("flushOn", path), "$path.flushOn"),
+                flushOn = o["flushOn"]?.let { decodeLocalFlushTrigger(it, "$path.flushOn") } ?: OnBlur,
                 initialFrom = decodeBinding(o.req("initialFrom", path), "$path.initialFrom"),
             )
         "Format" ->
@@ -472,6 +518,9 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
                 },
             )
         "Invoke" -> InvokeBinding(o.req("capabilityId", path).str("$path.capabilityId"), decodeInvokeArgs(o, path))
+        // Lenient: the `TextSource.Bound` wrapper transferred to a bare-Binding slot —
+        // one payload field, so the unwrap is one-to-one (decode-only).
+        "Bound" -> decodeBinding(o.req("binding", path), "$path.binding")
         else -> unknownCase(t, path, "Binding")
     }
 }
@@ -499,11 +548,29 @@ private fun decodeAction(value: JsonValue, path: String): Action {
                 endpoint = o.req("endpoint", path).str("$path.endpoint"),
                 into = o["into"]?.let { decodeCallTarget(it, "$path.into") },
             )
-        "Notify" -> NotifyAction(channel = o.optStr("channel", path), payload = o["payload"])
-        "Navigate" -> NavigateAction(href = o.optStr("href", path), payload = o["payload"])
-        "SetState" -> SetStateAction(key = o.optStr("key", path), payload = o["payload"])
-        "AiTool" -> AiToolAction(payload = o["payload"])
-        "CommitLocal" -> CommitLocalAction
+        "Notify" ->
+            NotifyAction(
+                channel = o.req("channel", path).str("$path.channel"),
+                payload = o.req("payload", path),
+            )
+        // Canonical field is `route`; the web-prior spellings decode as aliases.
+        "Navigate" -> {
+            val v =
+                o["route"] ?: o["href"] ?: o["url"] ?: o["to"]
+                    ?: throw FuaranDecodeException(FuaranDecodeException.MISSING_FIELD, "$path.route", "required field absent")
+            NavigateAction(route = v.str("$path.route"))
+        }
+        "SetState" ->
+            SetStateAction(
+                key = o.req("key", path).str("$path.key"),
+                value = o.req("value", path),
+            )
+        "AiTool" ->
+            AiToolAction(
+                toolName = o.req("toolName", path).str("$path.toolName"),
+                args = o.req("args", path),
+            )
+        "CommitLocal" -> CommitLocalAction(nodeId = o.req("nodeId", path).str("$path.nodeId"))
         "WriteToClipboard" -> WriteToClipboardAction(o.req("text", path).str("$path.text"))
         "ReadFileBody" ->
             ReadFileBodyAction(
@@ -559,6 +626,9 @@ private fun decodeValueFormat(value: JsonValue, path: String): ValueFormat {
         "Number" -> NumberValueFormat(o.optInt("decimals", path))
         "Currency" -> CurrencyValueFormat(o.req("code", path).str("$path.code"))
         "Percent" -> PercentValueFormat(o.optInt("decimals", path))
+        "SignificantDigits" -> SignificantDigitsValueFormat(o.req("digits", path).int("$path.digits"))
+        "Date" -> DateValueFormat(o.req("format", path).str("$path.format"))
+        "Custom" -> CustomValueFormat
         else -> unknownCase(t, path, "ValueFormat")
     }
 }
@@ -588,49 +658,94 @@ private fun decodeLocaleSource(value: JsonValue, path: String): LocaleSource {
 // Form fields + filters
 // --------------------------------------------------------------------------- //
 
+/**
+ * The auto-bind context for a control's ABSENT `value` slot (0.2.0/0.2.1, Phase 596):
+ * every control may omit `value`; a filter chip auto-binds `Filter(<name>)` and a
+ * form field auto-binds `State(<field id>)` with the slot's typed placeholder as the
+ * State default (empty string / `0` / `false` / null-choice / `{min 0, max 0}` /
+ * ISO-empty date — pinned by `form-declarative-minimal`).
+ */
+private sealed interface ControlAutoBind {
+    data class FilterChip(val name: String) : ControlAutoBind
+
+    data class FormFieldId(val id: String) : ControlAutoBind
+}
+
+private fun ControlAutoBind.autoBinding(placeholder: JsonValue): Binding =
+    when (this) {
+        is ControlAutoBind.FilterChip -> FilterBinding(name)
+        is ControlAutoBind.FormFieldId -> StateBinding(id, placeholder)
+    }
+
 private fun decodeFormField(value: JsonValue, path: String): FormField {
     val o = value.obj(path)
+    // Field alias: name → id. Id decodes first so the auto-bind can use it.
+    val id = o.reqAliased("id", "name", path).str("$path.id")
     return FormField(
-        id = o.req("id", path).str("$path.id"),
-        kind = decodeFormFieldKind(o.req("kind", path), "$path.kind"),
+        id = id,
+        kind = decodeFormFieldKind(o.req("kind", path), "$path.kind", ControlAutoBind.FormFieldId(id)),
         label = decodeTextSource(o.req("label", path), "$path.label"),
         required = o.req("required", path).bool("$path.required"),
         help = o["help"]?.let { decodeTextSource(it, "$path.help") },
     )
 }
 
-private fun decodeFormFieldKind(value: JsonValue, path: String): FormFieldKind {
+private fun decodeFormFieldKind(value: JsonValue, path: String, autoBind: ControlAutoBind): FormFieldKind {
     val o = value.obj(path)
+    // Value slot: present ⇒ decode; absent ⇒ the context's auto-binding (never an error).
+    fun valueOr(placeholder: JsonValue): Binding =
+        o["value"]?.let { decodeBinding(it, "$path.value") } ?: autoBind.autoBinding(placeholder)
     return when (val t = o.discriminator(path)) {
-        "Text" -> TextField(decodeBinding(o.req("value", path), "$path.value"))
-        "Number" -> NumberField(decodeBinding(o.req("value", path), "$path.value"))
-        "Checkbox" -> CheckboxField(decodeBinding(o.req("value", path), "$path.value"))
+        "Text" -> TextField(valueOr(JsonString("")))
+        "Number" -> NumberField(valueOr(JsonNumber("0")))
+        "Checkbox" -> CheckboxField(valueOr(JsonBool(false)))
         "Choice" ->
             ChoiceField(
                 options = decodeBinding(o.req("options", path), "$path.options"),
-                value = decodeBinding(o.req("value", path), "$path.value"),
+                value = valueOr(JsonNull),
             )
         "TextArea" ->
             TextAreaField(
-                value = decodeBinding(o.req("value", path), "$path.value"),
+                value = valueOr(JsonString("")),
                 rows = o.req("rows", path).int("$path.rows"),
             )
         "SegmentedChoice" ->
             SegmentedChoiceField(
                 options = decodeBinding(o.req("options", path), "$path.options"),
-                value = decodeBinding(o.req("value", path), "$path.value"),
-                orientation = enumOf<Orientation>(o.req("orientation", path).str("$path.orientation"), "$path.orientation"),
+                value = valueOr(JsonNull),
+                // 0.2.0 — decode-optional; absent restores the language default.
+                orientation = o.optStr("orientation", path)?.let { enumOf<Orientation>(it, "$path.orientation") }
+                    ?: Orientation.Horizontal,
             )
         "RangedNumber" ->
             RangedNumberField(
-                value = decodeBinding(o.req("value", path), "$path.value"),
+                value = valueOr(JsonNumber("0")),
+                min = o.optDouble("min", path),
+                max = o.optDouble("max", path),
+                step = o.optDouble("step", path),
+            )
+        // 0.2.0 — the dual-thumb range: a canonical Static pair rides as the BARE
+        // `{"max":…,"min":…}` object (no `$type`) — accept it before the generic dispatch.
+        "Range" ->
+            RangeField(
+                value =
+                    when (val v = o["value"]) {
+                        null -> autoBind.autoBinding(rangePlaceholder())
+                        is JsonObject ->
+                            if (v["\$type"] == null && v["min"] != null && v["max"] != null) {
+                                StaticBinding(v)
+                            } else {
+                                decodeBinding(v, "$path.value")
+                            }
+                        else -> decodeBinding(v, "$path.value")
+                    },
                 min = o.optDouble("min", path),
                 max = o.optDouble("max", path),
                 step = o.optDouble("step", path),
             )
         "Date" ->
             DateField(
-                value = decodeBinding(o.req("value", path), "$path.value"),
+                value = valueOr(JsonString("")),
                 variant = enumOf<DateFieldVariant>(o.req("variant", path).str("$path.variant"), "$path.variant"),
                 min = o.optStr("min", path),
                 max = o.optStr("max", path),
@@ -640,43 +755,27 @@ private fun decodeFormFieldKind(value: JsonValue, path: String): FormFieldKind {
     }
 }
 
+private fun rangePlaceholder(): JsonValue =
+    JsonObject(linkedMapOf<String, JsonValue>("min" to JsonNumber("0"), "max" to JsonNumber("0")))
+
 private fun decodeFilterItem(value: JsonValue, path: String): FilterItem {
     val o = value.obj(path)
+    // 0.2.0 filters-unification: the chip's control is an ordinary FormFieldKind; its
+    // absent `value` auto-binds Filter(name). Name decodes first so the synthesis can use it.
+    val name = o.req("name", path).str("$path.name")
     return FilterItem(
-        name = o.req("name", path).str("$path.name"),
+        name = name,
         label = decodeTextSource(o.req("label", path), "$path.label"),
-        kind = decodeFilterKind(o.req("kind", path), "$path.kind"),
+        kind = decodeFormFieldKind(o.req("kind", path), "$path.kind", ControlAutoBind.FilterChip(name)),
     )
-}
-
-private fun decodeFilterKind(value: JsonValue, path: String): FilterKind {
-    val o = value.obj(path)
-    return when (val t = o.discriminator(path)) {
-        "TextFilter" -> TextFilter(decodeBinding(o.req("value", path), "$path.value"))
-        "ChoiceFilter" ->
-            ChoiceFilter(
-                options = decodeBinding(o.req("options", path), "$path.options"),
-                value = decodeBinding(o.req("value", path), "$path.value"),
-            )
-        "RangeFilter" -> {
-            val rv = o.req("value", path).obj("$path.value")
-            RangeFilter(RangeValue(rv.req("min", "$path.value").double("$path.value.min"), rv.req("max", "$path.value").double("$path.value.max")))
-        }
-        "SegmentedFilter" ->
-            SegmentedFilter(
-                options = decodeBinding(o.req("options", path), "$path.options"),
-                value = decodeBinding(o.req("value", path), "$path.value"),
-                orientation = enumOf<Orientation>(o.req("orientation", path).str("$path.orientation"), "$path.orientation"),
-            )
-        else -> unknownCase(t, path, "FilterKind")
-    }
 }
 
 private fun decodeLocalFlushTrigger(value: JsonValue, path: String): LocalFlushTrigger {
     val o = value.obj(path)
     return when (val t = o.discriminator(path)) {
         "OnBlur" -> OnBlur
-        "OnEnter" -> OnEnter
+        "OnSubmit" -> OnSubmit
+        "OnCommitAction" -> OnCommitAction
         "OnDebounce" -> OnDebounce(o.req("milliseconds", path).int("$path.milliseconds"))
         else -> unknownCase(t, path, "LocalFlushTrigger")
     }
@@ -691,8 +790,9 @@ private fun decodeGridColumn(value: JsonValue, path: String): GridColumn {
     return GridColumn(
         label = o.req("label", path).str("$path.label"),
         kind = decodeCellKind(o.req("kind", path), "$path.kind"),
-        format = decodeValueFormat(o.req("format", path), "$path.format"),
-        width = decodeColumnWidth(o.req("width", path), "$path.width"),
+        // 0.2.x — format/width omitted-when-default; `value` is a closure sentinel (dropped).
+        format = o["format"]?.let { decodeValueFormat(it, "$path.format") } ?: NoValueFormat,
+        width = o["width"]?.let { decodeColumnWidth(it, "$path.width") } ?: AutoWidth,
         field = o.optStr("field", path),
     )
 }
@@ -701,6 +801,22 @@ private fun decodeCellKind(value: JsonValue, path: String): CellKind {
     val o = value.obj(path)
     return when (val t = o.discriminator(path)) {
         "Text" -> TextCell
+        "Numeric" -> NumericCell
+        "Date" -> DateCell
+        "Editable" -> EditableCell
+        "Checkbox" -> CheckboxCell
+        "Button" -> ButtonCell(decodeTextSource(o.req("label", path), "$path.label"))
+        "ButtonGroup" ->
+            ButtonGroupCell(
+                o.req("buttons", path).array("$path.buttons").mapIndexed { i, v ->
+                    val b = v.obj("$path.buttons[$i]")
+                    decodeTextSource(b.req("label", "$path.buttons[$i]"), "$path.buttons[$i].label")
+                },
+            )
+        "Link" -> LinkCell
+        "Pill" -> PillCell
+        "Progress" -> ProgressCell
+        "Custom" -> CustomCell
         else -> unknownCase(t, path, "CellKind")
     }
 }
@@ -710,6 +826,7 @@ private fun decodeColumnWidth(value: JsonValue, path: String): ColumnWidth {
     return when (val t = o.discriminator(path)) {
         "Auto" -> AutoWidth
         "Fixed" -> FixedWidth(o.req("pixels", path).int("$path.pixels"))
+        "Flex" -> FlexWidth(o.req("weight", path).double("$path.weight"))
         else -> unknownCase(t, path, "ColumnWidth")
     }
 }
@@ -739,7 +856,8 @@ private fun decodeContentHash(value: JsonValue, path: String): ContentHash {
 
 private fun decodeShape(value: JsonValue, path: String): Shape {
     val o = value.obj(path)
-    val style = decodeDrawStyle(o.req("style", path), "$path.style")
+    // A missing style defaults to the all-inherited empty style (mirrors the core).
+    val style = o["style"]?.let { decodeDrawStyle(it, "$path.style") } ?: DrawStyle()
     return when (val t = o.discriminator(path)) {
         "Group" ->
             GroupShape(
@@ -836,6 +954,8 @@ private fun decodeDrawStyle(value: JsonValue, path: String): DrawStyle {
         fontFamily = o.optStr("fontFamily", path),
         fontSize = o.optDouble("fontSize", path),
         textAnchor = o.optStr("textAnchor", path),
+        // Phase 642 — keyed mark identity; omitted when absent.
+        markId = o.optStr("markId", path),
     )
 }
 

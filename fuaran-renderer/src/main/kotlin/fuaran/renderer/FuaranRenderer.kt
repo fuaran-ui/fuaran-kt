@@ -56,6 +56,7 @@ import fuaran.ui.DateField
 import fuaran.ui.Disclosure
 import fuaran.ui.Drawing
 import fuaran.ui.ErrorBoundary
+import fuaran.ui.Fact
 import fuaran.ui.FileUpload
 import fuaran.ui.Filters
 import fuaran.ui.FlexLayout
@@ -82,6 +83,7 @@ import fuaran.ui.NodeKind
 import fuaran.ui.NumberField
 import fuaran.ui.Orientation
 import fuaran.ui.Progress
+import fuaran.ui.RangeField
 import fuaran.ui.RangedNumberField
 import fuaran.ui.ScrollArea
 import fuaran.ui.Select
@@ -135,6 +137,7 @@ fun FuaranNode(node: Node, ctx: BindingContext = BindingContext.Empty) {
         is Progress -> RenderProgress(k, ctx)
         is Skeleton -> RenderSkeleton(k)
         is LabelValueRow -> RenderLabelValueRow(k, ctx)
+        is Fact -> RenderFact(k, ctx)
         is Link -> RenderLink(k, ctx)
         is Image -> RenderImage(k, ctx)
         is ListNode -> RenderList(k, ctx)
@@ -337,7 +340,7 @@ private fun RenderMetric(k: Metric, ctx: BindingContext) {
     val accent = tone(k.tone).accent
     Column(Modifier.padding(4.dp)) {
         Text(ctx.resolveText(k.label), fontSize = 12.sp, color = Color.Gray)
-        Text(ctx.resolve(k.source), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = accent)
+        Text(ctx.resolve(k.value), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = accent)
         k.subtext?.let { Text(ctx.resolveText(it), fontSize = 11.sp, color = Color.Gray) }
         k.trend?.let { Text(ctx.resolve(it), fontSize = 11.sp) }
     }
@@ -370,7 +373,7 @@ private fun RenderCallout(k: Callout, ctx: BindingContext) {
     val swatch = tone(k.tone)
     CBox(Modifier.background(swatch.container, RoundedCornerShape(6.dp)).padding(4.dp)) {
         Column(Modifier.padding(10.dp)) {
-            Text(ctx.resolveText(k.heading), fontWeight = FontWeight.Bold, color = swatch.onContainer)
+            k.heading?.let { Text(ctx.resolveText(it), fontWeight = FontWeight.Bold, color = swatch.onContainer) }
             Text(ctx.resolveText(k.body), color = swatch.onContainer)
         }
     }
@@ -379,7 +382,7 @@ private fun RenderCallout(k: Callout, ctx: BindingContext) {
 @Composable
 private fun RenderProgress(k: Progress, ctx: BindingContext) {
     Column {
-        Text(ctx.resolveText(k.label), fontSize = 12.sp)
+        k.label?.let { Text(ctx.resolveText(it), fontSize = 12.sp) }
         val accent = tone(k.tone).accent
         if (k.indeterminate) {
             LinearProgressIndicator(Modifier.fillMaxWidth(), color = accent)
@@ -390,6 +393,7 @@ private fun RenderProgress(k: Progress, ctx: BindingContext) {
                 color = accent,
             )
         }
+        k.caveat?.let { Text(ctx.resolveText(it), fontSize = 11.sp, color = Color.Gray) }
     }
 }
 
@@ -411,7 +415,24 @@ private fun RenderSkeleton(k: Skeleton) {
 private fun RenderLabelValueRow(k: LabelValueRow, ctx: BindingContext) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(ctx.resolveText(k.label), color = Color.Gray)
-        Text(ctx.resolve(k.source), fontWeight = if (k.emphasis) FontWeight.Bold else FontWeight.Normal)
+        Text(ctx.resolve(k.value), fontWeight = if (k.emphasis) FontWeight.Bold else FontWeight.Normal)
+    }
+}
+
+@Composable
+private fun RenderFact(k: Fact, ctx: BindingContext) {
+    // The labeled text-fact — Metric's complementary kind: label + TextSource value.
+    val accent = tone(k.tone).accent
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(ctx.resolveText(k.label), color = Color.Gray)
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                ctx.resolveText(k.value),
+                fontWeight = if (k.emphasis) FontWeight.Bold else FontWeight.Normal,
+                color = accent,
+            )
+            k.help?.let { Text(ctx.resolveText(it), fontSize = 11.sp, color = Color.Gray) }
+        }
     }
 }
 
@@ -553,6 +574,19 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
                 Slider(
                     value = v,
                     onValueChange = { v = it },
+                    valueRange = (kind.min ?: 0.0).toFloat()..(kind.max ?: 100.0).toFloat(),
+                )
+            }
+        }
+        is RangeField -> {
+            // The dual-thumb pair (0.2.0). Floor: render the bound {min,max} pair as a read-only
+            // summary + a slider over the span midpoint (a full dual-thumb control is a later pass).
+            val pair = ctx.resolve(kind.value)
+            Column {
+                Text("$label: ${pair.ifEmpty { "—" }}", fontSize = 12.sp)
+                Slider(
+                    value = ((kind.min ?: 0.0).toFloat() + (kind.max ?: 100.0).toFloat()) / 2f,
+                    onValueChange = {},
                     valueRange = (kind.min ?: 0.0).toFloat()..(kind.max ?: 100.0).toFloat(),
                 )
             }

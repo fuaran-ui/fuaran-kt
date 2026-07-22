@@ -53,8 +53,9 @@ class BindingContext(
                     ?: binding.defaultValue?.let(::jsonScalar)
                     ?: ""
             is QueryBinding -> ""
-            is FilterBinding -> ""
-            is SelectionBinding -> ""
+            // 0.2.0/0.2.9 — the declared defaultValue is yielded until the slot is first written.
+            is FilterBinding -> binding.defaultValue?.let(::jsonScalar) ?: ""
+            is SelectionBinding -> binding.defaultValue?.let(::jsonScalar) ?: ""
             ComputedBinding -> ""
             is I18nBinding -> binding.key
             is LocalBinding -> resolve(binding.initialFrom)
