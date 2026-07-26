@@ -480,7 +480,10 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
     }
     val o = value.obj(path)
     return when (val t = o.discriminator(path)) {
-        "Static" -> StaticBinding(o.req("value", path))
+        // Phase 677 — absence is structural: a MISSING `value` means the binding
+        // carries none, and the legacy `"value": null` spelling normalises to the
+        // same thing (§16 shorthand), so the two cannot disagree.
+        "Static" -> StaticBinding(o["value"] ?: JsonNull)
         "State" -> StateBinding(o.req("key", path).str("$path.key"), o["defaultValue"])
         "Query" -> QueryBinding(o.req("name", path).str("$path.name"), o.optStrList("dependsOn", path))
         // 0.2.0 — optional `defaultValue`, held raw (the render projection never types it).
