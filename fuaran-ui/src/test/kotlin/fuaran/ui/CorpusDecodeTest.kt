@@ -126,6 +126,49 @@ fun main() {
         if (!ok) error("expected EMPTY_NODE_ID for an empty id")
     }
 
+    // Phase 745 — the DateRange lenient spellings. This harness runs the
+    // node-round-trip family ONLY, so the corpus's two `lenient-daterange-*`
+    // fixtures are never reached here: without these checks those shapes stay
+    // certified on the Swift and Python hosts and never on this one. All three
+    // spellings must normalise to the SAME canonical bare `{from, to}` pair.
+    fun dateRangeForm(valueJson: String): String =
+        "{\"id\":\"f\",\"kind\":{\"\$type\":\"Form\",\"fields\":[{\"id\":\"stay\",\"kind\":{\"\$type\":\"DateRange\"," +
+            "\"value\":$valueJson,\"variant\":\"Date\"},\"label\":\"Stay\",\"required\":false}]," +
+            "\"onSubmit\":{\"\$type\":\"Dispatch\"},\"submitLabel\":\"Book\"}}"
+
+    fun decodedPair(valueJson: String): Pair<String, String> {
+        val node = decodeNode(dateRangeForm(valueJson))
+        val field = (node.kind as Form).fields.single()
+        val binding = (field.kind as DateRangeField).value
+        val pair = (binding as StaticBinding).value as JsonObject
+        return (pair["from"] as JsonString).value to (pair["to"] as JsonString).value
+    }
+
+    val canonicalPair = "2026-03-01" to "2026-03-08"
+    runner.check("lenient/daterange-canonical-bare-object") {
+        val got = decodedPair("{\"from\":\"2026-03-01\",\"to\":\"2026-03-08\"}")
+        if (got != canonicalPair) error("expected $canonicalPair, got $got")
+    }
+    runner.check("lenient/daterange-bare-array") {
+        val got = decodedPair("[\"2026-03-01\",\"2026-03-08\"]")
+        if (got != canonicalPair) error("bare [from, to] array must normalise to the canonical pair; got $got")
+    }
+    runner.check("lenient/daterange-static-envelope") {
+        val got = decodedPair("{\"\$type\":\"Static\",\"value\":{\"from\":\"2026-03-01\",\"to\":\"2026-03-08\"}}")
+        if (got != canonicalPair) error("Static-enveloped pair must normalise to the canonical pair; got $got")
+    }
+    // The ordered-pair rule (WIRE_FORMAT: ordinal compare, no date parsing).
+    runner.check("default-deny/daterange-unordered-throws") {
+        val ok =
+            try {
+                decodedPair("{\"from\":\"2026-03-08\",\"to\":\"2026-03-01\"}")
+                false
+            } catch (e: FuaranDecodeException) {
+                e.code == FuaranDecodeException.WRONG_TYPE
+            }
+        if (!ok) error("expected WRONG_TYPE for a literal pair whose from sorts after its to")
+    }
+
     println()
     println("Per-NodeKind coverage (${coverage.size} distinct kinds across ${nodeFixtures.size} node fixtures):")
     for ((disc, n) in coverage) println("  %-16s %d".format(disc, n))

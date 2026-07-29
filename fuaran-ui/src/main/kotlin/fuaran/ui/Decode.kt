@@ -754,12 +754,96 @@ private fun decodeFormFieldKind(value: JsonValue, path: String, autoBind: Contro
                 max = o.optStr("max", path),
                 step = o.optDouble("step", path),
             )
+        "DateRange" ->
+            DateRangeField(
+                value =
+                    when (val v = o["value"]) {
+                        null -> autoBind.autoBinding(dateRangePlaceholder())
+                        // Canonical: the bare `{from, to}` object (no `$type`).
+                        // Lenient: the two-element `[from, to]` array, and the
+                        // explicit `Static` envelope around either. All three
+                        // NORMALISE to the canonical pair, so a consumer sees one
+                        // shape regardless of which spelling arrived.
+                        is JsonArray -> StaticBinding(dateRangePair(v, "$path.value"))
+                        is JsonObject ->
+                            if (v["\$type"] == null && v["from"] != null && v["to"] != null) {
+                                StaticBinding(dateRangePair(v, "$path.value"))
+                            } else if ((v["\$type"] as? JsonString)?.value == "Static" && v["value"] != null) {
+                                StaticBinding(dateRangePair(v["value"]!!, "$path.value.value"))
+                            } else {
+                                decodeBinding(v, "$path.value")
+                            }
+                        else -> decodeBinding(v, "$path.value")
+                    },
+                variant = enumOf<DateFieldVariant>(o.req("variant", path).str("$path.variant"), "$path.variant"),
+                min = o.optStr("min", path),
+                max = o.optStr("max", path),
+                step = o.optDouble("step", path),
+            )
         else -> unknownCase(t, path, "FormFieldKind")
     }
 }
 
 private fun rangePlaceholder(): JsonValue =
     JsonObject(linkedMapOf<String, JsonValue>("min" to JsonNumber("0"), "max" to JsonNumber("0")))
+
+/** ISO-empty both ends — the pair analogue of `DateField`'s "" placeholder. */
+private fun dateRangePlaceholder(): JsonValue =
+    JsonObject(linkedMapOf<String, JsonValue>("from" to JsonString(""), "to" to JsonString("")))
+
+/**
+ * Reads a `{from, to}` object or a lenient two-element `[from, to]` array into the
+ * canonical bare pair object.
+ *
+ * The pair is ORDERED: a LITERAL pair whose `from` sorts after its `to` is a decode
+ * error. Same-variant ISO-8601 strings compare lexicographically in chronological
+ * order, so Kotlin's `String.compareTo` — which compares UTF-16 code units — is the
+ * ordinal compare the spec requires: no date parsing, no locale, total for every
+ * variant. Only a literal pair is checked; a bound pair's ordering is a runtime
+ * concern.
+ */
+private fun dateRangePair(v: JsonValue, path: String): JsonValue {
+    val (from, to) =
+        when (v) {
+            is JsonObject -> {
+                val f = v["from"]
+                val t = v["to"]
+                if (f == null || t == null) {
+                    throw FuaranDecodeException(
+                        FuaranDecodeException.WRONG_TYPE,
+                        path,
+                        "expected an object with from and to ISO-8601 strings",
+                    )
+                }
+                f.str("$path.from") to t.str("$path.to")
+            }
+            is JsonArray ->
+                if (v.items.size == 2) {
+                    v.items[0].str("$path[0]") to v.items[1].str("$path[1]")
+                } else {
+                    throw FuaranDecodeException(
+                        FuaranDecodeException.WRONG_TYPE,
+                        path,
+                        "expected a date-range pair ({from, to} object or [from, to] array)",
+                    )
+                }
+            else ->
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    path,
+                    "expected a date-range pair ({from, to} object or [from, to] array)",
+                )
+        }
+    if (from > to) {
+        throw FuaranDecodeException(
+            FuaranDecodeException.WRONG_TYPE,
+            path,
+            "date-range start '$from' is after end '$to' — a DateRange pair is ordered (from <= to); " +
+                "ISO-8601 strings of one variant compare lexicographically, so swap the two values",
+        )
+    }
+    return JsonObject(linkedMapOf<String, JsonValue>("from" to JsonString(from), "to" to JsonString(to)))
+}
 
 private fun decodeFilterItem(value: JsonValue, path: String): FilterItem {
     val o = value.obj(path)

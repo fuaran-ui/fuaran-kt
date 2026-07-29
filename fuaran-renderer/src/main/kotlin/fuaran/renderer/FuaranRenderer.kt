@@ -53,6 +53,7 @@ import fuaran.ui.CodeBlock
 import fuaran.ui.Custom
 import fuaran.ui.DataGrid
 import fuaran.ui.DateField
+import fuaran.ui.DateRangeField
 import fuaran.ui.Disclosure
 import fuaran.ui.Drawing
 import fuaran.ui.ErrorBoundary
@@ -594,6 +595,14 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
         is DateField -> {
             var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
             OutlinedTextField(value = v, onValueChange = { v = it }, label = { Text("$label (${kind.variant})") }, modifier = Modifier.fillMaxWidth())
+        }
+        // 0.7.0 — the single-control date range. The structural intent that carries
+        // over from the reference renderer is ONE pair with ONE write-back, not two
+        // coordinated DateFields — so this is a single field over the resolved
+        // "from – to" pair rather than two independent controls.
+        is DateRangeField -> {
+            var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
+            OutlinedTextField(value = v, onValueChange = { v = it }, label = { Text("$label (${kind.variant} range)") }, modifier = Modifier.fillMaxWidth())
         }
     }
 }

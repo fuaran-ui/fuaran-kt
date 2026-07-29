@@ -569,6 +569,23 @@ data class DateField(
     val step: Double? = null,
 ) : FormFieldKind
 
+/**
+ * 0.7.0 — the single-control date range: `RangeField`'s pair mechanics with
+ * `DateField`'s value conventions (an identical field list to `DateField`,
+ * reusing `DateFieldVariant`). A `Static` pair rides as the bare
+ * `{"from":…,"to":…}` object (no `$type`); `min`/`max` (ISO strings) and `step`
+ * (seconds) bound BOTH ends and are omitted when absent. In a filter context the
+ * pair binds ONE filter param, not two — the reason the case exists rather than
+ * two coordinated `DateField`s.
+ */
+data class DateRangeField(
+    val value: Binding,
+    val variant: DateFieldVariant,
+    val min: String? = null,
+    val max: String? = null,
+    val step: Double? = null,
+) : FormFieldKind
+
 // --------------------------------------------------------------------------- //
 // Local flush trigger
 // --------------------------------------------------------------------------- //
