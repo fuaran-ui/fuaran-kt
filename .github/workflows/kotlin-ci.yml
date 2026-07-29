@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Diametrical Ltd.
+#
+# The first CI this repo has had. Two gates, both previously unreachable in
+# automation:
+#
+#   1. the corpus decode harness — `main()`-driven, so the `test` task never ran
+#      it; before the `:fuaran-ui:corpusCheck` task it needed `kotlinc` on PATH;
+#   2. the `:fuaran-renderer` Compose/Robolectric render-coverage gate — which
+#      `run.ps1` does not cover at all (that script drives `kotlinc` over
+#      `fuaran-ui` + `fuaran-core` only) and which needs Gradle + the Android SDK.
+#
+# Deliberately NO path filters. This repo had no CI, so the priority is that the
+# gates run at all; a filtered workflow that silently never triggers is the
+# failure mode this estate has already hit once (fuaran-swift went three days
+# red-but-untriggered after the corpus repo split).
+name: kotlin-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kotlin-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kotlin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The corpus is its own PUBLIC repo since 2026-07-27, so no token is
+      # needed. Checked out as a sibling, which is also where the harnesses'
+      # relative-path fallback looks.
+      - name: Checkout wire-format-fixtures corpus
+        uses: actions/checkout@v4
+        with:
+          repository: fuaran-ui/fuaran-ui-specification
+          path: _corpus
+
+      # BOTH gates skip cleanly when the corpus is absent — correct for a
+      # standalone clone, and exactly how a gate ends up passing while checking
+      # nothing. So prove it is here BEFORE running either.
+      - name: Assert the corpus is present (a skipped gate is not a passing gate)
+        run: |
+          test -f _corpus/manifest.json || {
+            echo "::error::corpus manifest.json missing — the gates below would skip and report success"
+            exit 1
+          }
+          echo "FUARAN_CORPUS=$GITHUB_WORKSPACE/_corpus" >> "$GITHUB_ENV"
+          echo "corpus fixtures declared: $(grep -o '"id"' _corpus/manifest.json | wc -l)"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up the Android SDK (compileSdk 36 for :fuaran-renderer)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-36 build-tools;36.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Gate 1 — the wire-format corpus decode harness. Fails the build on any
+      # failed check by its own exit code; the grep additionally refuses a run
+      # that located no corpus, since that path exits 0.
+      - name: Corpus decode gate (:fuaran-ui:corpusCheck)
+        run: |
+          set -o pipefail
+          ./gradlew :fuaran-ui:corpusCheck --console=plain | tee corpus.log
+          if grep -q '^SKIP:' corpus.log; then
+            echo "::error::the corpus harness SKIPPED — it found no corpus, so this gate checked nothing"
+            exit 1
+          fi
+
+      # Gate 2 — the Compose render floor under Robolectric. This is the leg the
+      # local Windows toolchain cannot run at all (AF_UNIX is blocked under
+      # %LOCALAPPDATA% there, so every Gradle build task dies on its worker IPC),
+      # which is the main reason this workflow exists.
+      - name: Render-coverage gate (:fuaran-renderer:testDebugUnitTest)
+        run: ./gradlew :fuaran-renderer:testDebugUnitTest --console=plain
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kotlin-test-reports
+          path: |
+            **/build/reports/tests/**
+            **/build/test-results/**
+          if-no-files-found: ignore

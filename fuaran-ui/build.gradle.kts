@@ -30,3 +30,20 @@ java {
 dependencies {
     testImplementation(kotlin("test"))
 }
+
+// The corpus decode harness is `main()`-driven, not JUnit, so the `test` task
+// never runs it — until now it was reachable only through `run.ps1`'s direct
+// `kotlinc` build, i.e. only on a machine with kotlinc on PATH. This task makes
+// it runnable by Gradle on any platform (notably CI) with no change to the
+// harness itself: it exits non-zero on any failed check.
+tasks.register<JavaExec>("corpusCheck") {
+    group = "verification"
+    description = "Decode every node-round-trip fixture in the shared wire-format corpus."
+    mainClass.set("fuaran.ui.CorpusDecodeTestKt")
+    classpath = sourceSets["test"].runtimeClasspath
+    // The harness finds the corpus via -Dfuaran.corpus, $FUARAN_CORPUS, or a
+    // sibling checkout — and SKIPS cleanly when it finds none. A caller that
+    // means to GATE on it must therefore pass one of them (CI does, and asserts
+    // the run was not a skip).
+    System.getProperty("fuaran.corpus")?.let { systemProperty("fuaran.corpus", it) }
+}
