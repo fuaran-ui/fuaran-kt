@@ -96,11 +96,29 @@ private fun decodeNode(value: JsonValue, path: String): Node {
     return Node(id = id, kind = kind, style = style, state = state, accessibility = accessibility)
 }
 
+/**
+ * The one `ToneVariant` reader (Phase 750), because two positions now teach the tone
+ * vocabulary — a `tone` field and a `TonedPill` tone-map VALUE — and a second reader is
+ * exactly how one of them comes to accept a spelling the other refuses.
+ *
+ * It carries the WIRE_FORMAT 3.6 enum-value aliases, which the bare [enumOf] does not:
+ * `Positive` → Success, `Danger`/`Negative` → Critical, `Neutral` → Default. Faithful
+ * same-concept mappings only; a name betraying a different concept stays a reject, and
+ * an unknown spelling still raises `UNKNOWN_DU_CASE` naming the seven legal cases.
+ */
+private fun toneVariantOf(raw: String, path: String): ToneVariant =
+    when (raw) {
+        "Positive" -> ToneVariant.Success
+        "Danger", "Negative" -> ToneVariant.Critical
+        "Neutral" -> ToneVariant.Default
+        else -> enumOf<ToneVariant>(raw, path)
+    }
+
 private fun decodeStyle(value: JsonValue, path: String): SemanticStyle {
     val o = value.obj(path)
     return SemanticStyle(
         emphasis = o.optStr("emphasis", path)?.let { enumOf<Emphasis>(it, "$path.emphasis") } ?: Emphasis.Normal,
-        tone = o.optStr("tone", path)?.let { enumOf<ToneVariant>(it, "$path.tone") } ?: ToneVariant.Default,
+        tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
         weight = o.optStr("weight", path)?.let { enumOf<StyleWeight>(it, "$path.weight") } ?: StyleWeight.Standard,
         role = o.optStr("role", path),
         voice = o.optStr("voice", path),
@@ -231,7 +249,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 // 0.2.x — stylistic fields omitted-when-default.
                 format = o["format"]?.let { decodeValueFormat(it, "$path.format") } ?: NoValueFormat,
                 emphasis = o.optStr("emphasis", path)?.let { enumOf<Emphasis>(it, "$path.emphasis") } ?: Emphasis.Normal,
-                tone = o.optStr("tone", path)?.let { enumOf<ToneVariant>(it, "$path.tone") } ?: ToneVariant.Default,
+                tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
                 weight = o.optStr("weight", path)?.let { enumOf<StyleWeight>(it, "$path.weight") } ?: StyleWeight.Standard,
                 icon = o.optStr("icon", path),
                 subtext = o["subtext"]?.let { decodeTextSource(it, "$path.subtext") },
@@ -249,7 +267,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 body = decodeTextSource(o.req("body", path), "$path.body"),
                 // 0.2.0 — omitted-when-false; heading is optional.
                 dismissable = o.optBool("dismissable", path) ?: false,
-                tone = o.optStr("tone", path)?.let { enumOf<ToneVariant>(it, "$path.tone") } ?: ToneVariant.Default,
+                tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
                 heading = o["heading"]?.let { decodeTextSource(it, "$path.heading") },
                 icon = o.optStr("icon", path),
             )
@@ -258,7 +276,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 fraction = decodeBinding(o.req("fraction", path), "$path.fraction"),
                 // 0.2.0 — omitted-when-false; label is optional; `caveat` added.
                 indeterminate = o.optBool("indeterminate", path) ?: false,
-                tone = o.optStr("tone", path)?.let { enumOf<ToneVariant>(it, "$path.tone") } ?: ToneVariant.Default,
+                tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
                 label = o["label"]?.let { decodeTextSource(it, "$path.label") },
                 caveat = o["caveat"]?.let { decodeTextSource(it, "$path.caveat") },
             )
@@ -278,7 +296,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 value = decodeTextSource(o.req("value", path), "$path.value"),
                 emphasis = o.optBool("emphasis", path) ?: false,
-                tone = o.optStr("tone", path)?.let { enumOf<ToneVariant>(it, "$path.tone") } ?: ToneVariant.Default,
+                tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
                 help = o["help"]?.let { decodeTextSource(it, "$path.help") },
                 icon = o.optStr("icon", path),
             )
@@ -305,7 +323,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             Toast(
                 message = decodeTextSource(o.req("message", path), "$path.message"),
                 open = decodeBinding(o.req("open", path), "$path.open"),
-                tone = o.optStr("tone", path)?.let { enumOf<ToneVariant>(it, "$path.tone") } ?: ToneVariant.Default,
+                tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
                 // 0.2.0 — omitted-when-TRUE (the one inverted default).
                 dismissable = o.optBool("dismissable", path) ?: true,
             )
@@ -884,9 +902,72 @@ private fun decodeGridColumn(value: JsonValue, path: String): GridColumn {
     )
 }
 
+/**
+ * The tone-map field names a `TonedPill` cell accepts, canonical first. `map` is the
+ * shortest honest name for a value→tone dictionary and the least descriptive one.
+ */
+private val TONE_MAP_KEYS = listOf("map", "toneMap", "tones")
+
+/**
+ * A `TonedPill`'s `map`: a string-keyed object whose VALUES are `ToneVariant`s.
+ *
+ * Routed through the shared [toneVariantOf] per entry, so the 3.6 tone aliases work
+ * inside the map exactly as they do at a `tone` field. The refusal is RE-ISSUED rather
+ * than passed through: [enumOf] reports "unrecognised ToneVariant '…'", which does not
+ * say WHICH map entry is wrong — and "one of your tones is wrong" is not an actionable
+ * report when the map has nine entries. The re-issue keeps the code, names the offending
+ * KEY and value in the terms the author wrote them, and teaches the seven legal names. A
+ * non-string value is a `WRONG_TYPE` from [str] and already reports at the right path.
+ */
+private fun decodeToneMap(value: JsonValue, path: String): Map<String, ToneVariant> {
+    val o = value.obj(path)
+    return o.members.mapValues { (key, v) ->
+        val entryPath = "$path.$key"
+        val raw = v.str(entryPath)
+        try {
+            toneVariantOf(raw, entryPath)
+        } catch (e: FuaranDecodeException) {
+            if (e.code != FuaranDecodeException.UNKNOWN_DU_CASE) throw e
+            throw FuaranDecodeException(
+                FuaranDecodeException.UNKNOWN_DU_CASE,
+                entryPath,
+                "tone-map value '$raw' for '$key' is not a ToneVariant; expected one of " +
+                    ToneVariant.entries.joinToString(", ") { it.name },
+            )
+        }
+    }
+}
+
+/**
+ * The shared body of the canonical `TonedPill` case and the 16 `Pill`-tagged shorthand —
+ * ONE reader, so the two spellings cannot drift apart in what they accept.
+ */
+private fun decodeTonedPill(o: JsonObject, path: String): TonedPillCell {
+    val mapJson =
+        TONE_MAP_KEYS.firstNotNullOfOrNull { o[it] }
+            ?: throw FuaranDecodeException(FuaranDecodeException.MISSING_FIELD, "$path.map", "required field absent")
+    return TonedPillCell(
+        field = o.req("field", path).str("$path.field"),
+        map = decodeToneMap(mapJson, "$path.map"),
+        // `default` is omitted-when-Default (Phase 460); an absent key restores the
+        // identity, and an aliased `Neutral` normalises to Default — two rules
+        // composing, in that order.
+        defaultTone = o.optStr("default", path)?.let { toneVariantOf(it, "$path.default") } ?: ToneVariant.Default,
+    )
+}
+
 private fun decodeCellKind(value: JsonValue, path: String): CellKind {
     val o = value.obj(path)
-    return when (val t = o.discriminator(path)) {
+    val tag = o.discriminator(path)
+    // Lenient-ingest (WIRE_FORMAT 16, Phase 750): "pill" is the WORD for the thing, so a
+    // declarative tone rule arrives tagged `Pill` more often than tagged `TonedPill`.
+    // Before this phase those keys were accepted and DISCARDED — the author's whole
+    // intent gone, silently, with no error to notice. Presence of a tone map is the
+    // unambiguous tell: a closure `Pill` carries only `labelFn`/`toneFn` and can never
+    // carry one.
+    if (tag == "Pill" && TONE_MAP_KEYS.any { o[it] != null }) return decodeTonedPill(o, path)
+    return when (val t = tag) {
+        "TonedPill" -> decodeTonedPill(o, path)
         "Text" -> TextCell
         "Numeric" -> NumericCell
         "Date" -> DateCell

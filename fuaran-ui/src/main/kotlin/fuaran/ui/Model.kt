@@ -627,6 +627,25 @@ data object LinkCell : CellKind
 
 data object PillCell : CellKind
 
+/**
+ * A value-conditional pill (Phase 750) — the declarative twin of [PillCell], and the ONE
+ * cell kind holding no closure, which is exactly why it survives the wire.
+ *
+ * [field] names the row property that is both the pill's label and the map key; [map]
+ * carries value → tone; [defaultTone] covers a value the map does not mention and is
+ * omitted on the wire at [ToneVariant.Default].
+ *
+ * It is the first cell kind this projection carries a PAYLOAD for. Every other one is
+ * defined by a closure, which never rides the wire, so the case name was the whole of the
+ * information — a `data object` said everything there was to say. A declared tone rule is
+ * data, so it has to be carried.
+ */
+data class TonedPillCell(
+    val field: String,
+    val map: Map<String, ToneVariant>,
+    val defaultTone: ToneVariant = ToneVariant.Default,
+) : CellKind
+
 data object ProgressCell : CellKind
 
 data object CustomCell : CellKind

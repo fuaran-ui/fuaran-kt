@@ -169,6 +169,107 @@ fun main() {
         if (!ok) error("expected WRONG_TYPE for a literal pair whose from sorts after its to")
     }
 
+    // Phase 750 — the TonedPill cell, the first cell kind this projection carries a
+    // PAYLOAD for. The node-round-trip family above proves the canonical fixture
+    // decodes without a fallback hit, but a coverage walk asks "did it decode", not
+    // "did it decode CORRECTLY" — and the corpus's three `lenient-tonedpill-*` fixtures
+    // plus its reject live in families this harness does not run, so without these
+    // checks those shapes stay certified on the other hosts and never on this one.
+    // (The Phase 745 DateRange block above is the same argument, same shape.)
+    fun tonedPillColumn(kindJson: String): String =
+        "{\"id\":\"g1\",\"kind\":{\"\$type\":\"DataGrid\",\"columns\":[{\"field\":\"status\"," +
+            "\"kind\":$kindJson,\"label\":\"Status\"}]," +
+            "\"source\":{\"\$type\":\"Static\",\"value\":\"<opaque>\"}}}"
+
+    fun decodedCell(kindJson: String): CellKind =
+        ((decodeNode(tonedPillColumn(kindJson)).kind) as DataGrid).columns.single().kind
+
+    val warningOnDelayed = TonedPillCell("status", mapOf("Delayed" to ToneVariant.Warning))
+    // All three tone-map field names, INCLUDING `tones` — the corpus fixture exercises
+    // `toneMap` only, so a host that wired just the one it was shown is non-conformant
+    // in a way no fixture would catch.
+    for (alias in listOf("map", "toneMap", "tones")) {
+        runner.check("lenient/tonedpill-$alias-alias") {
+            val got = decodedCell("{\"\$type\":\"TonedPill\",\"field\":\"status\",\"$alias\":{\"Delayed\":\"Warning\"}}")
+            if (got != warningOnDelayed) error("`$alias` must normalise to the canonical map; got $got")
+        }
+    }
+    runner.check("lenient/tonedpill-pill-tag") {
+        // The §16 coercion: a `Pill` tag CARRYING a tone map is the declarative case.
+        val got = decodedCell("{\"\$type\":\"Pill\",\"field\":\"status\",\"map\":{\"Delayed\":\"Warning\"}}")
+        if (got != warningOnDelayed) error("a Pill-tagged tone map must coerce to TonedPill; got $got")
+    }
+    runner.check("lenient/tonedpill-closure-pill-untouched") {
+        // The other half of that coercion: it keys off the tone map, so an ordinary
+        // closure `Pill` — which can never carry one — is left alone.
+        val got = decodedCell("{\"\$type\":\"Pill\",\"labelFn\":\"<closure>\",\"toneFn\":\"<closure>\"}")
+        if (got != PillCell) error("a closure Pill must stay PillCell; got $got")
+    }
+    runner.check("lenient/tonedpill-tone-aliases-inside-the-map") {
+        val got =
+            decodedCell(
+                "{\"\$type\":\"TonedPill\",\"field\":\"s\",\"map\":{\"a\":\"Danger\",\"b\":\"Positive\",\"c\":\"Neutral\"}}",
+            )
+        val want =
+            TonedPillCell(
+                "s",
+                mapOf("a" to ToneVariant.Critical, "b" to ToneVariant.Success, "c" to ToneVariant.Default),
+            )
+        if (got != want) error("the 3.6 tone aliases must apply inside the map; got $got")
+    }
+    runner.check("lenient/tonedpill-default-restores-the-identity") {
+        // Absent, and an aliased `Neutral` (which normalises to Default) — both restore
+        // the identity tone the wire omits.
+        for (given in listOf("", "\"default\":\"Neutral\",")) {
+            val got = decodedCell("{\"\$type\":\"TonedPill\",$given\"field\":\"s\",\"map\":{\"a\":\"Info\"}}")
+            val want = TonedPillCell("s", mapOf("a" to ToneVariant.Info))
+            if (got != want) error("`$given` must restore the identity default; got $got")
+        }
+        val kept = decodedCell("{\"\$type\":\"TonedPill\",\"default\":\"Subdued\",\"field\":\"s\",\"map\":{\"a\":\"Info\"}}")
+        if (kept != TonedPillCell("s", mapOf("a" to ToneVariant.Info), ToneVariant.Subdued)) {
+            error("a real default must survive; got $kept")
+        }
+    }
+    runner.check("default-deny/tonedpill-unknown-tone-is-didactic") {
+        val e =
+            try {
+                decodedCell("{\"\$type\":\"TonedPill\",\"field\":\"status\",\"map\":{\"Delayed\":\"Urgent\"}}")
+                error("expected a refusal for a tone-map value outside ToneVariant")
+            } catch (e: FuaranDecodeException) {
+                e
+            }
+        if (e.code != FuaranDecodeException.UNKNOWN_DU_CASE) error("expected UNKNOWN_DU_CASE, got ${e.code}")
+        // The offending KEY, not merely the map — "one of your tones is wrong" is not
+        // an actionable report when the map has nine entries.
+        if (e.path != "\$.kind.columns[0].kind.map.Delayed") error("expected the offending key's path, got ${e.path}")
+        val message = e.message ?: ""
+        if (!message.contains("Delayed") || !message.contains("Urgent")) {
+            error("the message must name the offending key and value; got $message")
+        }
+        // All seven legal names, so the author can fix it from the message alone.
+        for (tone in ToneVariant.entries) {
+            if (!message.contains(tone.name)) error("the message must teach ${tone.name}; got $message")
+        }
+    }
+    runner.check("default-deny/tonedpill-requires-field-and-map") {
+        for ((kindJson, wantPath) in
+            listOf(
+                "{\"\$type\":\"TonedPill\",\"map\":{\"a\":\"Info\"}}" to "\$.kind.columns[0].kind.field",
+                "{\"\$type\":\"TonedPill\",\"field\":\"s\"}" to "\$.kind.columns[0].kind.map",
+            )
+        ) {
+            val e =
+                try {
+                    decodedCell(kindJson)
+                    error("expected MISSING_FIELD for $kindJson")
+                } catch (e: FuaranDecodeException) {
+                    e
+                }
+            if (e.code != FuaranDecodeException.MISSING_FIELD) error("expected MISSING_FIELD, got ${e.code}")
+            if (e.path != wantPath) error("expected $wantPath, got ${e.path}")
+        }
+    }
+
     println()
     println("Per-NodeKind coverage (${coverage.size} distinct kinds across ${nodeFixtures.size} node fixtures):")
     for ((disc, n) in coverage) println("  %-16s %d".format(disc, n))
