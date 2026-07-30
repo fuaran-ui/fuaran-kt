@@ -68,6 +68,20 @@ class FuaranSession private constructor(
     /** Seed a `$queries.<name>` result slot from a JSON value. */
     override fun setQuery(key: String, valueJson: String) = writeSlot(key, valueJson, bridge::sessionSetQuery)
 
+    /**
+     * The **resolved rows** of one row-bearing node, evaluated core-side — what a decode-only
+     * surface cannot get from the tree, because a resolved collection cannot ride a `Static`
+     * slot (§2 rule 11). See [TreeSession.resolvedRows].
+     *
+     * The three outcomes stay distinct all the way to the renderer. An unparseable or empty
+     * response degrades to [ResolvedRows.NotResolved] (a loading surface) rather than to zero
+     * rows, so a boundary failure can never masquerade as "this grid is empty".
+     */
+    override fun resolvedRows(nodeId: String): ResolvedRows {
+        val json = onExecutor { bridge.sessionResolvedRows(handle, nodeId.toByteArray(UTF_8)).toString(UTF_8) }
+        return parseResolvedRows(json)
+    }
+
     override fun close() {
         if (closed) return
         closed = true
@@ -136,6 +150,24 @@ class FuaranSession private constructor(
             return FuaranSession(bridge, executor, handle)
         }
 
+        /**
+         * Parse the resolved-rows envelope: `{"resolved":true,"rows":[…]}`,
+         * `{"resolved":false}`, or the `NO_ROW_SOURCE` error envelope.
+         *
+         * Anything unrecognised — empty bytes, unparseable JSON, `resolved` true with a
+         * missing or non-array `rows` — degrades to [ResolvedRows.NotResolved]. Deliberate:
+         * the failure then shows as a loading surface, honest about not knowing, where
+         * `Rows(emptyList())` would assert an emptiness the core never claimed.
+         */
+        internal fun parseResolvedRows(json: String): ResolvedRows {
+            if (json.isEmpty()) return ResolvedRows.NotResolved
+            val root = runCatching { Json.parse(json) }.getOrNull() as? JsonObject ?: return ResolvedRows.NotResolved
+            if (root["error"] != null) return ResolvedRows.NoRowSource
+            if ((root["resolved"] as? JsonBool)?.value != true) return ResolvedRows.NotResolved
+            val rows = root["rows"] as? JsonArray ?: return ResolvedRows.NotResolved
+            return ResolvedRows.Rows(rows.items)
+        }
+
         private fun throwIfError(resultJson: String) {
             val root = Json.parse(resultJson)
             if (root is JsonObject && root["error"] != null) {
@@ -166,6 +198,9 @@ interface FuaranNativeBridge {
 
     /** The current tree as a resolved projection — `tree_json` with scalar Transforms folded (Phase 650). */
     fun sessionProjectResolved(handle: Long): ByteArray
+
+    /** The resolved rows of one row-bearing node, addressed by node id (Phase 752/753). */
+    fun sessionResolvedRows(handle: Long, nodeId: ByteArray): ByteArray
 
     fun sessionApplyOp(handle: Long, opJson: ByteArray): ByteArray
 

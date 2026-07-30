@@ -39,6 +39,46 @@ interface TreeSession : AutoCloseable {
 
     /** Seed a `$queries.<name>` result slot from a JSON value string. */
     fun setQuery(key: String, valueJson: String)
+
+    /**
+     * The **resolved rows** of one row-bearing node (`DataGrid` / `Chart` / `Map` /
+     * `Sparkline`), evaluated against the session's live sources.
+     *
+     * The out-of-band companion to [projectResolved], and it exists because that projection
+     * cannot carry this: a row-context `Transform` resolves to a *collection*, and the wire's
+     * `Static` slot erases a collection to `"<opaque>"` (§2 rule 11). So resolved rows cannot
+     * ride the tree at all, and a decode-only surface renders every data-bound grid empty
+     * however completely it decodes. This is the hand-off that fixes that — the core
+     * evaluates, this surface renders.
+     *
+     * Defaults to [ResolvedRows.NotResolved] for a conformer with no evaluator (an in-memory
+     * fake): the honest answer, and the safe one, since it renders as a loading surface rather
+     * than asserting an emptiness the fake never established. Safe as an interface default for
+     * the same reason [projectResolved] is one — a Kotlin class member overrides it
+     * unambiguously, so the live [FuaranSession] always wins.
+     */
+    fun resolvedRows(nodeId: String): ResolvedRows = ResolvedRows.NotResolved
+}
+
+/**
+ * The outcome of a [TreeSession.resolvedRows] request.
+ *
+ * Three cases, not two, and the distinction is load-bearing at the render boundary: a source
+ * that has not resolved (still loading, or a `Transform` that errored) must render differently
+ * from one that genuinely resolved to nothing. Collapsing them shows "no data" for "not yet".
+ */
+sealed interface ResolvedRows {
+    /** The source resolved. Possibly to zero rows — that is an **empty state**. */
+    data class Rows(val rows: List<JsonValue>) : ResolvedRows
+
+    /** The source did not resolve. Render a **loading** surface, never an empty table. */
+    data object NotResolved : ResolvedRows
+
+    /**
+     * No node carries that id, or its kind has no row source at all — a caller mistake rather
+     * than a data condition.
+     */
+    data object NoRowSource : ResolvedRows
 }
 
 /**

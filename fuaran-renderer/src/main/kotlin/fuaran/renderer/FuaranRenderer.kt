@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fuaran.ui.AutoLayout
@@ -44,18 +45,25 @@ import fuaran.ui.Box
 import fuaran.ui.BoxLayout
 import fuaran.ui.BoxRole
 import fuaran.ui.Button
+import fuaran.ui.ButtonCell
+import fuaran.ui.ButtonGroupCell
 import fuaran.ui.ButtonVariant
 import fuaran.ui.Callout
 import fuaran.ui.Chart
+import fuaran.ui.CheckboxCell
 import fuaran.ui.CheckboxField
 import fuaran.ui.ChoiceField
 import fuaran.ui.CodeBlock
+import fuaran.ui.GridColumn
 import fuaran.ui.Custom
+import fuaran.ui.CustomCell
 import fuaran.ui.DataGrid
+import fuaran.ui.DateCell
 import fuaran.ui.DateField
 import fuaran.ui.DateRangeField
 import fuaran.ui.Disclosure
 import fuaran.ui.Drawing
+import fuaran.ui.EditableCell
 import fuaran.ui.ErrorBoundary
 import fuaran.ui.Fact
 import fuaran.ui.FileUpload
@@ -69,12 +77,14 @@ import fuaran.ui.FragmentRef
 import fuaran.ui.GridLayout
 import fuaran.ui.Heading
 import fuaran.ui.Image
+import fuaran.ui.JsonValue
 import fuaran.ui.LabelShape
 import fuaran.ui.LabelValueRow
 import fuaran.ui.Link
+import fuaran.ui.LinkCell
 import fuaran.ui.ListNode
-import fuaran.ui.Markdown
 import fuaran.ui.MapNode
+import fuaran.ui.Markdown
 import fuaran.ui.Math
 import fuaran.ui.Metric
 import fuaran.ui.Modal
@@ -82,13 +92,17 @@ import fuaran.ui.Mount
 import fuaran.ui.Node
 import fuaran.ui.NodeKind
 import fuaran.ui.NumberField
+import fuaran.ui.NumericCell
 import fuaran.ui.Orientation
+import fuaran.ui.PillCell
 import fuaran.ui.Progress
+import fuaran.ui.ProgressCell
 import fuaran.ui.RangeField
 import fuaran.ui.RangedNumberField
+import fuaran.ui.ResolvedRows
 import fuaran.ui.ScrollArea
-import fuaran.ui.Select
 import fuaran.ui.SegmentedChoiceField
+import fuaran.ui.Select
 import fuaran.ui.Skeleton
 import fuaran.ui.Sparkline
 import fuaran.ui.SplitPanel
@@ -97,8 +111,11 @@ import fuaran.ui.SummaryList
 import fuaran.ui.Switch
 import fuaran.ui.Tabs
 import fuaran.ui.TextAreaField
+import fuaran.ui.TextCell
 import fuaran.ui.TextField
 import fuaran.ui.Toast
+import fuaran.ui.ToneVariant
+import fuaran.ui.TonedPillCell
 import fuaran.ui.discriminator
 import androidx.compose.foundation.layout.Box as CBox
 import androidx.compose.material3.Button as M3Button
@@ -153,7 +170,7 @@ fun FuaranNode(node: Node, ctx: BindingContext = BindingContext.Empty) {
         is Select -> RenderSelect(k, ctx)
         is Filters -> RenderFilters(k, ctx)
         // Visualisation
-        is DataGrid -> RenderDataGrid(k, ctx)
+        is DataGrid -> RenderDataGrid(k, node.id, ctx)
         is Chart -> RenderChart(k, ctx)
         is MapNode -> InfoCard("Map", "lat ${k.centreLatitude}, lng ${k.centreLongitude} · z${k.zoom}")
         // Structural
@@ -651,7 +668,7 @@ private fun RenderFilters(k: Filters, ctx: BindingContext) {
 // --------------------------------------------------------------------------- //
 
 @Composable
-private fun RenderDataGrid(k: DataGrid, ctx: BindingContext) {
+private fun RenderDataGrid(k: DataGrid, nodeId: String, ctx: BindingContext) {
     Column(Modifier.border(1.dp, Color(0xFFDDDDDD), RoundedCornerShape(4.dp)).padding(4.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             k.columns.forEach { col -> Text(col.label, fontWeight = FontWeight.SemiBold, fontSize = 12.sp) }
@@ -665,8 +682,86 @@ private fun RenderDataGrid(k: DataGrid, ctx: BindingContext) {
                 }
             }
         } else {
-            Text("(data-bound rows)", fontSize = 11.sp, color = Color.Gray)
+            // Phase 753 — data-bound rows, seeded by the host from the core's resolved-rows
+            // hand-off. The outcomes render differently ON PURPOSE: an unresolved source is
+            // not an empty grid, and showing "no data" for "not yet" is the failure this seam
+            // exists to prevent.
+            when (val resolved = ctx.rowsFor(nodeId)) {
+                is ResolvedRows.Rows ->
+                    if (resolved.rows.isEmpty()) {
+                        Text("No rows", fontSize = 11.sp, color = Color.Gray)
+                    } else {
+                        resolved.rows.forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                k.columns.forEach { col -> RenderGridCell(col, row, ctx) }
+                            }
+                        }
+                    }
+                ResolvedRows.NotResolved -> Text("Loading…", fontSize = 11.sp, color = Color.Gray)
+                ResolvedRows.NoRowSource -> Text("(no row source)", fontSize = 11.sp, color = Color.Gray)
+            }
         }
+    }
+}
+
+/**
+ * One grid cell: the column's kind decides the rendering, the row supplies the datum. An
+ * **exhaustive `when` with no `else`**, so a new cell kind is a compile error here rather than
+ * a silently blank cell.
+ *
+ * Closure-bearing kinds render their decoded-path floor (an unchecked box, a destination-less
+ * link, a zero progress bar) rather than promising an interaction the wire cannot carry.
+ */
+@Composable
+private fun RenderGridCell(col: GridColumn, row: JsonValue, ctx: BindingContext) {
+    val value = col.field?.let { formatCellValue(projectRowFieldString(row, it), col.format) } ?: ""
+    when (val kind = col.kind) {
+        TextCell, NumericCell, DateCell -> Text(value, fontSize = 12.sp)
+        // Inert: the write-back seam is a separate concern, so the value shows but does not
+        // commit. An editable-looking control would promise an interaction that is not wired.
+        EditableCell ->
+            Text(
+                value,
+                fontSize = 12.sp,
+                modifier =
+                    Modifier.border(1.dp, Color(0xFFDDDDDD), RoundedCornerShape(3.dp))
+                        .padding(horizontal = 4.dp, vertical = 1.dp),
+            )
+        // The `get` accessor is a closure, so a decoded tree carries no state: unchecked,
+        // matching the other hosts' decoded-path floor.
+        CheckboxCell -> Checkbox(checked = false, onCheckedChange = null)
+        is ButtonCell -> TextButton(onClick = {}) { Text(ctx.resolveText(kind.label), fontSize = 12.sp) }
+        is ButtonGroupCell ->
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                kind.labels.forEach { label -> TextButton(onClick = {}) { Text(ctx.resolveText(label), fontSize = 12.sp) } }
+            }
+        // `hrefFn` is a closure and never rides the wire, so the projected value is shown
+        // link-styled without a destination — visible, not clickable.
+        LinkCell -> Text(value, fontSize = 12.sp, color = tone(ToneVariant.Brand).accent, textDecoration = TextDecoration.Underline)
+        // The closure pill: its tone is `(row) -> ToneVariant`, which the wire cannot carry, so
+        // every row takes the default tone. That flatness is exactly the gap TonedPill closes.
+        PillCell -> PillChip(value, tone(ToneVariant.Default))
+        is TonedPillCell -> {
+            // Phase 750 — the declarative twin. Deliberately the SAME chip as the closure arm
+            // above: the wire variant exists to make the tone rule expressible, not to render
+            // differently.
+            val (label, pillTone) = tonedPillOf(row, kind.field, kind.map, kind.defaultTone)
+            PillChip(label, tone(pillTone))
+        }
+        // The fraction accessor is a closure; a decoded tree reads 0.
+        ProgressCell -> LinearProgressIndicator(progress = { 0f }, modifier = Modifier.width(48.dp))
+        CustomCell -> Text("—", fontSize = 12.sp, color = Color.Gray)
+    }
+}
+
+@Composable
+private fun PillChip(label: String, swatch: ToneSwatch) {
+    CBox(
+        Modifier
+            .background(swatch.container, RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    ) {
+        Text(label, fontSize = 12.sp, color = swatch.onContainer)
     }
 }
 

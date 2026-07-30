@@ -53,6 +53,16 @@ public final class FuaranNative {
      */
     public static native byte[] sessionProjectResolved(long handle);
 
+    /**
+     * The RESOLVED ROWS of one row-bearing node (DataGrid / Chart / Map / Sparkline), addressed
+     * by node id. Out-of-band because a resolved COLLECTION cannot ride the tree — the wire's
+     * {@code Static} slot erases one to {@code "<opaque>"} — so a decode-only surface cannot get
+     * rows from {@code sessionTreeJson} at all. Returns
+     * {@code {"resolved":true,"rows":[...]}} / {@code {"resolved":false}} / a NO_ROW_SOURCE
+     * error envelope; the three are distinct on purpose.
+     */
+    public static native byte[] sessionResolvedRows(long handle, byte[] nodeId);
+
     public static native byte[] sessionApplyOp(long handle, byte[] opJson);
 
     public static native byte[] sessionSetState(long handle, byte[] key, byte[] value);

@@ -9,10 +9,13 @@ import fuaran.ui.Callout
 import fuaran.ui.Fact
 import fuaran.ui.FuaranException
 import fuaran.ui.FuaranSession
+import fuaran.ui.JsonObject
+import fuaran.ui.JsonString
 import fuaran.ui.LiteralText
 import fuaran.ui.Markdown
 import fuaran.ui.Metric
 import fuaran.ui.Node
+import fuaran.ui.ResolvedRows
 import fuaran.ui.SelectionBinding
 import fuaran.ui.decodeNode
 import java.io.File
@@ -138,6 +141,15 @@ fun main() {
         }
     }
 
+    // A grid whose rows come from an embedded Transform, plus a sibling of a kind with no row
+    // source so the NoRowSource arm has a real node to be asked about.
+    val SEED_BOUND_GRID =
+        """{"id":"root","kind":{"${'$'}type":"Box","children":[{"id":"shipments","kind":{"${'$'}type":"DataGrid","columns":[{"field":"status","kind":{"${'$'}type":"TonedPill","default":"Subdued","field":"status","map":{"Delayed":"Warning"}},"label":"Status"}],"rowKeyField":"status","source":{"${'$'}type":"Transform","pipeline":[],"source":{"columns":{"status":{"validity":[true,true],"values":["Delayed","Other"]}},"schema":[{"name":"status","type":"string"}]}}}},{"id":"heading","kind":{"${'$'}type":"Heading","level":1,"text":"Shipments","variant":"Standard"}}],"layout":{"${'$'}type":"Auto"},"role":"Group"}}"""
+
+    // A grid bound to a Query no host has fed — the unresolved case.
+    val SEED_QUERY_GRID =
+        """{"id":"g","kind":{"${'$'}type":"DataGrid","columns":[],"rowKeyField":"id","source":{"${'$'}type":"Query","dependsOn":[],"name":"shipments"}}}"""
+
     // --- Resolved projection (Phase 650): the core folds a scalar Transform to a literal ---
     runner.check("project-resolved/folds-scalar-transform") {
         FuaranSession.create(NativeBridge, SEED_SCALAR_TRANSFORM).use { session ->
@@ -153,6 +165,40 @@ fun main() {
             require(label is LiteralText && label.text == "2") {
                 "the Badge label Transform must fold to the literal count 2, was $label"
             }
+        }
+    }
+
+    // --- Resolved rows (Phase 753): the out-of-band hand-off the tree cannot carry ---
+    runner.check("resolved-rows/hands-over-what-the-tree-cannot-carry") {
+        FuaranSession.create(NativeBridge, SEED_BOUND_GRID).use { session ->
+            // The premise, asserted rather than assumed: a row-context Transform resolves to a
+            // COLLECTION, which cannot ride a `Static` slot (§2 rule 11) — so even the resolved
+            // projection still carries it raw. That is the whole reason this call exists.
+            require(session.projectResolved().contains(""""${'$'}type":"Transform"""")) {
+                "the resolved projection cannot carry row-context Transforms"
+            }
+            val outcome = session.resolvedRows("shipments")
+            require(outcome is ResolvedRows.Rows) { "expected resolved rows, got $outcome" }
+            require(outcome.rows.size == 2) { "expected 2 rows, got ${outcome.rows.size}" }
+            val first = outcome.rows[0] as? JsonObject ?: error("row 0 is not an object")
+            require((first["status"] as? JsonString)?.value == "Delayed") { "row 0 status wrong: $first" }
+        }
+    }
+
+    runner.check("resolved-rows/three-outcomes-stay-distinct") {
+        FuaranSession.create(NativeBridge, SEED_BOUND_GRID).use { session ->
+            // A real node of a kind with no row source, and an id naming nothing — both caller
+            // mistakes, and neither may masquerade as "this grid has no rows".
+            require(session.resolvedRows("heading") == ResolvedRows.NoRowSource) { "heading must be NoRowSource" }
+            require(session.resolvedRows("nope") == ResolvedRows.NoRowSource) { "unknown id must be NoRowSource" }
+        }
+        FuaranSession.create(NativeBridge, SEED_QUERY_GRID).use { session ->
+            // Unfed: loading, NOT empty.
+            require(session.resolvedRows("g") == ResolvedRows.NotResolved) { "an unfed Query must be NotResolved" }
+            // Fed: resolves, including to genuinely zero rows — the empty state.
+            session.setQuery("shipments", "[]")
+            val fed = session.resolvedRows("g")
+            require(fed is ResolvedRows.Rows && fed.rows.isEmpty()) { "a fed empty Query must be Rows([]), was $fed" }
         }
     }
 
