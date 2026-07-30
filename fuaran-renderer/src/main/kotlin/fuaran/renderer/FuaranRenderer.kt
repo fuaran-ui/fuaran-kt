@@ -550,9 +550,10 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
         }
         is TextAreaField -> {
             var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
+            val key = stateKeyOf(kind.value)
             OutlinedTextField(
                 value = v,
-                onValueChange = { v = it },
+                onValueChange = { v = it; if (key != null) sink?.writeBack(key, it) },
                 label = { Text(label) },
                 minLines = kind.rows.coerceIn(1, 12),
                 modifier = Modifier.fillMaxWidth(),
@@ -567,18 +568,28 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
             }
         }
         is ChoiceField -> {
-            var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
-            OutlinedTextField(value = v, onValueChange = { v = it }, label = { Text(label) }, readOnly = true, modifier = Modifier.fillMaxWidth())
+            // NON-WRITABLE BY CONSTRUCTION (Phase 667 audit). This arm is `readOnly`, so
+            // `onValueChange` never fires from user input — there is no dropdown to pick from.
+            // Wiring `writeBack` here would be DEAD CODE that merely looked like a fix; the real
+            // remedy is a genuine choice control (an ExposedDropdownMenuBox), which is renderer
+            // feature work rather than closing a write-back gap. Recorded here so the next reader
+            // sees a decision, not an omission.
+            val v = ctx.resolve(kind.value)
+            OutlinedTextField(value = v, onValueChange = {}, label = { Text(label) }, readOnly = true, modifier = Modifier.fillMaxWidth())
         }
         is SegmentedChoiceField -> {
             val selected = ctx.resolve(kind.value)
+            val key = stateKeyOf(kind.value)
             val options = ctx.resolve(kind.options).split(",").map { it.trim() }.filter { it.isNotEmpty() }
             Column {
                 Text(label, fontSize = 12.sp, color = Color.Gray)
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     options.ifEmpty { listOf(selected.ifEmpty { "—" }) }.forEach { opt ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = opt == selected, onClick = {})
+                            RadioButton(
+                                selected = opt == selected,
+                                onClick = { if (key != null) sink?.writeBack(key, opt) },
+                            )
                             Text(opt)
                         }
                     }
@@ -587,11 +598,12 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
         }
         is RangedNumberField -> {
             var v by remember { mutableStateOf(ctx.resolveFloat(kind.value, (kind.min ?: 0.0).toFloat())) }
+            val key = stateKeyOf(kind.value)
             Column {
                 Text("$label: $v", fontSize = 12.sp)
                 Slider(
                     value = v,
-                    onValueChange = { v = it },
+                    onValueChange = { v = it; if (key != null) sink?.writeBack(key, it.toDouble()) },
                     valueRange = (kind.min ?: 0.0).toFloat()..(kind.max ?: 100.0).toFloat(),
                 )
             }
@@ -599,6 +611,9 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
         is RangeField -> {
             // The dual-thumb pair (0.2.0). Floor: render the bound {min,max} pair as a read-only
             // summary + a slider over the span midpoint (a full dual-thumb control is a later pass).
+            // NON-WRITABLE BY CONSTRUCTION (Phase 667 audit): the slider shows a midpoint, not the
+            // pair, so committing its value would write a number into a {min,max} slot — worse than
+            // writing nothing. The write-back lands with the real dual-thumb control.
             val pair = ctx.resolve(kind.value)
             Column {
                 Text("$label: ${pair.ifEmpty { "—" }}", fontSize = 12.sp)
@@ -611,7 +626,13 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
         }
         is DateField -> {
             var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
-            OutlinedTextField(value = v, onValueChange = { v = it }, label = { Text("$label (${kind.variant})") }, modifier = Modifier.fillMaxWidth())
+            val key = stateKeyOf(kind.value)
+            OutlinedTextField(
+                value = v,
+                onValueChange = { v = it; if (key != null) sink?.writeBack(key, it) },
+                label = { Text("$label (${kind.variant})") },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
         // 0.7.0 — the single-control date range. The structural intent that carries
         // over from the reference renderer is ONE pair with ONE write-back, not two
@@ -619,7 +640,13 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
         // "from – to" pair rather than two independent controls.
         is DateRangeField -> {
             var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
-            OutlinedTextField(value = v, onValueChange = { v = it }, label = { Text("$label (${kind.variant} range)") }, modifier = Modifier.fillMaxWidth())
+            val key = stateKeyOf(kind.value)
+            OutlinedTextField(
+                value = v,
+                onValueChange = { v = it; if (key != null) sink?.writeBack(key, it) },
+                label = { Text("$label (${kind.variant} range)") },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

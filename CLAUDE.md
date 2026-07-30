@@ -119,6 +119,20 @@ cargo supplies the `ndk` first-arg); and 16KB alignment is a 64-bit-only concern
 covered by the desktop JNI leg (the Android `.so`s can't run without a device/emulator, so
 the Android leg's bar is build + correct symbols + alignment).
 
+## Control write-back — a forward-coupling rule (Phase 667)
+
+A value-carrying control arm in `FuaranRenderer.kt` must, **in the same change that adds it**,
+either commit its edit through `stateKeyOf(kind.value)` + `sink?.writeBack(...)`, or be
+`readOnly`/inert with a `NON-WRITABLE BY CONSTRUCTION` comment saying why.
+
+**Why this needs a written rule.** The renderer dispatches over a sealed tree, so the compiler
+forces a new arm to EXIST but cannot force it to WRITE. An arm that renders a live control and
+forgets the write-back is invisible: the user types, the local Compose buffer updates, the UI
+looks correct, and the value never reaches the session store. Phase 667 found five such arms —
+`TextArea`, `Date`, `DateRange`, `RangedNumber`, and `SegmentedChoice` (whose radio group had no
+`onClick` at all) — where the 2026-07-25 survey had named two. A test per arm in
+`WriteBackGapTest` is the only real guard; add one with the arm.
+
 ## Public vocabulary discipline
 
 fuaran-kt is OSS-public (Apache 2.0). Per the workspace OSS publication boundary,

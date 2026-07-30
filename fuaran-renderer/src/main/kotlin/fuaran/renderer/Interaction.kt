@@ -14,6 +14,7 @@ import fuaran.ui.ActionDispatch
 import fuaran.ui.Binding
 import fuaran.ui.FuaranException
 import fuaran.ui.JsonBool
+import fuaran.ui.JsonNumber
 import fuaran.ui.JsonString
 import fuaran.ui.JsonValue
 import fuaran.ui.Node
@@ -86,6 +87,15 @@ class FuaranHost(private val session: TreeSession) {
 
     /** Convenience for a boolean-valued control edit (checkbox / switch). */
     fun writeBack(stateKey: String, on: Boolean) = writeBack(stateKey, JsonBool(on))
+
+    /**
+     * Convenience for a numeric control edit (a slider / ranged number). Writes a JSON **number**,
+     * not the string form: a reader binding the same `$state` key expects the datum, and a
+     * stringified `"3.0"` would compare and format differently everywhere downstream. The lexeme
+     * is `Double.toString`'s — the wire carries numbers as their source text, and a second private
+     * printer here is how this position would come to spell a number differently from the codec.
+     */
+    fun writeBack(stateKey: String, number: Double) = writeBack(stateKey, JsonNumber(number.toString()))
 
     private inline fun guarded(block: () -> Unit) {
         try {
