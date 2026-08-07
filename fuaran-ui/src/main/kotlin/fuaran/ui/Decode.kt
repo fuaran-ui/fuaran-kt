@@ -33,32 +33,85 @@ private fun JsonValue.obj(path: String): JsonObject =
     this as? JsonObject
         ?: throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, path, "expected object")
 
+/**
+ * Lenient AI-ingest (WIRE_FORMAT 3.6, generalised): a well-formed `Static` envelope wrapped
+ * around a PLAIN scalar unwraps before every scalar reader — the inverse of the
+ * bare-scalar-in-a-Binding-slot confusion, applied at every plain-scalar position in ONE place
+ * rather than site by site. An object that is not a well-formed `Static` envelope passes through
+ * untouched and fails with the ordinary error.
+ *
+ * Applied to the scalar readers only. An `array`/`obj` slot is never unwrapped: those are
+ * structural positions where the envelope has a second reading.
+ */
+private fun JsonValue.unwrapStaticEnvelope(): JsonValue =
+    if (this is JsonObject && (this["\$type"] as? JsonString)?.value == "Static") {
+        this["value"] ?: JsonNull
+    } else {
+        this
+    }
+
 private fun JsonValue.str(path: String): String =
-    (this as? JsonString)?.value
+    (unwrapStaticEnvelope() as? JsonString)?.value
         ?: throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, path, "expected string")
 
 private fun JsonValue.int(path: String): Int =
-    (this as? JsonNumber)?.toInt()
+    (unwrapStaticEnvelope() as? JsonNumber)?.toInt()
         ?: throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, path, "expected number")
 
 private fun JsonValue.double(path: String): Double =
-    (this as? JsonNumber)?.toDouble()
+    (unwrapStaticEnvelope() as? JsonNumber)?.toDouble()
         ?: throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, path, "expected number")
 
 private fun JsonValue.bool(path: String): Boolean =
-    (this as? JsonBool)?.value
+    (unwrapStaticEnvelope() as? JsonBool)?.value
         ?: throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, path, "expected boolean")
 
 private fun JsonValue.array(path: String): List<JsonValue> =
     (this as? JsonArray)?.items
         ?: throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, path, "expected array")
 
+/**
+ * A host-opaque payload slot (`SetState.value`, `Notify.payload`, `AiTool.args`, a `Custom` prop,
+ * an `I18n` arg). The value is held RAW — the projection never interprets it — but an explicit
+ * `null` is not a payload: the wire spells absence by omitting the key, so a `null` here is a
+ * malformed document (the corpus's `reject-null-*` family). Accepting it would hand the embedding
+ * app a slot that claims to carry a value and does not.
+ */
+private fun JsonValue.payload(path: String): JsonValue =
+    if (this is JsonNull) {
+        throw FuaranDecodeException(
+            FuaranDecodeException.WRONG_TYPE,
+            path,
+            "expected a JSON value; an explicit null is not a payload — omit the key instead",
+        )
+    } else {
+        this
+    }
+
+/** The same rule over a string-keyed payload map, per ENTRY so the refusal names the offending key. */
+private fun JsonValue.payloadMap(path: String): JsonValue {
+    val o = obj(path)
+    for ((key, v) in o.members) v.payload("$path.$key")
+    return o
+}
+
 private fun JsonObject.req(key: String, path: String): JsonValue =
     this[key] ?: throw FuaranDecodeException(FuaranDecodeException.MISSING_FIELD, "$path.$key", "required field absent")
 
-/** A required field with one accepted decode-side alias; the error names the canonical key. */
-private fun JsonObject.reqAliased(key: String, alias: String, path: String): JsonValue =
-    this[key] ?: this[alias]
+/**
+ * A field with an accepted decode-side alias SET (WIRE_FORMAT 3.6 field aliases). The canonical
+ * name always wins when both are present, and the nested path always uses the canonical name, so a
+ * document written in a foreign spelling still reports errors in the language's own terms.
+ *
+ * An alias SET rather than a single alias: `Navigate.route` accepts `href | url | to` and a
+ * grid column's `label` accepts `header | title`, so a one-alias helper structurally cannot
+ * express the vocabulary the reference host already accepts.
+ */
+private fun JsonObject.getAliased(key: String, vararg aliases: String): JsonValue? =
+    this[key] ?: aliases.firstNotNullOfOrNull { this[it] }
+
+private fun JsonObject.reqAliased(key: String, path: String, vararg aliases: String): JsonValue =
+    getAliased(key, *aliases)
         ?: throw FuaranDecodeException(FuaranDecodeException.MISSING_FIELD, "$path.$key", "required field absent")
 
 private fun JsonObject.discriminator(path: String): String =
@@ -114,10 +167,89 @@ private fun toneVariantOf(raw: String, path: String): ToneVariant =
         else -> enumOf<ToneVariant>(raw, path)
     }
 
+/**
+ * The remaining WIRE_FORMAT 3.6 enum-value aliases, each a faithful same-concept mapping from the
+ * dominant foreign spelling to the language's canonical case. A name betraying a DIFFERENT concept
+ * is not aliased and stays a reject — the aliases exist to accept a synonym, never to guess.
+ *
+ * One reader per vocabulary, for the reason the tone reader states: a second reader at a second
+ * position is exactly how one position comes to accept a spelling the other refuses.
+ */
+private fun badgeVariantOf(raw: String, path: String): BadgeVariant =
+    when (raw) {
+        "Default" -> BadgeVariant.Neutral
+        "Danger", "Negative" -> BadgeVariant.Critical
+        "Positive" -> BadgeVariant.Success
+        else -> enumOf<BadgeVariant>(raw, path)
+    }
+
+private fun buttonVariantOf(raw: String, path: String): ButtonVariant =
+    when (raw) {
+        // The web/design-system prior: "danger" is the near-universal name for the
+        // destructive button, and it is what models emit.
+        "Danger" -> ButtonVariant.Destructive
+        else -> enumOf<ButtonVariant>(raw, path)
+    }
+
+private fun headingVariantOf(raw: String, path: String): HeadingVariant =
+    when (raw) {
+        "Default" -> HeadingVariant.Standard
+        else -> enumOf<HeadingVariant>(raw, path)
+    }
+
+/** The CSS flex-direction prior: a row lays out horizontally, a column vertically. */
+private fun orientationOf(raw: String, path: String): Orientation =
+    when (raw) {
+        "Row", "row" -> Orientation.Horizontal
+        "Column", "column" -> Orientation.Vertical
+        else -> enumOf<Orientation>(raw, path)
+    }
+
+/**
+ * The `Emphasis` style ENUM slot. Prominence intent survives cross-vocabulary, so a BOOL in the
+ * enum slot projects one-to-one (`true` ⇒ Loud, `false` ⇒ Normal), and the 3.6 aliases
+ * Strong/Bold ⇒ Loud, Subtle/Muted ⇒ Quiet apply.
+ */
+private fun decodeEmphasisEnum(value: JsonValue, path: String): Emphasis =
+    when (val v = value.unwrapStaticEnvelope()) {
+        is JsonBool -> if (v.value) Emphasis.Loud else Emphasis.Normal
+        else ->
+            when (val raw = v.str(path)) {
+                "Strong", "Bold" -> Emphasis.Loud
+                "Subtle", "Muted" -> Emphasis.Quiet
+                else -> enumOf<Emphasis>(raw, path)
+            }
+    }
+
+/**
+ * The behavioural `emphasis` BOOL (`Fact` / `LabelValueRow`) — the other half of the same-name
+ * collision with the style enum above. Booleans pass through; the enum and its aliases project
+ * one-to-one; any other string is the didactic refusal naming BOTH vocabularies, because at this
+ * position "expected boolean" alone does not tell the author which of the two they hit.
+ */
+private fun decodeEmphasisFlag(value: JsonValue, path: String): Boolean =
+    when (val v = value.unwrapStaticEnvelope()) {
+        is JsonBool -> v.value
+        is JsonString ->
+            when (v.value) {
+                "Loud", "Strong", "Bold" -> true
+                "Normal", "Quiet", "Subtle", "Muted" -> false
+                else ->
+                    throw FuaranDecodeException(
+                        FuaranDecodeException.WRONG_TYPE,
+                        path,
+                        "expected boolean, got '${v.value}' — this `emphasis` is a BOOL (is this an " +
+                            "emphasised row/fact?); the Emphasis style enum (Quiet|Normal|Loud) lives on " +
+                            "style/Metric.emphasis. Write true or false",
+                    )
+            }
+        else -> throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, path, "expected boolean")
+    }
+
 private fun decodeStyle(value: JsonValue, path: String): SemanticStyle {
     val o = value.obj(path)
     return SemanticStyle(
-        emphasis = o.optStr("emphasis", path)?.let { enumOf<Emphasis>(it, "$path.emphasis") } ?: Emphasis.Normal,
+        emphasis = o["emphasis"]?.let { decodeEmphasisEnum(it, "$path.emphasis") } ?: Emphasis.Normal,
         tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
         weight = o.optStr("weight", path)?.let { enumOf<StyleWeight>(it, "$path.weight") } ?: StyleWeight.Standard,
         role = o.optStr("role", path),
@@ -159,7 +291,8 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 children = decodeNodeList(o.req("children", path), "$path.children"),
                 layout = decodeBoxLayout(o.req("layout", path), "$path.layout"),
                 role = enumOf<BoxRole>(o.req("role", path).str("$path.role"), "$path.role"),
-                heading = o["heading"]?.let { decodeTextSource(it, "$path.heading") },
+                // Field alias: title → heading (the universal card/modal prior).
+                heading = o.getAliased("heading", "title")?.let { decodeTextSource(it, "$path.heading") },
             )
         "SplitPanel" ->
             SplitPanel(
@@ -173,7 +306,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                     ?: StaticBinding(JsonNumber("0")),
                 children = decodeNodeList(o.req("children", path), "$path.children"),
                 // 0.2.0 — omitted-when-default (Horizontal).
-                orientation = o.optStr("orientation", path)?.let { enumOf<Orientation>(it, "$path.orientation") }
+                orientation = o.optStr("orientation", path)?.let { orientationOf(it, "$path.orientation") }
                     ?: Orientation.Horizontal,
                 activeTag = o["activeTag"]?.let { decodeBinding(it, "$path.activeTag") },
                 tabTags = o.optStrList("tabTags", path),
@@ -189,12 +322,13 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         "SummaryList" ->
             SummaryList(
                 children = decodeNodeList(o.req("children", path), "$path.children"),
-                heading = o["heading"]?.let { decodeTextSource(it, "$path.heading") },
+                // Field alias: title → heading (the universal card/modal prior).
+                heading = o.getAliased("heading", "title")?.let { decodeTextSource(it, "$path.heading") },
             )
         "Disclosure" ->
             Disclosure(
                 children = decodeNodeList(o.req("children", path), "$path.children"),
-                heading = decodeTextSource(o.req("heading", path), "$path.heading"),
+                heading = decodeTextSource(o.reqAliased("heading", path, "title"), "$path.heading"),
                 open = decodeBinding(o.req("open", path), "$path.open"),
                 defaultOpen = o.req("defaultOpen", path).bool("$path.defaultOpen"),
             )
@@ -203,7 +337,8 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 children = decodeNodeList(o.req("children", path), "$path.children"),
                 dismissable = o.req("dismissable", path).bool("$path.dismissable"),
                 open = decodeBinding(o.req("open", path), "$path.open"),
-                heading = o["heading"]?.let { decodeTextSource(it, "$path.heading") },
+                // Field alias: title → heading (the universal card/modal prior).
+                heading = o.getAliased("heading", "title")?.let { decodeTextSource(it, "$path.heading") },
                 onDismiss = o["onDismiss"]?.let { decodeAction(it, "$path.onDismiss") },
             )
         "ScrollArea" ->
@@ -237,7 +372,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             Heading(
                 level = o.req("level", path).int("$path.level"),
                 text = decodeTextSource(o.req("text", path), "$path.text"),
-                variant = enumOf<HeadingVariant>(o.req("variant", path).str("$path.variant"), "$path.variant"),
+                variant = headingVariantOf(o.req("variant", path).str("$path.variant"), "$path.variant"),
             )
         "Markdown" -> Markdown(text = decodeTextSource(o.req("text", path), "$path.text"))
         "Metric" ->
@@ -245,10 +380,10 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 // 0.2.0 rename law — scalar displayed value ⇒ `value` (`data` alias kept;
                 // the retired `source` spelling is a hard MISSING_FIELD, mirroring the core).
-                value = decodeBinding(o.reqAliased("value", "data", path), "$path.value"),
+                value = decodeBinding(o.reqAliased("value", path, "data"), "$path.value"),
                 // 0.2.x — stylistic fields omitted-when-default.
                 format = o["format"]?.let { decodeValueFormat(it, "$path.format") } ?: NoValueFormat,
-                emphasis = o.optStr("emphasis", path)?.let { enumOf<Emphasis>(it, "$path.emphasis") } ?: Emphasis.Normal,
+                emphasis = o["emphasis"]?.let { decodeEmphasisEnum(it, "$path.emphasis") } ?: Emphasis.Normal,
                 tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
                 weight = o.optStr("weight", path)?.let { enumOf<StyleWeight>(it, "$path.weight") } ?: StyleWeight.Standard,
                 icon = o.optStr("icon", path),
@@ -259,16 +394,18 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         "Badge" ->
             Badge(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
-                variant = enumOf<BadgeVariant>(o.req("variant", path).str("$path.variant"), "$path.variant"),
+                variant = badgeVariantOf(o.req("variant", path).str("$path.variant"), "$path.variant"),
             )
-        "Sparkline" -> Sparkline(source = decodeBinding(o.req("source", path), "$path.source"))
+        // Field alias: data → source (the chart-library prior).
+        "Sparkline" -> Sparkline(source = decodeBinding(o.reqAliased("source", path, "data"), "$path.source"))
         "Callout" ->
             Callout(
                 body = decodeTextSource(o.req("body", path), "$path.body"),
                 // 0.2.0 — omitted-when-false; heading is optional.
                 dismissable = o.optBool("dismissable", path) ?: false,
                 tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
-                heading = o["heading"]?.let { decodeTextSource(it, "$path.heading") },
+                // Field alias: title → heading (the universal card/modal prior).
+                heading = o.getAliased("heading", "title")?.let { decodeTextSource(it, "$path.heading") },
                 icon = o.optStr("icon", path),
             )
         "Progress" ->
@@ -285,17 +422,17 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             LabelValueRow(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 // 0.2.0 rename law — scalar displayed value ⇒ `value` (`data` alias kept).
-                value = decodeBinding(o.reqAliased("value", "data", path), "$path.value"),
+                value = decodeBinding(o.reqAliased("value", path, "data"), "$path.value"),
                 format = o["format"]?.let { decodeValueFormat(it, "$path.format") } ?: NoValueFormat,
                 // The behavioural bool; 0.2.2 — omitted-when-false.
-                emphasis = o.optBool("emphasis", path) ?: false,
+                emphasis = o["emphasis"]?.let { decodeEmphasisFlag(it, "$path.emphasis") } ?: false,
                 help = o["help"]?.let { decodeTextSource(it, "$path.help") },
             )
         "Fact" ->
             Fact(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 value = decodeTextSource(o.req("value", path), "$path.value"),
-                emphasis = o.optBool("emphasis", path) ?: false,
+                emphasis = o["emphasis"]?.let { decodeEmphasisFlag(it, "$path.emphasis") } ?: false,
                 tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
                 help = o["help"]?.let { decodeTextSource(it, "$path.help") },
                 icon = o.optStr("icon", path),
@@ -360,7 +497,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             Button(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 onClick = decodeAction(o.req("onClick", path), "$path.onClick"),
-                variant = enumOf<ButtonVariant>(o.req("variant", path).str("$path.variant"), "$path.variant"),
+                variant = buttonVariantOf(o.req("variant", path).str("$path.variant"), "$path.variant"),
                 disabled = o["disabled"]?.let { decodeBinding(it, "$path.disabled") },
                 icon = o.optStr("icon", path),
             )
@@ -374,7 +511,8 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         "Select" ->
             Select(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
-                source = decodeBinding(o.req("source", path), "$path.source"),
+                // Field aliases: options → source (the HTML `<select>` prior), data → source.
+                source = decodeBinding(o.reqAliased("source", path, "options", "data"), "$path.source"),
                 multiple = o.optBool("multiple", path) ?: false,
                 value = o["value"]?.let { decodeBinding(it, "$path.value") },
                 values = o["values"]?.let { decodeBinding(it, "$path.values") },
@@ -389,7 +527,8 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         "DataGrid" ->
             DataGrid(
                 columns = o.req("columns", path).array("$path.columns").mapIndexed { i, v -> decodeGridColumn(v, "$path.columns[$i]") },
-                source = decodeBinding(o.req("source", path), "$path.source"),
+                // Field aliases: data / rows → source (the Chart.js / react-table prior).
+                source = decodeBinding(o.reqAliased("source", path, "data", "rows"), "$path.source"),
                 // 0.2.0 — omitted-when-false.
                 editable = o.optBool("editable", path) ?: false,
                 rowKeyField = o.optStr("rowKeyField", path),
@@ -398,7 +537,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         "Chart" ->
             Chart(
                 kind = enumOf<ChartKind>(o.req("kind", path).str("$path.kind"), "$path.kind"),
-                source = decodeBinding(o.req("source", path), "$path.source"),
+                source = decodeBinding(o.reqAliased("source", path, "data"), "$path.source"),
                 xField = o.req("xField", path).str("$path.xField"),
                 yFields = o.strList("yFields", path),
                 // Round-trips when present; absent (legacy wire) defaults to false.
@@ -409,7 +548,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             MapNode(
                 centreLatitude = o.req("centreLatitude", path).double("$path.centreLatitude"),
                 centreLongitude = o.req("centreLongitude", path).double("$path.centreLongitude"),
-                source = decodeBinding(o.req("source", path), "$path.source"),
+                source = decodeBinding(o.reqAliased("source", path, "data", "markers"), "$path.source"),
                 zoom = o.req("zoom", path).int("$path.zoom"),
             )
         // Structural
@@ -417,7 +556,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             Custom(
                 moduleId = o.req("moduleId", path).str("$path.moduleId"),
                 componentId = o.req("componentId", path).str("$path.componentId"),
-                props = o.req("props", path),
+                props = o.req("props", path).payloadMap("$path.props"),
                 contentHash = o["contentHash"]?.let { decodeContentHash(it, "$path.contentHash") },
                 exposedNodeIds = o.optStrList("exposedNodeIds", path),
             )
@@ -479,7 +618,7 @@ private fun decodeTextSource(value: JsonValue, path: String): TextSource {
     return when (val t = o.discriminator(path)) {
         "Literal" -> LiteralText(o.req("text", path).str("$path.text"))
         "Bound" -> BoundText(decodeBinding(o.req("binding", path), "$path.binding"))
-        "I18n" -> I18nText(o.req("key", path).str("$path.key"), o["args"])
+        "I18n" -> I18nText(o.req("key", path).str("$path.key"), o["args"]?.payloadMap("$path.args"))
         else -> unknownCase(t, path, "TextSource")
     }
 }
@@ -502,8 +641,16 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
         // carries none, and the legacy `"value": null` spelling normalises to the
         // same thing (§16 shorthand), so the two cannot disagree.
         "Static" -> StaticBinding(o["value"] ?: JsonNull)
-        "State" -> StateBinding(o.req("key", path).str("$path.key"), o["defaultValue"])
-        "Query" -> QueryBinding(o.req("name", path).str("$path.name"), o.optStrList("dependsOn", path))
+        // Field aliases: initialValue / default → defaultValue (the useState prior).
+        "State" -> StateBinding(o.req("key", path).str("$path.key"), o.getAliased("defaultValue", "initialValue", "default"))
+        // Field aliases: deps / dependencies → dependsOn (the React hooks prior).
+        "Query" ->
+            QueryBinding(
+                o.req("name", path).str("$path.name"),
+                o.getAliased("dependsOn", "deps", "dependencies")
+                    ?.array("$path.dependsOn")
+                    ?.mapIndexed { i, v -> v.str("$path.dependsOn[$i]") },
+            )
         // 0.2.0 — optional `defaultValue`, held raw (the render projection never types it).
         "Filter" -> FilterBinding(o.req("name", path).str("$path.name"), o["defaultValue"])
         // 0.2.9/0.2.10 — `nodeId` + optional `defaultValue` / `field`.
@@ -514,7 +661,7 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
                 field = o.optStr("field", path),
             )
         "Computed" -> ComputedBinding
-        "I18n" -> I18nBinding(o.req("key", path).str("$path.key"), o["args"])
+        "I18n" -> I18nBinding(o.req("key", path).str("$path.key"), o["args"]?.payloadMap("$path.args"))
         "Local" ->
             LocalBinding(
                 flushOn = o["flushOn"]?.let { decodeLocalFlushTrigger(it, "$path.flushOn") } ?: OnBlur,
@@ -530,13 +677,7 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
             TransformBinding(
                 source = o.req("source", path),
                 pipeline = o.req("pipeline", path),
-                params = o["params"]?.array("$path.params")?.mapIndexed { i, v ->
-                    val p = v.obj("$path.params[$i]")
-                    TransformParam(
-                        name = p.req("name", "$path.params[$i]").str("$path.params[$i].name"),
-                        from = decodeBinding(p.req("from", "$path.params[$i]"), "$path.params[$i].from"),
-                    )
-                },
+                params = o["params"]?.let { decodeTransformParams(it, "$path.params") },
             )
         "Invoke" -> InvokeBinding(o.req("capabilityId", path).str("$path.capabilityId"), decodeInvokeArgs(o, path))
         // Lenient: the `TextSource.Bound` wrapper transferred to a bare-Binding slot —
@@ -545,6 +686,29 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
         else -> unknownCase(t, path, "Binding")
     }
 }
+
+/**
+ * A `Transform`'s query params. Canonical: the `[{name, from}]` array. Lenient (3.6): the
+ * `{name: <Binding>}` MAP form, normalised sorted by name — params are a name-keyed SET, so key
+ * order carries no meaning and the coercion is lossless. (The `options` map form is deliberately
+ * NOT coerced anywhere, because there key order IS visible ordering.) At an array element, `value`
+ * aliases `from`.
+ */
+private fun decodeTransformParams(value: JsonValue, path: String): List<TransformParam> =
+    when (value) {
+        is JsonObject ->
+            value.members.entries.sortedBy { it.key }.map { (name, from) ->
+                TransformParam(name = name, from = decodeBinding(from, "$path.$name.from"))
+            }
+        else ->
+            value.array(path).mapIndexed { i, v ->
+                val p = v.obj("$path[$i]")
+                TransformParam(
+                    name = p.req("name", "$path[$i]").str("$path[$i].name"),
+                    from = decodeBinding(p.reqAliased("from", "$path[$i]", "value"), "$path[$i].from"),
+                )
+            }
+    }
 
 private fun decodeInvokeArgs(o: JsonObject, path: String): List<InvokeArg> =
     o.req("args", path).array("$path.args").mapIndexed { i, v ->
@@ -564,15 +728,16 @@ private fun decodeAction(value: JsonValue, path: String): Action {
     return when (val t = o.discriminator(path)) {
         "Chain" -> ChainAction(o.req("ops", path).array("$path.ops").mapIndexed { i, v -> decodeAction(v, "$path.ops[$i]") })
         "Dispatch" -> DispatchAction
+        // Field alias: url → endpoint (the fetch prior).
         "Call" ->
             CallAction(
-                endpoint = o.req("endpoint", path).str("$path.endpoint"),
+                endpoint = o.reqAliased("endpoint", path, "url").str("$path.endpoint"),
                 into = o["into"]?.let { decodeCallTarget(it, "$path.into") },
             )
         "Notify" ->
             NotifyAction(
                 channel = o.req("channel", path).str("$path.channel"),
-                payload = o.req("payload", path),
+                payload = o.req("payload", path).payload("$path.payload"),
             )
         // Canonical field is `route`; the web-prior spellings decode as aliases.
         "Navigate" -> {
@@ -584,12 +749,12 @@ private fun decodeAction(value: JsonValue, path: String): Action {
         "SetState" ->
             SetStateAction(
                 key = o.req("key", path).str("$path.key"),
-                value = o.req("value", path),
+                value = o.req("value", path).payload("$path.value"),
             )
         "AiTool" ->
             AiToolAction(
                 toolName = o.req("toolName", path).str("$path.toolName"),
-                args = o.req("args", path),
+                args = o.req("args", path).payload("$path.args"),
             )
         "CommitLocal" -> CommitLocalAction(nodeId = o.req("nodeId", path).str("$path.nodeId"))
         "WriteToClipboard" -> WriteToClipboardAction(o.req("text", path).str("$path.text"))
@@ -621,16 +786,27 @@ private fun decodeBoxLayout(value: JsonValue, path: String): BoxLayout {
     return when (val t = o.discriminator(path)) {
         "Flex" ->
             FlexLayout(
-                direction = enumOf<Orientation>(o.req("direction", path).str("$path.direction"), "$path.direction"),
+                direction = orientationOf(o.req("direction", path).str("$path.direction"), "$path.direction"),
                 wrap = o.req("wrap", path).bool("$path.wrap"),
                 gap = o.optInt("gap", path),
             )
-        "Grid" ->
-            GridLayout(
-                cols = o.req("cols", path).int("$path.cols"),
-                gap = o.optInt("gap", path),
-                templateColumns = o.optStr("templateColumns", path),
-            )
+        // Field alias: columns → cols (the CSS/Tailwind prior). Lenient (3.6): NO column
+        // spec at all is the CSS auto-grid prior and canonicalises to `Auto`; absent `cols`
+        // WITH a `templateColumns` reads as `cols: 1`, since the template carries the real
+        // shape and `Cols` is documented-ignored when it is present.
+        "Grid" -> {
+            val colsJson = o.getAliased("cols", "columns")
+            val template = o.optStr("templateColumns", path)
+            if (colsJson == null && template == null) {
+                AutoLayout
+            } else {
+                GridLayout(
+                    cols = colsJson?.int("$path.cols") ?: 1,
+                    gap = o.optInt("gap", path),
+                    templateColumns = template,
+                )
+            }
+        }
         "Auto" -> AutoLayout
         else -> unknownCase(t, path, "BoxLayout")
     }
@@ -701,7 +877,7 @@ private fun ControlAutoBind.autoBinding(placeholder: JsonValue): Binding =
 private fun decodeFormField(value: JsonValue, path: String): FormField {
     val o = value.obj(path)
     // Field alias: name → id. Id decodes first so the auto-bind can use it.
-    val id = o.reqAliased("id", "name", path).str("$path.id")
+    val id = o.reqAliased("id", path, "name").str("$path.id")
     return FormField(
         id = id,
         kind = decodeFormFieldKind(o.req("kind", path), "$path.kind", ControlAutoBind.FormFieldId(id)),
@@ -735,7 +911,7 @@ private fun decodeFormFieldKind(value: JsonValue, path: String, autoBind: Contro
                 options = decodeBinding(o.req("options", path), "$path.options"),
                 value = valueOr(JsonNull),
                 // 0.2.0 — decode-optional; absent restores the language default.
-                orientation = o.optStr("orientation", path)?.let { enumOf<Orientation>(it, "$path.orientation") }
+                orientation = o.optStr("orientation", path)?.let { orientationOf(it, "$path.orientation") }
                     ?: Orientation.Horizontal,
             )
         "RangedNumber" ->
@@ -893,8 +1069,9 @@ private fun decodeLocalFlushTrigger(value: JsonValue, path: String): LocalFlushT
 private fun decodeGridColumn(value: JsonValue, path: String): GridColumn {
     val o = value.obj(path)
     return GridColumn(
-        label = o.req("label", path).str("$path.label"),
-        kind = decodeCellKind(o.req("kind", path), "$path.kind"),
+        // Field aliases: header / title → label, type → kind (the react-table prior).
+        label = o.reqAliased("label", path, "header", "title").str("$path.label"),
+        kind = decodeCellKind(o.reqAliased("kind", path, "type"), "$path.kind"),
         // 0.2.x — format/width omitted-when-default; `value` is a closure sentinel (dropped).
         format = o["format"]?.let { decodeValueFormat(it, "$path.format") } ?: NoValueFormat,
         width = o["width"]?.let { decodeColumnWidth(it, "$path.width") } ?: AutoWidth,

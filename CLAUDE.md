@@ -119,6 +119,57 @@ cargo supplies the `ndk` first-arg); and 16KB alignment is a 64-bit-only concern
 covered by the desktop JNI leg (the Android `.so`s can't run without a device/emulator, so
 the Android leg's bar is build + correct symbols + alignment).
 
+## Corpus legs — what `CorpusDecodeTest` actually runs
+
+Three families, all hard-failing, plus the URL-floor checks:
+
+- **node-round-trip** — every fixture decodes with zero fallback-arm hits (the original bar).
+- **lenient-accept** — every 16 / 3.6 shorthand, field alias, enum alias and shape coercion. The
+  spec says of this family that a host skipping it "can pass certification while diverging, which is
+  precisely what this family exists to prevent". Being *stricter* than the language is not a safe
+  default: it is an availability defect that presents to the user as the surface rejecting a tree
+  the language accepts, and a model's first guess is exactly the spelling these fixtures pin.
+- **reject** — the negative half of the decode contract. Each malformed fixture must fail with the
+  canonical code and a `$`-rooted path carrying the expected **prefix** (a discriminator refusal
+  legitimately reports at `<path>.$type` where the corpus records `<path>`; the reference host
+  matches by prefix for the same reason). A decode that SUCCEEDS is the hard failure.
+
+The runner also fails when any family enumerates ZERO fixtures — a leg that quietly found nothing
+is a gate that checked nothing, one level below the CI workflow's `SKIP:` guard.
+
+**Two documented exclusions, neither a filter over a family:** `decoder == "op"` fixtures (there is
+no `TreeOp` decoder here at all — the core owns apply, and a render projection never sees an op),
+and the `envelope-reject` family, which asserts `FOREIGN_PROFILE` — versioning-envelope negotiation,
+a codec-host obligation this decode-only surface does not carry.
+
+**Forward-coupling rule.** A host-opaque payload slot (`SetState.value`-shaped: held raw, never
+interpreted) reads through `payload()` / `payloadMap()`, which refuse an explicit `null`. The wire
+spells absence by omitting a key, so a `null` in a payload slot is malformed; reading it raw hands
+the embedding app a slot that claims to carry a value and does not.
+
+**Field aliases take an alias SET, not a single alias.** `reqAliased(key, path, vararg aliases)` /
+`getAliased(key, vararg aliases)`. A one-alias helper structurally cannot express `route ← href |
+url | to` or a grid column's `label ← header | title`, and the decoder grew inline `?:` chains to
+work around it. Enum-value aliases go through **one reader per vocabulary**
+(`toneVariantOf` / `badgeVariantOf` / `buttonVariantOf` / `headingVariantOf` / `orientationOf` /
+`decodeEmphasisEnum` / `decodeEmphasisFlag`) for the reason the tone reader already stated: a second
+reader at a second position is how one position comes to accept a spelling the other refuses.
+
+## The URL safety floor (`fuaran-ui/.../UrlPolicy.kt`)
+
+`FuaranUrlPolicy` plus the `sanitizedHref` / `sanitizedSrc` / `sanitizedNavigateRoute` accessors are
+this surface's answer to "who checks the destination". **Chosen posture: a public accessor, not a
+decode-time filter** — `href` / `src` are `Binding`s whose value may not exist until the core
+resolves a `State` / `Query` / `Format` slot, so a decode-time allowlist would be checking a
+placeholder, and filtering during decode would also stop the projection being a faithful view of the
+wire. The consumer obligations live in the README's "Safety floor" section; keep them there, since
+that is what a consumer reads.
+
+A renderer or interaction arm that ever *does* route a URL onward — a real image loader, a tappable
+link, an `Intent` — must go through `FuaranUrlPolicy.sanitize` in the same change that adds it. Same
+shape as the write-back rule below, and for the same reason: the compiler forces the arm to exist,
+it cannot force the arm to check.
+
 ## Control write-back — a forward-coupling rule (Phase 667)
 
 A value-carrying control arm in `FuaranRenderer.kt` must, **in the same change that adds it**,

@@ -36,6 +36,47 @@ for (child in box.children) {
 Full walkthrough — decode → render projection → Jetpack Compose:
 <https://fuaran-ui.io/get-started/kotlin>.
 
+## Safety floor — what the embedding app must do
+
+A decoded tree is **untrusted input**. It usually arrives from a model, and a model will happily
+emit a `Link` whose `href` is `javascript:…` or a `Navigate` whose `route` points somewhere you did
+not intend. Two obligations, and the first is the one that bites:
+
+**1. Never open a tree-supplied URL without the floor.** `Link.href`, `Image.src` and
+`NavigateAction.route` are handed to you exactly as the wire spelled them — `dispatchAction` returns
+a `Navigate` to you rather than acting on it, precisely so that you decide. Route every one through
+`FuaranUrlPolicy` before it reaches an `Intent`, a `CustomTabsIntent`, an image loader, or any
+`WebView` you add:
+
+```kotlin
+when (val dest = link.sanitizedHref) {              // NOT link.href
+    is SanitizedUrl.Allowed  -> open(dest.url)      // http / https / mailto / tel, or relative
+    is SanitizedUrl.Rejected -> log("refused destination: ${dest.reason}")
+    SanitizedUrl.Dynamic     -> {                   // a State / Query / Format binding
+        // resolve it however your app resolves bindings, then apply the same floor:
+        FuaranUrlPolicy.sanitize(resolvedHref)?.let { open(it) }
+    }
+}
+```
+
+The allowlist is `http` / `https` / `mailto` / `tel` plus relative paths and fragments. Everything
+else is refused, including unknown schemes (deny by default), `intent:` URLs, protocol-relative
+`//host` forms, and backslash forms — `\\host`, `/\host` — which several URL parsers normalise back
+to `//`. The scheme candidate is scrubbed of ASCII whitespace and control characters first, so
+`java\tscript:` is classified as `javascript:` and refused; a `startsWith("javascript:")` check of
+your own is not a floor.
+
+**2. Do not build an HTML path for tree text.** This surface has no `WebView` and no
+`Html.fromHtml` path, and that absence is why it carries no script-injection sink at all.
+`Markdown.text`, labels and every other `TextSource` render as Compose `Text`. Passing that content
+through `Html.fromHtml`, or into a `WebView`, reintroduces exactly the class the native projection
+removed.
+
+The floor is a public accessor rather than a decode-time filter deliberately: `href` / `src` are
+`Binding`s whose value may not exist until the core resolves a `State`, `Query` or `Format` slot, so
+a check at decode time would be examining a placeholder. The projection stays a faithful view of the
+wire; the check happens where a real destination exists.
+
 ## What this is — and is not
 
 - **A render projection, not a seventh conformant host.** The Rust reference core owns
