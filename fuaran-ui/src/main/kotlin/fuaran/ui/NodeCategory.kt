@@ -37,6 +37,7 @@ fun NodeKind.category(): NodeCategory =
         is Callout -> NodeCategory.Display
         is Progress -> NodeCategory.Display
         is Skeleton -> NodeCategory.Display
+        is Icon -> NodeCategory.Display
         is LabelValueRow -> NodeCategory.Display
         is Fact -> NodeCategory.Display
         is Link -> NodeCategory.Display
@@ -84,6 +85,7 @@ fun NodeKind.discriminator(): String =
         is Callout -> "Callout"
         is Progress -> "Progress"
         is Skeleton -> "Skeleton"
+        is Icon -> "Icon"
         is LabelValueRow -> "LabelValueRow"
         is Fact -> "Fact"
         is Link -> "Link"

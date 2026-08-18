@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Switch as M3Switch
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
@@ -34,6 +35,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -77,6 +83,8 @@ import fuaran.ui.FragmentRef
 import fuaran.ui.GridLayout
 import fuaran.ui.Heading
 import fuaran.ui.Image
+import fuaran.ui.Icon
+import fuaran.ui.IconSize
 import fuaran.ui.JsonValue
 import fuaran.ui.LabelShape
 import fuaran.ui.LabelValueRow
@@ -114,6 +122,7 @@ import fuaran.ui.TextAreaField
 import fuaran.ui.TextCell
 import fuaran.ui.TextField
 import fuaran.ui.Toast
+import fuaran.ui.ToggleField
 import fuaran.ui.ToneVariant
 import fuaran.ui.TonedPillCell
 import fuaran.ui.discriminator
@@ -156,6 +165,7 @@ fun FuaranNode(node: Node, ctx: BindingContext = BindingContext.Empty) {
         is Skeleton -> RenderSkeleton(k)
         is LabelValueRow -> RenderLabelValueRow(k, ctx)
         is Fact -> RenderFact(k, ctx)
+        is Icon -> RenderIcon(k, ctx)
         is Link -> RenderLink(k, ctx)
         is Image -> RenderImage(k, ctx)
         is ListNode -> RenderList(k, ctx)
@@ -330,7 +340,11 @@ private fun RenderScrollArea(k: ScrollArea, ctx: BindingContext) {
 
 @Composable
 private fun RenderSwitch(k: Switch, ctx: BindingContext) {
-    val current = ctx.resolve(fuaran.ui.StateBinding(k.stateKey))
+    // `on` is the more specific declaration and wins where both are present; the decoder has
+    // already refused a Switch carrying neither, so the elvis tail is unreachable rather than a
+    // silent default-to-empty.
+    val selector = k.on ?: k.stateKey?.let { fuaran.ui.StateBinding(it) }
+    val current = selector?.let { ctx.resolve(it) } ?: ""
     val chosen = k.cases.firstOrNull { it.match == current }?.child ?: k.default
     FuaranNode(chosen, ctx)
 }
@@ -455,6 +469,39 @@ private fun RenderFact(k: Fact, ctx: BindingContext) {
 }
 
 @Composable
+private fun RenderIcon(k: Icon, ctx: BindingContext) {
+    // The uniform icon-hook contract the HTML hosts also honour: the glyph NAME is the payload
+    // and the HOST owns the name -> glyph mapping, so this floor must not invent a glyph set.
+    // What it CAN do faithfully is carry the name, the size and the tone through, and get the
+    // accessibility right - which is the half a placeholder box would silently drop.
+    //
+    // Accessibility mirrors the HTML hosts exactly: no `label` means DECORATIVE, so the node is
+    // cleared from the semantics tree rather than read out as its internal glyph name; a labelled
+    // icon carries the label instead. An icon announced as "sparkles" is worse than one announced
+    // as nothing at all.
+    val px = when (k.size) {
+        IconSize.Small -> 12.sp
+        IconSize.Medium -> 16.sp
+        IconSize.Large -> 22.sp
+    }
+    Text(
+        text = k.icon,
+        fontSize = px,
+        color = tone(k.tone).accent,
+        modifier = Modifier
+            .padding(2.dp)
+            .semantics {
+                if (k.label != null) {
+                    contentDescription = k.label
+                    role = Role.Image
+                } else {
+                    hideFromAccessibility()
+                }
+            },
+    )
+}
+
+@Composable
 private fun RenderLink(k: Link, ctx: BindingContext) {
     Text(ctx.resolveText(k.label), color = Color(0xFF1565C0), modifier = Modifier.padding(2.dp))
 }
@@ -564,6 +611,17 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
             val key = stateKeyOf(kind.value)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = checked, onCheckedChange = { checked = it; if (key != null) sink?.writeBack(key, it) })
+                Text(label)
+            }
+        }
+        is ToggleField -> {
+            // The switch affordance over the same boolean slot as CheckboxField. Write-back is
+            // wired for the same reason it is there: the control is genuinely interactive, so
+            // omitting the sink would leave a switch that moves and changes nothing.
+            var on by remember { mutableStateOf(ctx.resolveBool(kind.value)) }
+            val key = stateKeyOf(kind.value)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                M3Switch(checked = on, onCheckedChange = { on = it; if (key != null) sink?.writeBack(key, it) })
                 Text(label)
             }
         }

@@ -74,6 +74,66 @@ object FuaranUrlPolicy {
      * `java\tscript:` classifies as `javascript` — the classic evasion, and the reason a naive
      * `startsWith("javascript:")` check is not a floor.
      */
+    /**
+     * WIRE_FORMAT 19 rule 1 - normalise a URL string exactly as the WHATWG URL Standard's
+     * basic URL parser does BEFORE it parses anything, ASCII-exact, in this order:
+     *
+     *  1. remove leading and trailing C0-control-or-space - ALL of U+0000..U+0020, not
+     *     merely the whitespace subset;
+     *  2. remove every U+0009 / U+000A / U+000D from anywhere in what remains.
+     *
+     * Deliberately NOT [String.trim] with the default predicate. A native trim answers a
+     * different question in every language - Python's `strip` also removes U+001C..U+001F
+     * where Kotlin, JS, .NET, Go and Rust do not - and all of them remove non-ASCII
+     * whitespace (U+00A0, U+2028) that the parser KEEPS. The floor's whole purpose is that
+     * a tree vetted on one host is safe on another, so the normalisation must be defined by
+     * the parser that will actually consume the string, not by the host's standard library.
+     *
+     * Step 2 is those three code points ONLY: the parser removes U+000B and U+000C at the
+     * EDGES (step 1) and keeps them in the INTERIOR, so `/<VT>/host/x` is an ordinary
+     * same-origin path and must stay one.
+     *
+     * The normalised form is also what is EMITTED on acceptance, so an accepted URL
+     * carrying an interior tab loses it - which is what the browser would have parsed
+     * anyway. Emitting the raw string instead would hand the embedding app a value the
+     * floor never actually inspected.
+     */
+    internal fun normaliseForFloor(url: String): String {
+        var lo = 0
+        var hi = url.length - 1
+        while (lo <= hi && url[lo].code <= 0x20) lo++
+        while (hi >= lo && url[hi].code <= 0x20) hi--
+        val sb = StringBuilder(hi - lo + 1)
+        for (i in lo..hi) {
+            val c = url[i]
+            if (c.code == 0x09 || c.code == 0x0A || c.code == 0x0D) continue
+            sb.append(c)
+        }
+        return sb.toString()
+    }
+
+    /**
+     * A protocol-relative URL: `//host/path`, plus the backslash forms browsers normalise
+     * to it. WHATWG URL parsing treats `\` as `/` for special schemes, so `\\host`,
+     * `/\host` and `\/host` all resolve exactly as `//host` does.
+     *
+     * These carry no scheme, so the schemeless branch of [sanitize] would otherwise admit
+     * them - but the resolver supplies the CURRENT origin's scheme and lands OFF-ORIGIN,
+     * defeating the same-origin intent that makes a schemeless URL safe in the first place.
+     *
+     * The test is POSITIONAL - the first two characters - rather than "contains a
+     * backslash". That distinction is the whole finding: a blanket contains-check refuses
+     * `\host` (a single leading backslash, which the parser reads as the same-origin path
+     * `/host`) while a single interior tab slips `/<TAB>/host` past a `startsWith("//")`
+     * check entirely. Normalisation first, then position, gets both right.
+     */
+    internal fun isProtocolRelative(url: String): Boolean {
+        if (url.length < 2) return false
+        val a = url[0]
+        val b = url[1]
+        return (a == '/' || a == '\\') && (b == '/' || b == '\\')
+    }
+
     internal fun schemeOf(url: String): String? {
         val candidate = StringBuilder()
         for (ch in url) {
@@ -98,10 +158,9 @@ object FuaranUrlPolicy {
      * smuggles a protocol-relative URL past a `//` check.
      */
     fun sanitize(url: String): String? {
-        val trimmed = url.trim { it.code <= 0x20 }
+        val trimmed = normaliseForFloor(url)
         if (trimmed.isEmpty()) return trimmed
-        if (trimmed.contains('\\')) return null
-        if (trimmed.startsWith("//")) return null
+        if (isProtocolRelative(trimmed)) return null
         val scheme = schemeOf(trimmed) ?: return trimmed
         return if (scheme in allowedSchemes) trimmed else null
     }
@@ -109,12 +168,14 @@ object FuaranUrlPolicy {
     /** [sanitize], with the refusal reason retained for the [SanitizedUrl] cases. */
     fun classify(url: String): SanitizedUrl {
         sanitize(url)?.let { return SanitizedUrl.Allowed(it) }
-        val trimmed = url.trim { it.code <= 0x20 }
+        val trimmed = normaliseForFloor(url)
         return when {
-            trimmed.contains('\\') ->
-                SanitizedUrl.Rejected(url, "backslash forms are refused (they normalise to '//')")
-            trimmed.startsWith("//") ->
-                SanitizedUrl.Rejected(url, "protocol-relative '//' URLs are refused")
+            isProtocolRelative(trimmed) ->
+                SanitizedUrl.Rejected(
+                    url,
+                    "protocol-relative URLs are refused - '$trimmed' resolves off-origin " +
+                        "(the backslash forms normalise to '//' too)",
+                )
             else -> {
                 val scheme = schemeOf(trimmed) ?: "<none>"
                 if (scheme in deniedSchemes) {

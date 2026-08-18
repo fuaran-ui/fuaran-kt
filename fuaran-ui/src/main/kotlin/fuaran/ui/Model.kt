@@ -119,10 +119,17 @@ data class Mount(
     val inputs: Map<String, FragmentArg>? = null,
 ) : NodeKind
 
+/**
+ * The declarative selector. The branch follows a **state key** or — since the 0.2.x widening —
+ * any [Binding], so a `Selection` makes the branch follow the clicked row. The schema requires
+ * at least one of the two (`anyOf`), which [decodeNode] enforces; both present is legitimate and
+ * `on` wins, being the more specific declaration.
+ */
 data class Switch(
-    val stateKey: String,
+    val stateKey: String?,
     val cases: List<SwitchCase>,
     val default: Node,
+    val on: Binding? = null,
 ) : NodeKind
 
 data class SwitchCase(val match: String, val child: Node)
@@ -180,6 +187,15 @@ data class Progress(
 
 data class Skeleton(val rows: Int) : NodeKind
 
+/** A named glyph from the host's icon set. `icon` is the name; the host owns the mapping. */
+data class Icon(
+    val icon: String,
+    /** Absent ⇒ decorative: the a11y layer hides it. Present ⇒ a labelled `img` role. */
+    val label: String? = null,
+    val size: IconSize = IconSize.Medium,
+    val tone: ToneVariant = ToneVariant.Default,
+) : NodeKind
+
 data class LabelValueRow(
     val label: TextSource,
     /** 0.2.0 rename law — scalar displayed value ⇒ `value` (see [Metric.value]). */
@@ -210,6 +226,7 @@ data class Link(
     val download: Boolean,
     val rel: String? = null,
     val target: String? = null,
+    val protection: LinkProtection? = null,
 ) : NodeKind
 
 data class Image(val alt: TextSource, val src: Binding, val variant: ImageVariant) : NodeKind
@@ -296,6 +313,15 @@ data class FilterItem(val name: String, val label: TextSource, val kind: FormFie
 
 // --- Visualisation --------------------------------------------------------- //
 
+/**
+ * The row-feed grid.
+ *
+ * The sort / page / edit positions are addressed through STATE keys rather than literal values —
+ * `sortStateKey`, `pageStateKey`, `editStateKey` — so a control can move them; `defaultSort` and
+ * `pageSize` are the initial configuration. The projection decodes all six faithfully (it is a
+ * view of the wire, so dropping a declaration would misreport the tree); acting on them is the
+ * renderer's business, not the decoder's.
+ */
 data class DataGrid(
     val columns: List<GridColumn>,
     val source: Binding,
@@ -303,6 +329,12 @@ data class DataGrid(
     val editable: Boolean = false,
     val rowKeyField: String? = null,
     val staticRows: StaticRows? = null,
+    val sortStateKey: String? = null,
+    val pageStateKey: String? = null,
+    val editStateKey: String? = null,
+    /** Rows per page. The schema pins `minimum: 1` — a zero page size paginates nothing. */
+    val pageSize: Int? = null,
+    val defaultSort: DefaultSort? = null,
 ) : NodeKind
 
 data class GridColumn(
@@ -315,7 +347,15 @@ data class GridColumn(
     val field: String? = null,
 )
 
-data class StaticRows(val headers: List<TextSource>, val rows: List<List<TextSource>>)
+data class StaticRows(
+    val headers: List<TextSource>,
+    val rows: List<List<TextSource>>,
+    val defaultSort: DefaultSort? = null,
+    val sortable: Boolean? = null,
+)
+
+/** An initial sort: a zero-based header index (the schema pins `minimum: 0`) plus a direction. */
+data class DefaultSort(val column: Int, val direction: SortDirection)
 
 data class Chart(
     val kind: ChartKind,
@@ -415,6 +455,12 @@ data class SelectionBinding(
 
 data object ComputedBinding : Binding
 
+/**
+ * The host-furnished instant. Carries no payload: the value is supplied at resolve time by the
+ * host clock, which is why it is a `Clock`-determinism source rather than wire data.
+ */
+data object NowBinding : Binding
+
 data class I18nBinding(val key: String, val args: JsonValue? = null) : Binding
 
 data class LocalBinding(val flushOn: LocalFlushTrigger, val initialFrom: Binding) : Binding
@@ -460,7 +506,16 @@ data class NotifyAction(val channel: String, val payload: JsonValue) : Action
 
 data class NavigateAction(val route: String) : Action
 
-data class SetStateAction(val key: String, val value: JsonValue) : Action
+/**
+ * Write a state slot. Exactly ONE of [value] (a literal payload) and [valueFrom] (a binding
+ * resolved at dispatch time) is present — the schema states it as a `oneOf`, so both-present is
+ * a reject rather than a precedence question.
+ */
+data class SetStateAction(
+    val key: String,
+    val value: JsonValue? = null,
+    val valueFrom: Binding? = null,
+) : Action
 
 data class AiToolAction(val toolName: String, val args: JsonValue) : Action
 
@@ -497,6 +552,16 @@ data class SignificantDigitsValueFormat(val digits: Int) : ValueFormat
 
 data class DateValueFormat(val format: String) : ValueFormat
 
+/** An elapsed-time format: the unit the raw value counts in, plus the rendering style. */
+data class DurationValueFormat(val unit: DurationUnit, val style: DurationStyle) : ValueFormat
+
+/**
+ * A relative-time format ("3 minutes ago"). Distinct from [RelativeTimeNumberFormat], which is the
+ * same vocabulary in `Binding.Format`'s DU - the wire carries two format DUs and a case name in
+ * one is not a case in the other.
+ */
+data class RelativeTimeValueFormat(val unit: RelativeTimeUnit) : ValueFormat
+
 /** The formatter is a closure — presence only. */
 data object CustomValueFormat : ValueFormat
 
@@ -530,6 +595,9 @@ data class TextField(val value: Binding) : FormFieldKind
 data class NumberField(val value: Binding) : FormFieldKind
 
 data class CheckboxField(val value: Binding) : FormFieldKind
+
+/** The switch affordance: the same boolean slot as [CheckboxField], a different control. */
+data class ToggleField(val value: Binding) : FormFieldKind
 
 data class ChoiceField(val options: Binding, val value: Binding) : FormFieldKind
 

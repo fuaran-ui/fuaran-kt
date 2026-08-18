@@ -106,7 +106,13 @@ object ActionDispatch {
     private fun applyInto(session: TreeSession, action: Action, host: MutableList<Action>) {
         when (action) {
             is ChainAction -> action.ops.forEach { applyInto(session, it, host) }
-            is SetStateAction -> session.setState(action.key, action.value.encode())
+            // A `value` SetState is wire-complete: the payload is right there, so the session
+            // applies it. A `valueFrom` SetState is NOT - resolving the binding needs the render
+            // context (a `Selection` reads the clicked row of a named grid), which a pure session
+            // does not carry. Routing it to the host is the honest answer; applying a placeholder
+            // would write a wrong value under a right-looking key.
+            is SetStateAction ->
+                action.value?.let { session.setState(action.key, it.encode()) } ?: host.add(action)
             // Host / closure actions — no wire-survivable session effect; hand back for host routing.
             DispatchAction,
             is CommitLocalAction,

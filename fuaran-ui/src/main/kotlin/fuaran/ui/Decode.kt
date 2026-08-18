@@ -126,6 +126,46 @@ private fun JsonObject.optDouble(key: String, path: String): Double? = this[key]
 
 private fun JsonObject.optBool(key: String, path: String): Boolean? = this[key]?.bool("$path.$key")
 
+/**
+ * The ENUMERATED near-miss refusal (WIRE_FORMAT 3.2 "Near-miss names are refused, not ignored").
+ *
+ * Rule 2 tolerates an unknown key, which is right for a field a future profile may add. It is
+ * wrong for a name that is a near miss of one that EXISTS: the tree then decodes, validates and
+ * renders while the declaration does nothing, so the emitter cannot tell a spelling mistake from
+ * a declaration that worked - a fake affordance arriving through a typo. The set is closed and
+ * small by design, and `schema.json` forbids each with `not: { required: [...] }`, so the two
+ * artefacts agree.
+ *
+ * Refused rather than ALIASED, deliberately: these are not synonyms. `currentPage` carries a
+ * literal page number the vocabulary cannot express at all, and `readOnly` is the INVERSE of
+ * `editable` - an alias that inverts a boolean makes a read-only column editable when it guesses
+ * wrong. Naming the canonical form beats guessing.
+ */
+private fun JsonObject.refuseNearMiss(path: String, canonical: Map<String, String>) {
+    for ((name, replacement) in canonical) {
+        if (this[name] != null) {
+            throw FuaranDecodeException(
+                FuaranDecodeException.WRONG_TYPE,
+                "$path.$name",
+                "'$name' is a near miss of the canonical form; use $replacement",
+            )
+        }
+    }
+}
+
+/** An integer slot with a schema-pinned lower bound (`minimum`). Below it is `WRONG_TYPE`. */
+private fun JsonValue.intAtLeast(min: Int, path: String): Int {
+    val n = int(path)
+    if (n < min) {
+        throw FuaranDecodeException(
+            FuaranDecodeException.WRONG_TYPE,
+            path,
+            "expected an integer >= $min, got $n",
+        )
+    }
+    return n
+}
+
 private fun JsonObject.strList(key: String, path: String): List<String> =
     req(key, path).array("$path.$key").mapIndexed { i, v -> v.str("$path.$key[$i]") }
 
@@ -355,9 +395,24 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 channel = decodeMountChannel(o.req("channel", path), "$path.channel"),
                 inputs = o["inputs"]?.let { decodeFragmentArgs(it, "$path.inputs") },
             )
-        "Switch" ->
+        "Switch" -> {
+            // The selector widened: `on` takes any Binding (a `Selection` makes the branch follow
+            // the clicked row), so `stateKey` is no longer required on its own. The schema states
+            // the obligation as `anyOf: [required stateKey, required on]` - at least one, and the
+            // refusal below is what makes a Switch carrying NEITHER a decode error rather than a
+            // node that silently always renders its default.
+            val stateKey = o.optStr("stateKey", path)
+            val on = o["on"]?.let { decodeBinding(it, "$path.on") }
+            if (stateKey == null && on == null) {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.MISSING_FIELD,
+                    "$path.stateKey",
+                    "a Switch selects on `stateKey` or `on`; neither is present",
+                )
+            }
             Switch(
-                stateKey = o.req("stateKey", path).str("$path.stateKey"),
+                stateKey = stateKey,
+                on = on,
                 cases = o.req("cases", path).array("$path.cases").mapIndexed { i, v ->
                     val c = v.obj("$path.cases[$i]")
                     SwitchCase(
@@ -367,6 +422,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 },
                 default = decodeNode(o.req("default", path), "$path.default"),
             )
+        }
         // Display
         "Heading" ->
             Heading(
@@ -437,6 +493,13 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 help = o["help"]?.let { decodeTextSource(it, "$path.help") },
                 icon = o.optStr("icon", path),
             )
+        "Icon" ->
+            Icon(
+                icon = o.req("icon", path).str("$path.icon"),
+                label = o.optStr("label", path),
+                size = o.optStr("size", path)?.let { enumOf<IconSize>(it, "$path.size") } ?: IconSize.Medium,
+                tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
+            )
         "Link" ->
             Link(
                 href = decodeBinding(o.req("href", path), "$path.href"),
@@ -444,6 +507,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 download = o.req("download", path).bool("$path.download"),
                 rel = o.optStr("rel", path),
                 target = o.optStr("target", path),
+                protection = o.optStr("protection", path)?.let { wireEnumOf<LinkProtection>(it, "$path.protection") },
             )
         "Image" ->
             Image(
@@ -524,7 +588,19 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 items = o.req("items", path).array("$path.items").mapIndexed { i, v -> decodeFilterItem(v, "$path.items[$i]") },
             )
         // Visualisation
-        "DataGrid" ->
+        "DataGrid" -> {
+            o.refuseNearMiss(
+                path,
+                mapOf(
+                    "currentPage" to "pageStateKey (the position lives in State as a {\"page\": N} slot)",
+                    "page" to "pageStateKey (the position lives in State as a {\"page\": N} slot)",
+                    "pageIndex" to "pageStateKey (the position lives in State as a {\"page\": N} slot)",
+                    "sortable" to "sortStateKey + a per-column `sortable` (grid-wide `sortable` is the staticRows spelling)",
+                    "onEdit" to "editStateKey",
+                    "behaviour" to "the sibling behaviour fields; grid behaviour is not a nested record",
+                    "behavior" to "the sibling behaviour fields; grid behaviour is not a nested record",
+                ),
+            )
             DataGrid(
                 columns = o.req("columns", path).array("$path.columns").mapIndexed { i, v -> decodeGridColumn(v, "$path.columns[$i]") },
                 // Field aliases: data / rows → source (the Chart.js / react-table prior).
@@ -533,7 +609,15 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 editable = o.optBool("editable", path) ?: false,
                 rowKeyField = o.optStr("rowKeyField", path),
                 staticRows = o["staticRows"]?.let { decodeStaticRows(it, "$path.staticRows") },
+                sortStateKey = o.optStr("sortStateKey", path),
+                pageStateKey = o.optStr("pageStateKey", path),
+                editStateKey = o.optStr("editStateKey", path),
+                // `minimum: 1` - a page size of zero paginates nothing, so it is malformed rather
+                // than a degenerate configuration the renderer should try to honour.
+                pageSize = o["pageSize"]?.intAtLeast(1, "$path.pageSize"),
+                defaultSort = o["defaultSort"]?.let { decodeDefaultSort(it, "$path.defaultSort") },
             )
+        }
         "Chart" ->
             Chart(
                 kind = enumOf<ChartKind>(o.req("kind", path).str("$path.kind"), "$path.kind"),
@@ -661,6 +745,8 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
                 field = o.optStr("field", path),
             )
         "Computed" -> ComputedBinding
+        // The host-furnished instant - no payload; the host clock supplies the value at resolve time.
+        "Now" -> NowBinding
         "I18n" -> I18nBinding(o.req("key", path).str("$path.key"), o["args"]?.payloadMap("$path.args"))
         "Local" ->
             LocalBinding(
@@ -675,7 +761,7 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
             )
         "Transform" ->
             TransformBinding(
-                source = o.req("source", path),
+                source = unwrapTransformSource(o.req("source", path), "$path.source"),
                 pipeline = o.req("pipeline", path),
                 params = o["params"]?.let { decodeTransformParams(it, "$path.params") },
             )
@@ -685,6 +771,45 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
         "Bound" -> decodeBinding(o.req("binding", path), "$path.binding")
         else -> unknownCase(t, path, "Binding")
     }
+}
+
+/**
+ * A `Transform`'s embedded `source` slot.
+ *
+ * The slot is a COLUMNAR table (`{schema, columns}`) or a host-resolved named source
+ * (`{schema, ref}`) - content `Fuaran.Core`'s own codec owns, so the projection holds it raw and
+ * does not decompose it. What this surface DOES owe is the one check the raw hold would otherwise
+ * skip.
+ *
+ * Models routinely wrap that table in a binding envelope (`State` / `Static` / `Bound`) because
+ * every OTHER source position on the wire takes a Binding. The envelope is accepted and unwraps to
+ * its payload before the columnar decode - initial-snapshot semantics, pinned by
+ * `lenient/lenient-transform-source-state-rows`. An envelope carrying NO payload member is a
+ * different thing entirely: there is nothing to unwrap to, so the transform has no data and the
+ * grid renders empty with no indication that a source was ever declared. That is refused
+ * (`reject/reject-transform-source-empty-wrapper`).
+ *
+ * The value is returned UNCHANGED - the canonical form keeps the envelope, so this validates
+ * rather than rewrites.
+ */
+private fun unwrapTransformSource(value: JsonValue, path: String): JsonValue {
+    val o = value as? JsonObject ?: return value
+    val payloadKey =
+        when ((o["\$type"] as? JsonString)?.value) {
+            "State" -> if (o["defaultValue"] != null) null else if (o["value"] != null) null else "defaultValue` or `value"
+            "Static" -> if (o["value"] != null) null else "value"
+            "Bound" -> if (o["binding"] != null) null else "binding"
+            // Not an envelope: the ordinary columnar table, passed through untouched.
+            else -> null
+        }
+    if (payloadKey != null) {
+        throw FuaranDecodeException(
+            FuaranDecodeException.WRONG_TYPE,
+            path,
+            "a Transform source envelope carries no `$payloadKey` to unwrap to, so the transform has no data",
+        )
+    }
+    return value
 }
 
 /**
@@ -746,11 +871,29 @@ private fun decodeAction(value: JsonValue, path: String): Action {
                     ?: throw FuaranDecodeException(FuaranDecodeException.MISSING_FIELD, "$path.route", "required field absent")
             NavigateAction(route = v.str("$path.route"))
         }
-        "SetState" ->
-            SetStateAction(
-                key = o.req("key", path).str("$path.key"),
-                value = o.req("value", path).payload("$path.value"),
-            )
+        "SetState" -> {
+            // `oneOf: [required value, required valueFrom]` - a literal payload OR a binding
+            // resolved at dispatch time, never both. Both-present is refused rather than settled
+            // by precedence: the two say different things about where the value comes from, and
+            // silently preferring one hands the emitter a write it did not ask for.
+            val v = o["value"]?.payload("$path.value")
+            val from = o["valueFrom"]?.let { decodeBinding(it, "$path.valueFrom") }
+            if (v != null && from != null) {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    "$path.valueFrom",
+                    "a SetState carries `value` or `valueFrom`, not both",
+                )
+            }
+            if (v == null && from == null) {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.MISSING_FIELD,
+                    "$path.value",
+                    "a SetState carries `value` or `valueFrom`; neither is present",
+                )
+            }
+            SetStateAction(key = o.req("key", path).str("$path.key"), value = v, valueFrom = from)
+        }
         "AiTool" ->
             AiToolAction(
                 toolName = o.req("toolName", path).str("$path.toolName"),
@@ -825,6 +968,12 @@ private fun decodeValueFormat(value: JsonValue, path: String): ValueFormat {
         "Percent" -> PercentValueFormat(o.optInt("decimals", path))
         "SignificantDigits" -> SignificantDigitsValueFormat(o.req("digits", path).int("$path.digits"))
         "Date" -> DateValueFormat(o.req("format", path).str("$path.format"))
+        "Duration" ->
+            DurationValueFormat(
+                unit = enumOf<DurationUnit>(o.req("unit", path).str("$path.unit"), "$path.unit"),
+                style = enumOf<DurationStyle>(o.req("style", path).str("$path.style"), "$path.style"),
+            )
+        "RelativeTime" -> RelativeTimeValueFormat(enumOf<RelativeTimeUnit>(o.req("unit", path).str("$path.unit"), "$path.unit"))
         "Custom" -> CustomValueFormat
         else -> unknownCase(t, path, "ValueFormat")
     }
@@ -896,6 +1045,8 @@ private fun decodeFormFieldKind(value: JsonValue, path: String, autoBind: Contro
         "Text" -> TextField(valueOr(JsonString("")))
         "Number" -> NumberField(valueOr(JsonNumber("0")))
         "Checkbox" -> CheckboxField(valueOr(JsonBool(false)))
+        // The switch affordance beside a Checkbox: the same boolean slot, a different control.
+        "Toggle" -> ToggleField(valueOr(JsonBool(false)))
         "Choice" ->
             ChoiceField(
                 options = decodeBinding(o.req("options", path), "$path.options"),
@@ -1068,6 +1219,7 @@ private fun decodeLocalFlushTrigger(value: JsonValue, path: String): LocalFlushT
 
 private fun decodeGridColumn(value: JsonValue, path: String): GridColumn {
     val o = value.obj(path)
+    o.refuseNearMiss(path, mapOf("readOnly" to "editable: false (readOnly is its inverse)"))
     return GridColumn(
         // Field aliases: header / title → label, type → kind (the react-table prior).
         label = o.reqAliased("label", path, "header", "title").str("$path.label"),
@@ -1183,6 +1335,21 @@ private fun decodeStaticRows(value: JsonValue, path: String): StaticRows {
         rows = o.req("rows", path).array("$path.rows").mapIndexed { i, row ->
             row.array("$path.rows[$i]").mapIndexed { j, cell -> decodeTextSource(cell, "$path.rows[$i][$j]") }
         },
+        defaultSort = o["defaultSort"]?.let { decodeDefaultSort(it, "$path.defaultSort") },
+        sortable = o.optBool("sortable", path),
+    )
+}
+
+/**
+ * An initial sort. Both members are closed: `column` is a zero-based header INDEX (`minimum: 0`,
+ * so a negative is malformed rather than a from-the-end convention) and `direction` is the
+ * `asc | desc` pair, which default-denies anything else.
+ */
+private fun decodeDefaultSort(value: JsonValue, path: String): DefaultSort {
+    val o = value.obj(path)
+    return DefaultSort(
+        column = o.req("column", path).intAtLeast(0, "$path.column"),
+        direction = wireEnumOf<SortDirection>(o.req("direction", path).str("$path.direction"), "$path.direction"),
     )
 }
 

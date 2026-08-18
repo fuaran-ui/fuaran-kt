@@ -60,3 +60,36 @@ inline fun <reified E : Enum<E>> enumOf(raw: String, path: String): E =
             path,
             "unrecognised ${E::class.simpleName} '$raw'; expected one of ${enumValues<E>().joinToString(", ") { it.name }}",
         )
+
+enum class IconSize { Small, Medium, Large }
+
+enum class DurationUnit { Seconds, Minutes, Hours }
+
+enum class DurationStyle { Compact, Clock, Long }
+
+/**
+ * A bare-string enum whose wire spelling is NOT its Kotlin case name.
+ *
+ * Most of the wire's enums are PascalCase and [enumOf] matches them by constant name. Two are
+ * lower-case by specification — `SortDirection` (`asc` / `desc`) and `LinkProtection` (`email`)
+ * — so they carry their spelling explicitly rather than forcing a lower-case Kotlin constant.
+ * Resolution goes through [wireEnumOf], which raises the same typed `UNKNOWN_DU_CASE`.
+ */
+interface WireEnum {
+    val wire: String
+}
+
+/** `staticRows.defaultSort.direction` / a grid's `defaultSort.direction` — a closed pair. */
+enum class SortDirection(override val wire: String) : WireEnum { Asc("asc"), Desc("desc") }
+
+/** `Link.protection` — the obfuscation the host applies to a rendered `mailto:` href. */
+enum class LinkProtection(override val wire: String) : WireEnum { Email("email") }
+
+/** Resolve a bare-enum string by its WIRE spelling, or raise `UNKNOWN_DU_CASE` at [path]. */
+inline fun <reified E> wireEnumOf(raw: String, path: String): E where E : Enum<E>, E : WireEnum =
+    enumValues<E>().firstOrNull { it.wire == raw }
+        ?: throw FuaranDecodeException(
+            FuaranDecodeException.UNKNOWN_DU_CASE,
+            path,
+            "unrecognised ${E::class.simpleName} '$raw'; expected one of ${enumValues<E>().joinToString(", ") { it.wire }}",
+        )

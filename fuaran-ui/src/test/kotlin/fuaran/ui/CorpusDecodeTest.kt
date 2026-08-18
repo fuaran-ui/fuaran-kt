@@ -428,6 +428,99 @@ fun main() {
         if ((DispatchAction as Action).sanitizedNavigateRoute != null) error("only Navigate carries a route")
     }
 
+    // ----------------------------------------------------------------------- //
+    // The SANITIZATION family (WIRE_FORMAT 19 + 22) - semantic invariants
+    // ----------------------------------------------------------------------- //
+    //
+    // Unlike every other family here this one is NOT byte-parity: the markup a host emits
+    // around a URL differs legitimately between an F# React renderer, a Go static-HTML
+    // emitter and this native projection, so comparing bytes would pin accidents. The family
+    // states invariants instead, and each case carries the URL parser's own verdict
+    // (`off-origin` / `same-origin` / `scheme-refused`) so a "must reject this" claim is
+    // backed by what a real parser does rather than by a reading of the specification.
+    //
+    // ONE group applies to this surface, and the reasons the others do not are recorded
+    // rather than left to inference:
+    //
+    //   * `url-floor` (19) - APPLICABLE and asserted. `Link.href`, `Image.src` and
+    //     `Navigate.route` all reach the embedding app, which may hand them to an Intent or
+    //     a browser, so the scheme floor is this surface's real exposure.
+    //   * `markdown-body`, `text-source` (22) - NOT APPLICABLE. There is no markup emission
+    //     and no HTML-parsing text path anywhere in this projection: text reaches a Compose
+    //     Text node as CONTENT, so there is no markup for a payload to break out of. That is
+    //     a structural property of rendering into native views, not a gap.
+    //   * `extra-attributes` (22) - NOT APPLICABLE. The ExtraAttributes seam does not exist
+    //     on a decoded tree here, and every attribute this renderer sets is
+    //     renderer-controlled. (The same declaration `fuaran-go` makes, for the same reason.)
+    //
+    // The CLAIMED-GROUPS GUARD below is the load-bearing part. Without it a group added to
+    // the corpus later would read as covered while being silently untested - the exact shape
+    // 22.2 refuses - so a group this leg neither runs nor names as not-applicable FAILS.
+    val notApplicableGroups =
+        mapOf(
+            "markdown-body" to "no markup emission and no HTML-parsing text path - text renders as content",
+            "text-source" to "no markup emission and no HTML-parsing text path - text renders as content",
+            "extra-attributes" to "the ExtraAttributes seam does not exist on a decoded tree here",
+        )
+
+    val sanitizationManifest = File(File(corpus, "sanitization"), "manifest.json")
+    if (!sanitizationManifest.isFile) {
+        println("FAIL: sanitization/manifest.json absent - the render-time floor family did not run")
+        kotlin.system.exitProcess(1)
+    }
+    val sanRoot = Json.parse(sanitizationManifest.readText()) as JsonObject
+    val sanGroups = (sanRoot["groups"] as JsonArray).items.map { it as JsonObject }
+    var urlFloorCases = 0
+    for (g in sanGroups) {
+        val gid = (g["id"] as JsonString).value
+        if (gid == "url-floor") {
+            val cases = (g["cases"] as JsonArray).items.map { it as JsonObject }
+            urlFloorCases = cases.size
+            for (c in cases) {
+                val id = (c["id"] as JsonString).value
+                val input = (c["input"] as JsonString).value
+                val invariant = (c["invariant"] as JsonString).value
+                val expected = (c["expected"] as? JsonString)?.value
+                runner.check("sanitization/url-floor/$id") {
+                    val got = FuaranUrlPolicy.sanitize(input)
+                    when (invariant) {
+                        "reject" ->
+                            if (got != null) {
+                                error("the floor ACCEPTED '$input' as '$got' (reason: ${(c["reason"] as? JsonString)?.value})")
+                            }
+                        "accept" -> {
+                            if (got == null) error("the floor REJECTED '$input', which resolves same-origin")
+                            // The emitted form is the 19 rule-1 normalised one, which is NOT
+                            // always the input: an accepted URL carrying an interior tab loses
+                            // it, because that is what a parser would have read anyway.
+                            if (expected != null && got != expected) {
+                                error("expected the normalised form '$expected', got '$got'")
+                            }
+                        }
+                        else -> error("unknown invariant '$invariant'")
+                    }
+                }
+            }
+            continue
+        }
+        val reason = notApplicableGroups[gid]
+        if (reason == null) {
+            println(
+                "FAIL: sanitization group '$gid' is neither run nor declared not-applicable - " +
+                    "it would read as covered while being untested",
+            )
+            kotlin.system.exitProcess(1)
+        }
+        // Logged, not silent: a reader sees WHY the group did not execute rather than
+        // inferring it from an absence.
+        println("sanitization/$gid: NOT APPLICABLE - $reason")
+    }
+    if (urlFloorCases == 0) {
+        println("FAIL: the sanitization url-floor group enumerated ZERO cases")
+        kotlin.system.exitProcess(1)
+    }
+    println("sanitization/url-floor: $urlFloorCases cases asserted against the URL floor")
+
     val decoded = nodeFixtures.size + lenientFixtures.size
     println()
     println("Per-NodeKind coverage (${coverage.size} distinct kinds across $decoded decoded fixtures):")
