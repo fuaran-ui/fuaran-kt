@@ -9,6 +9,9 @@ import fuaran.ui.ComputedBinding
 import fuaran.ui.CurrencyValueFormat
 import fuaran.ui.CustomValueFormat
 import fuaran.ui.DateValueFormat
+import fuaran.ui.DurationStyle
+import fuaran.ui.DurationUnit
+import fuaran.ui.DurationValueFormat
 import fuaran.ui.ExplicitLocale
 import fuaran.ui.FilterBinding
 import fuaran.ui.FormatBinding
@@ -22,12 +25,14 @@ import fuaran.ui.JsonNumber
 import fuaran.ui.JsonObject
 import fuaran.ui.JsonString
 import fuaran.ui.JsonValue
+import fuaran.ui.NowBinding
 import fuaran.ui.LiteralText
 import fuaran.ui.LocalBinding
 import fuaran.ui.NoValueFormat
 import fuaran.ui.NumberValueFormat
 import fuaran.ui.PercentValueFormat
 import fuaran.ui.QueryBinding
+import fuaran.ui.RelativeTimeValueFormat
 import fuaran.ui.ResolvedRows
 import fuaran.ui.SelectionBinding
 import fuaran.ui.SignificantDigitsValueFormat
@@ -83,6 +88,11 @@ class BindingContext(
                     ?: binding.defaultValue?.let(::jsonScalar)
                     ?: ""
             is QueryBinding -> ""
+            // The host clock supplies the instant. This render floor has no clock seam of
+            // its own (that is host work, like Format's number/date rendering), so it
+            // resolves empty rather than inventing a time that would then disagree with
+            // whatever the host eventually supplies.
+            NowBinding -> ""
             // 0.2.0/0.2.9 — the declared defaultValue is yielded until the slot is first written.
             is FilterBinding -> binding.defaultValue?.let(::jsonScalar) ?: ""
             is SelectionBinding -> binding.defaultValue?.let(::jsonScalar) ?: ""
@@ -155,6 +165,41 @@ fun projectRowFieldString(row: JsonValue, field: String): String {
 }
 
 /**
+ * Render an elapsed duration. [unit] says what the raw number counts; [style] picks the
+ * spelling: `1h 5m` / `01:05:00` / `1 hour 5 minutes`.
+ */
+fun formatDuration(raw: Double, unit: DurationUnit, style: DurationStyle): String {
+    val seconds =
+        when (unit) {
+            DurationUnit.Seconds -> raw
+            DurationUnit.Minutes -> raw * 60
+            DurationUnit.Hours -> raw * 3600
+        }
+    val total = Math.round(seconds).toInt()
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val s = total % 60
+    return when (style) {
+        DurationStyle.Clock -> String.format("%02d:%02d:%02d", h, m, s)
+        DurationStyle.Compact -> {
+            val parts = mutableListOf<String>()
+            if (h > 0) parts.add("${h}h")
+            if (m > 0) parts.add("${m}m")
+            if (s > 0 || parts.isEmpty()) parts.add("${s}s")
+            parts.joinToString(" ")
+        }
+        DurationStyle.Long -> {
+            fun plural(n: Int, word: String) = "$n $word" + if (n == 1) "" else "s"
+            val parts = mutableListOf<String>()
+            if (h > 0) parts.add(plural(h, "hour"))
+            if (m > 0) parts.add(plural(m, "minute"))
+            if (s > 0 || parts.isEmpty()) parts.add(plural(s, "second"))
+            parts.joinToString(" ")
+        }
+    }
+}
+
+/**
  * Apply a column's [ValueFormat] to a projected value, for the cell kinds that display a
  * formatted datum. Non-numeric text and structural formats fall through unchanged rather than
  * inventing a rendering.
@@ -167,6 +212,12 @@ fun formatCellValue(text: String, format: ValueFormat): String {
         is CurrencyValueFormat -> "${format.code} " + String.format("%.2f", n)
         is PercentValueFormat -> String.format("%.${format.decimals ?: 0}f%%", n * 100)
         is SignificantDigitsValueFormat -> String.format("%.${format.digits}g", n)
+        is DurationValueFormat -> formatDuration(n, format.unit, format.style)
+        // Relative time needs a REFERENCE instant to be relative to, which is host state
+        // (`NowBinding`), not something this pure formatter holds. Rendering the raw count
+        // with its unit is honest; "3 minutes ago" against a clock this floor does not have
+        // would disagree with the host the moment one exists.
+        is RelativeTimeValueFormat -> "$text ${format.unit.name.lowercase()}"
     }
 }
 

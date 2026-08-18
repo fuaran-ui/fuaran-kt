@@ -491,8 +491,12 @@ private fun RenderIcon(k: Icon, ctx: BindingContext) {
         modifier = Modifier
             .padding(2.dp)
             .semantics {
-                if (k.label != null) {
-                    contentDescription = k.label
+                // Bound outside the lambda: `k.label` is a property of a data class the
+                // compiler cannot prove is unchanged across the closure boundary, so the
+                // smart cast is unavailable inside it.
+                val described = k.label
+                if (described != null) {
+                    contentDescription = described
                     role = Role.Image
                 } else {
                     hideFromAccessibility()
