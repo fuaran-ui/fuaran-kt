@@ -138,10 +138,31 @@ import androidx.compose.material3.Button as M3Button
  * wire-JSON parsing happens here (decode ran first, in `:fuaran-ui`). The `when` over the sealed
  * [NodeKind] is **exhaustive with no `else`**, so a new wire kind is a compile error until its arm
  * lands (the render-floor twin of Phase 542's decode spine).
+ *
+ * The node's **accessibility projection** is applied here and nowhere else. A Compose surface has no
+ * wrapper composable, so [RenderNodeKind] emits exactly what the kind arm renders — the node's
+ * semantic element — and the projection lands on it at this single site, which is the reference
+ * host's placement rule (`../fuaran-dotnet/docs/DECISIONS.md` D4) in the only shape this platform
+ * offers. See `Accessibility.kt`. A node with no projectable trait is emitted through the unwrapped
+ * path, so the render for the shared corpus (no fixture of which carries the trait) is unchanged.
  */
 @Composable
 fun FuaranNode(node: Node, ctx: BindingContext = BindingContext.Empty) {
     LocalRenderCoverage.current?.count(node.kind.discriminator())
+    val a11y = accessibilityProjection(node.accessibility, ctx)
+    if (a11y.isEmpty) {
+        RenderNodeKind(node, ctx)
+    } else {
+        // A semantics-bearing container is the only way to attach semantics to a composable that
+        // does not itself take a Modifier. It adds no visual chrome and — because it is reached only
+        // when the node carries a projectable trait — it is off the path for every other node.
+        CBox(Modifier.fuaranAccessibility(a11y)) { RenderNodeKind(node, ctx) }
+    }
+}
+
+/** The kind dispatch: the `when` over the sealed [NodeKind], exhaustive with no `else`. */
+@Composable
+private fun RenderNodeKind(node: Node, ctx: BindingContext) {
     when (val k = node.kind) {
         // Layout
         is Box -> RenderBox(k, ctx)

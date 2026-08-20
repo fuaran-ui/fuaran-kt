@@ -184,6 +184,59 @@ looks correct, and the value never reaches the session store. Phase 667 found fi
 `onClick` at all) — where the 2026-07-25 survey had named two. A test per arm in
 `WriteBackGapTest` is the only real guard; add one with the arm.
 
+## Accessibility projection — the mapping, and what is dropped
+
+A node's `Accessibility` trait carries six slots. The HTML render tiers project them into `aria-*`
+attributes; a Compose surface has no attribute bag, so the projection is a mapping onto **semantics
+properties** — and the two vocabularies do not correspond one-for-one. The mapping lives in
+`fuaran-renderer/.../Accessibility.kt`; the decision is here.
+
+| slot | Compose `semantics {}` |
+|---|---|
+| `label` | `contentDescription`, resolved through the binding; an empty resolved label is dropped |
+| `labelledBy` | **no mapping** — dropped, reported |
+| `describedBy` | **no mapping** — dropped, reported |
+| `role` | `button` → `Role.Button`, `tab` → `Role.Tab`, `heading` → `heading()`; every other token **dropped, reported** |
+| `liveRegion` | `polite` / `assertive` → `LiveRegionMode.Polite` / `.Assertive` — an **exact** mapping; `off` → nothing (`off` is the platform default) |
+| `hidden` | `hideFromAccessibility()` when the binding resolves true |
+
+**An unmappable slot is DROPPED, never refused — and never silently.** Two halves, both
+load-bearing:
+
+*Never refused.* A render surface does not reject a tree the wire declares valid. Refusing would
+fork the vocabulary by platform — the same tree would render on one surface and fail on another —
+and it would make an author's `aria-describedby` a portability hazard rather than a hint. This
+module's own model already says so ("carried best-effort for the render projection").
+
+*Never silently.* Silence is the defect this closed: the trait decoded into the model and was
+dropped on the floor, with nothing recording that a question had been asked. So the projection
+**returns its drop set** (`AccessibilityProjection.unmapped`, in wire-slot order), the tests assert
+it slot by slot, and this table enumerates it. A slot that becomes mappable moves from one list to
+the other and the assertion goes red until both are updated — which is what makes the drop set a
+decision rather than an omission.
+
+**Placement is by construction, not by convention.** The reference host decides which element
+carries the projection (`../fuaran-dotnet/docs/DECISIONS.md`, D4: the node's semantic element, not
+its wrapper `<div>`). A Compose surface has no wrapper — `RenderNodeKind` emits exactly what the
+kind arm renders — so the projection is applied at the single dispatch site in `FuaranNode` and
+nowhere else. Compose cannot attach semantics to a composable that does not take a `Modifier`, so
+the site uses a semantics-bearing `Box` that adds no visual chrome; it is reached **only** when the
+node carries a projectable trait, so every other node reaches exactly the composable it did before.
+`mergeDescendants` is set only when a label is projected — that is what makes `contentDescription`
+rename the node rather than add a second announced element beside its content.
+
+**One approximation was declined**, and is worth stating so it is not re-proposed as an
+improvement: `role: "link"` as `Role.Button`. Compose has no link role, and announcing a link as a
+button is a mis-statement rather than a partial one. Note the sibling Swift surface maps `link`
+genuinely (`.isLink`) and cannot map `tab`, which this one can — the two native surfaces have
+**different drop sets** by design. Neither is the other's parity target; both answer to the
+reference `aria-*` projection.
+
+**Forward-coupling.** A new slot on the wire trait, or a new ARIA role token, updates the mapping
+table above, `roleSemanticsOf`, and the drop-set assertions in `AccessibilityProjectionTest` in the
+same change — the same shape as the write-back rule above, and for the same reason: nothing in the
+compiler can tell that a slot went unread.
+
 ## Public vocabulary discipline
 
 fuaran-kt is OSS-public (Apache 2.0). Per the workspace OSS publication boundary,
