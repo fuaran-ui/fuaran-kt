@@ -43,21 +43,47 @@ private class Runner {
     }
 }
 
+private val CORPUS_CANDIDATES =
+    listOf(
+        "../wire-format-fixtures",
+        "../../wire-format-fixtures",
+        "wire-format-fixtures",
+        "fuaran-kt/../wire-format-fixtures",
+    )
+
+/**
+ * Sibling hosts whose presence proves this is a CROSS-HOST checkout — the shape the
+ * conformance gate is built from — rather than a standalone clone of this repo alone.
+ * Excludes this host.
+ */
+private val SIBLING_HOST_NAMES =
+    listOf("fuaran-dotnet", "fuaran", "fuaran-ts", "fuaran-py", "fuaran-go", "fuaran-rs", "fuaran-swift")
+
 private fun locateCorpus(): File? {
     System.getenv("FUARAN_CORPUS")?.let {
         val f = File(it)
         if (File(f, "manifest.json").isFile) return f
     }
-    val candidates =
-        listOf(
-            "../wire-format-fixtures",
-            "../../wire-format-fixtures",
-            "wire-format-fixtures",
-            "fuaran-kt/../wire-format-fixtures",
-        )
-    for (c in candidates) {
+    for (c in CORPUS_CANDIDATES) {
         val f = File(c)
         if (File(f, "manifest.json").isFile) return f
+    }
+    return null
+}
+
+/**
+ * Walks up from the working directory looking for a sibling host. A hit means the corpus
+ * is absent from a checkout that plainly HAS one — it moved, was renamed, or the harness's
+ * candidate list went stale — and the right answer is to fail, not to skip.
+ */
+private fun crossHostSibling(): Pair<String, File>? {
+    var dir: File? = File(".").absoluteFile
+    while (dir != null) {
+        for (name in SIBLING_HOST_NAMES) {
+            val candidate = File(dir, name)
+            if (candidate.isDirectory) return name to dir
+        }
+        dir = dir.parentFile
     }
     return null
 }
@@ -94,6 +120,27 @@ private fun manifestFixtures(manifestJson: String): List<Fixture> {
 fun main() {
     val corpus = locateCorpus()
     if (corpus == null) {
+        // A missing corpus has two very different meanings, and collapsing them into one
+        // clean `SKIP` + exit 0 is a vacuous green: on a standalone clone the skip is
+        // honest, but on a cross-host checkout it means the conformance gate silently
+        // certified NOTHING while reporting success. Discriminate, and fail loudly in
+        // the second case — naming every path that was tried, so the fix is to correct
+        // the candidate list rather than to let the harness keep skipping.
+        val sibling = crossHostSibling()
+        if (sibling != null) {
+            val (name, at) = sibling
+            println(
+                "FAIL: cross-host checkout detected ($name/ is present under ${at.path}) but the " +
+                    "wire-format-fixtures corpus is at none of the paths tried — this gate certified NOTHING.",
+            )
+            println("  FUARAN_CORPUS=${System.getenv("FUARAN_CORPUS") ?: "<unset>"}")
+            for (c in CORPUS_CANDIDATES) println("  tried: ${File(c).absolutePath}")
+            println(
+                "  If the corpus moved or was renamed, add the new location to CORPUS_CANDIDATES " +
+                    "rather than letting the harness skip.",
+            )
+            kotlin.system.exitProcess(1)
+        }
         println("SKIP: wire-format-fixtures corpus not found (set FUARAN_CORPUS or run from the repo). Nothing to certify.")
         return
     }
@@ -356,6 +403,130 @@ fun main() {
             if (e.code != FuaranDecodeException.MISSING_FIELD) error("expected MISSING_FIELD, got ${e.code}")
             if (e.path != wantPath) error("expected $wantPath, got ${e.path}")
         }
+    }
+
+    // ----------------------------------------------------------------------- //
+    // The §21 RESOURCE LIMITS — the host-local half
+    // ----------------------------------------------------------------------- //
+    //
+    // The corpus pins three of the five bounds (node depth past the limit, node depth AT
+    // the limit, and the syntactic boundary from both sides). The two LINEAR limits stay
+    // host-local by the corpus's own decision: committing a megabyte of "aaaa…" to a
+    // shared repository to assert one integer comparison is a poor trade, and unlike the
+    // depth bounds they are not a recursion hazard. So they are asserted here, generated
+    // from a rule rather than stored — as every ported host does.
+    //
+    // The boundary cases matter more than the breaches. A guard one level too TIGHT
+    // refuses a document every host must accept, and a refusal-only family passes
+    // throughout that defect.
+    // Built from the inside out, the same rule the corpus's stored depth fixtures follow:
+    // n levels of `Box`, the innermost carrying no children. One tree level is three JSON
+    // levels here (the node object, its `children` array, the child object), which is why
+    // the node-axis cases below stay well under the syntactic bound — otherwise a
+    // node-depth assertion could be satisfied by the syntactic guard firing first, and
+    // would pass while the node guard did nothing.
+    fun nestedNodes(n: Int): String {
+        // A `Box` needs `role` AND `layout` before it is a valid node — omit them and the
+        // decoder refuses on shape at the innermost level, which measures nothing about
+        // depth while looking exactly like a depth failure.
+        val tail = "],\"layout\":{\"\$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}}"
+        var inner = ""
+        for (i in n - 1 downTo 0) {
+            inner = "{\"id\":\"n$i\",\"kind\":{\"\$type\":\"Box\",\"children\":[$inner$tail"
+        }
+        return inner
+    }
+
+    fun limitCodeOf(json: String): String =
+        try {
+            decodeNode(json)
+            "ACCEPTED"
+        } catch (e: FuaranDecodeException) {
+            e.code
+        }
+
+    runner.check("limits/node-depth-at-the-limit-decodes") {
+        // Rule 1, and the half hosts actually fail: two of the codec hosts aborted the
+        // process on exactly this document.
+        decodeNode(nestedNodes(WireLimits.MAX_NODE_DEPTH))
+    }
+    runner.check("limits/node-depth-one-past-the-limit-is-refused") {
+        val got = limitCodeOf(nestedNodes(WireLimits.MAX_NODE_DEPTH + 1))
+        if (got != FuaranDecodeException.LIMIT_EXCEEDED) error("expected LIMIT_EXCEEDED, got $got")
+    }
+    runner.check("limits/a-deep-tree-is-a-limit-breach-not-invalid-json") {
+        // The distinction the format is explicit about: the input is well-formed and
+        // merely too large to walk, so INVALID_JSON is an actively wrong diagnosis.
+        // All three stay under the SYNTACTIC bound (3 JSON levels per tree level), so
+        // each one is genuinely the node guard answering.
+        for (n in listOf(25, 40, 80)) {
+            val got = limitCodeOf(nestedNodes(n))
+            if (got != FuaranDecodeException.LIMIT_EXCEEDED) error("depth $n: expected LIMIT_EXCEEDED, got $got")
+        }
+    }
+    runner.check("limits/bare-nesting-at-the-syntactic-limit-fails-on-SHAPE") {
+        // Exactly MAX_JSON_DEPTH levels: not a valid node, so it must fail — but on
+        // shape, NOT as a limit breach. A guard one level too tight answers
+        // LIMIT_EXCEEDED here, which is the off-by-one that made the host family
+        // disagree at this boundary.
+        val doc = "[".repeat(WireLimits.MAX_JSON_DEPTH) + "]".repeat(WireLimits.MAX_JSON_DEPTH)
+        val got = limitCodeOf(doc)
+        if (got != FuaranDecodeException.WRONG_TYPE) error("expected WRONG_TYPE (a shape failure), got $got")
+    }
+    runner.check("limits/bare-nesting-one-past-the-syntactic-limit-is-refused") {
+        val n = WireLimits.MAX_JSON_DEPTH + 1
+        val got = limitCodeOf("[".repeat(n) + "]".repeat(n))
+        if (got != FuaranDecodeException.LIMIT_EXCEEDED) error("expected LIMIT_EXCEEDED, got $got")
+    }
+    runner.check("limits/genuinely-malformed-input-is-still-INVALID_JSON") {
+        // The other direction: adding the limit codes must not turn a syntax error into
+        // a limit report.
+        val got = limitCodeOf("{\"id\":\"x\",")
+        if (got != FuaranDecodeException.INVALID_JSON) error("expected INVALID_JSON, got $got")
+    }
+    runner.check("limits/a-string-at-the-limit-is-accepted-and-one-past-it-is-refused") {
+        val atMax = "\"" + "a".repeat(WireLimits.MAX_STRING_LENGTH) + "\""
+        // A bare string is not a node, so the ACCEPTED case still fails — on shape.
+        val at = limitCodeOf(atMax)
+        if (at != FuaranDecodeException.WRONG_TYPE) error("a string at the limit must pass the reader; got $at")
+        val past = limitCodeOf("\"" + "a".repeat(WireLimits.MAX_STRING_LENGTH + 1) + "\"")
+        if (past != FuaranDecodeException.LIMIT_EXCEEDED) error("expected LIMIT_EXCEEDED, got $past")
+    }
+    runner.check("limits/an-over-long-array-is-refused") {
+        val doc = "[" + "1,".repeat(WireLimits.MAX_ARRAY_LENGTH) + "1]"
+        val got = limitCodeOf(doc)
+        if (got != FuaranDecodeException.LIMIT_EXCEEDED) error("expected LIMIT_EXCEEDED, got $got")
+    }
+    runner.check("limits/a-refused-decode-does-not-poison-the-next") {
+        // The counters are decremented in `finally` precisely so a refusal leaves no
+        // residue. Without that, each refused decode would tighten the budget until a
+        // valid tree was refused too — and the corpus, which decodes hundreds of trees in
+        // one process, would fail somewhere far from the cause.
+        repeat(50) { limitCodeOf(nestedNodes(WireLimits.MAX_NODE_DEPTH + 5)) }
+        decodeNode(nestedNodes(WireLimits.MAX_NODE_DEPTH))
+    }
+    runner.check("limits/concurrent-decodes-do-not-share-counters") {
+        // decodeNode is public library API, so concurrent decode is expected usage. If
+        // the counters were shared state rather than thread-locals this asserts on the
+        // RESULT rather than on the absence of a race report — a mis-bounded decode shows
+        // up as a valid tree refused, which is the damage that matters.
+        val ok = nestedNodes(WireLimits.MAX_NODE_DEPTH)
+        val over = nestedNodes(WireLimits.MAX_NODE_DEPTH + 1)
+        val problems = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val threads =
+            (0 until 4).map { t ->
+                Thread {
+                    repeat(40) {
+                        if (limitCodeOf(ok) != "ACCEPTED") problems.add("thread $t: a tree at the limit was refused")
+                        if (limitCodeOf(over) != FuaranDecodeException.LIMIT_EXCEEDED) {
+                            problems.add("thread $t: a tree past the limit was not refused")
+                        }
+                    }
+                }
+            }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+        if (problems.isNotEmpty()) error(problems.first())
     }
 
     // ----------------------------------------------------------------------- //

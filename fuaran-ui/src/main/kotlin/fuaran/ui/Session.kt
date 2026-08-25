@@ -230,6 +230,12 @@ class FuaranException(
                     Json.parse(envelopeJson)
                 } catch (_: JsonSyntaxException) {
                     return FuaranException("UNKNOWN", null, null, "unparseable error envelope: $envelopeJson")
+                } catch (_: JsonLimitException) {
+                    // The reader now raises a second type. This is the ERROR path, so an
+                    // escaping exception here would replace a structured failure with an
+                    // unstructured one at exactly the moment a caller is already handling
+                    // one — catch it rather than let the reader's contract leak.
+                    return FuaranException("UNKNOWN", null, null, "over-large error envelope")
                 }
             val error = (root as? JsonObject)?.get("error") as? JsonObject
                 ?: return FuaranException("UNKNOWN", null, null, envelopeJson.ifEmpty { "empty error envelope" })

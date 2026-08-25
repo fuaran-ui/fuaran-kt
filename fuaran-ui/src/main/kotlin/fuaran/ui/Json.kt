@@ -40,6 +40,18 @@ data object JsonNull : JsonValue
 class JsonSyntaxException(message: String) : Exception(message)
 
 /**
+ * Thrown when a [WireLimits] bound the READER owns is breached — syntactic nesting depth,
+ * string length, or array/object width. Maps to the `LIMIT_EXCEEDED` decode code.
+ *
+ * A distinct type, not a flag on [JsonSyntaxException], because only the reader knows
+ * which of the two happened and the format explicitly forbids collapsing them: the input
+ * is well-formed and merely too large to walk, so reporting it as malformed is an
+ * actively wrong diagnosis. The type IS the distinction, so a `catch` site cannot lose it
+ * by forgetting to read a flag.
+ */
+class JsonLimitException(message: String) : Exception(message)
+
+/**
  * Serialise a [JsonValue] back to compact JSON text. The render-projection path never re-encodes a
  * *node* (there is no canonical Kotlin encoder — that is the Rust core's job), but the interaction /
  * write-back path (Phase 545) must marshal a wire-parsed payload [JsonValue] (a `SetState` action's
@@ -119,7 +131,28 @@ object Json {
     private class Reader(val src: String) {
         var pos = 0
 
+        /**
+         * Current SYNTACTIC nesting depth (`WireLimits.MAX_JSON_DEPTH`). Incremented on
+         * the way DOWN — before the recursion that would breach the bound — so nothing
+         * has been allocated when it fires, and never by measuring the value that was
+         * built. This is a field on the reader rather than shared state precisely
+         * because a `Reader` is per-parse: two concurrent parses cannot see each other's
+         * count without any locking or thread-locals.
+         */
+        var depth = 0
+
         fun atEnd(): Boolean = pos >= src.length
+
+        /** Enters one composite level, refusing the level that would breach the bound. */
+        fun enterComposite() {
+            depth++
+            if (depth > WireLimits.MAX_JSON_DEPTH) {
+                throw JsonLimitException(
+                    "JSON nesting deeper than the wire limit MAX_JSON_DEPTH = ${WireLimits.MAX_JSON_DEPTH}; " +
+                        "expected a document nesting no more than ${WireLimits.MAX_JSON_DEPTH} levels deep",
+                )
+            }
+        }
 
         fun skipWhitespace() {
             while (pos < src.length) {
@@ -146,52 +179,81 @@ object Json {
 
         private fun readObject(): JsonObject {
             expect('{')
-            val members = LinkedHashMap<String, JsonValue>()
-            skipWhitespace()
-            if (peek() == '}') {
-                pos++
-                return JsonObject(members)
-            }
-            while (true) {
+            // BEFORE the empty-composite arm below, deliberately: every `{` counts,
+            // empty or not. Testing after it leaves the innermost level of a `{{{…}}}`
+            // payload unmeasured — the exact off-by-one that made the host family
+            // disagree by one level at the syntactic boundary.
+            enterComposite()
+            try {
+                val members = LinkedHashMap<String, JsonValue>()
                 skipWhitespace()
-                if (peek() != '"') throw JsonSyntaxException("expected object key at offset $pos")
-                val key = readString()
-                skipWhitespace()
-                expect(':')
-                skipWhitespace()
-                members[key] = readValue()
-                skipWhitespace()
-                when (val c = peek()) {
-                    ',' -> pos++
-                    '}' -> {
-                        pos++
-                        return JsonObject(members)
-                    }
-                    else -> throw JsonSyntaxException("expected ',' or '}' but saw '$c' at offset $pos")
+                if (peek() == '}') {
+                    pos++
+                    return JsonObject(members)
                 }
+                while (true) {
+                    skipWhitespace()
+                    if (peek() != '"') throw JsonSyntaxException("expected object key at offset $pos")
+                    val key = readString()
+                    skipWhitespace()
+                    expect(':')
+                    skipWhitespace()
+                    members[key] = readValue()
+                    if (members.size > WireLimits.MAX_ARRAY_LENGTH) {
+                        throw JsonLimitException(
+                            "an object has more members than the wire limit MAX_ARRAY_LENGTH = " +
+                                "${WireLimits.MAX_ARRAY_LENGTH}; expected objects of no more than " +
+                                "${WireLimits.MAX_ARRAY_LENGTH} members",
+                        )
+                    }
+                    skipWhitespace()
+                    when (val c = peek()) {
+                        ',' -> pos++
+                        '}' -> {
+                            pos++
+                            return JsonObject(members)
+                        }
+                        else -> throw JsonSyntaxException("expected ',' or '}' but saw '$c' at offset $pos")
+                    }
+                }
+            } finally {
+                depth--
             }
         }
 
         private fun readArray(): JsonArray {
             expect('[')
-            val items = ArrayList<JsonValue>()
-            skipWhitespace()
-            if (peek() == ']') {
-                pos++
-                return JsonArray(items)
-            }
-            while (true) {
+            // See the note in readObject: before the empty arm, every `[` counts.
+            enterComposite()
+            try {
+                val items = ArrayList<JsonValue>()
                 skipWhitespace()
-                items.add(readValue())
-                skipWhitespace()
-                when (val c = peek()) {
-                    ',' -> pos++
-                    ']' -> {
-                        pos++
-                        return JsonArray(items)
-                    }
-                    else -> throw JsonSyntaxException("expected ',' or ']' but saw '$c' at offset $pos")
+                if (peek() == ']') {
+                    pos++
+                    return JsonArray(items)
                 }
+                while (true) {
+                    skipWhitespace()
+                    items.add(readValue())
+                    if (items.size > WireLimits.MAX_ARRAY_LENGTH) {
+                        throw JsonLimitException(
+                            "an array is longer than the wire limit MAX_ARRAY_LENGTH = " +
+                                "${WireLimits.MAX_ARRAY_LENGTH}; expected arrays of no more than " +
+                                "${WireLimits.MAX_ARRAY_LENGTH} elements",
+                        )
+                    }
+                    skipWhitespace()
+                    when (val c = peek()) {
+                        ',' -> pos++
+                        ']' -> {
+                            pos++
+                            return JsonArray(items)
+                        }
+                        else -> throw JsonSyntaxException("expected ',' or ']' but saw '$c' at offset $pos")
+                    }
+                }
+            } finally {
+                depth--
             }
         }
 
@@ -199,6 +261,19 @@ object Json {
             expect('"')
             val sb = StringBuilder()
             while (true) {
+                // Inside the accumulation loop rather than after it: a hostile 100 MB
+                // literal is then refused partway through, rather than being built in
+                // full and measured afterwards. `> MAX` and not `>=`, so a string of
+                // exactly MAX_STRING_LENGTH characters is accepted — the limit is
+                // inclusive, and a bound one character too tight would refuse a document
+                // every other host must accept.
+                if (sb.length > WireLimits.MAX_STRING_LENGTH) {
+                    throw JsonLimitException(
+                        "a string is longer than the wire limit MAX_STRING_LENGTH = " +
+                            "${WireLimits.MAX_STRING_LENGTH}; expected strings of no more than " +
+                            "${WireLimits.MAX_STRING_LENGTH} characters",
+                    )
+                }
                 if (atEnd()) throw JsonSyntaxException("unterminated string")
                 when (val c = src[pos++]) {
                     '"' -> return sb.toString()

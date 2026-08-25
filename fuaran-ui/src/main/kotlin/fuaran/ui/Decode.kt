@@ -16,11 +16,18 @@ package fuaran.ui
 
 /** Decode a canonical wire `Node` JSON string into the typed tree. */
 fun decodeNode(json: String): Node {
+    NodeWalk.beginDocument()
     val root =
         try {
             Json.parse(json)
         } catch (e: JsonSyntaxException) {
             throw FuaranDecodeException(FuaranDecodeException.INVALID_JSON, "$", e.message ?: "invalid JSON")
+        } catch (e: JsonLimitException) {
+            // The two are NOT interchangeable: a limit breach is well-formed input that
+            // is merely too large to walk, and reporting it as INVALID_JSON is the one
+            // diagnosis the format explicitly forbids. Only the reader can tell them
+            // apart, which is why it raises two types rather than one with a flag.
+            throw FuaranDecodeException(FuaranDecodeException.LIMIT_EXCEEDED, "$", e.message ?: "resource limit exceeded")
         }
     return decodeNode(root, "$")
 }
@@ -176,17 +183,32 @@ private fun JsonObject.optStrList(key: String, path: String): List<String>? =
 // Node envelope
 // --------------------------------------------------------------------------- //
 
+/**
+ * The single funnel for NODE recursion — every child, every nested slot and the root all
+ * arrive here, which is what makes one `enterNode` call sufficient to bound the whole
+ * node axis. The counter is entered BEFORE the shape check below, so a document past the
+ * limit is refused for being too deep rather than for whatever the over-deep value
+ * happens to look like.
+ */
 private fun decodeNode(value: JsonValue, path: String): Node {
-    val obj = value.obj(path)
-    val idValue =
-        obj["id"] ?: throw FuaranDecodeException(FuaranDecodeException.MISSING_FIELD, "$path.id", "required field absent")
-    val id = idValue.str("$path.id")
-    if (id.isEmpty()) throw FuaranDecodeException(FuaranDecodeException.EMPTY_NODE_ID, "$path.id", "node id is empty")
-    val kind = decodeNodeKind(obj.req("kind", path), "$path.kind")
-    val style = obj["style"]?.let { decodeStyle(it, "$path.style") }
-    val state = obj["state"]?.let { decodeState(it, "$path.state") }
-    val accessibility = obj["accessibility"]?.let { decodeAccessibility(it, "$path.accessibility") }
-    return Node(id = id, kind = kind, style = style, state = state, accessibility = accessibility)
+    NodeWalk.enterNode(path)
+    try {
+        val obj = value.obj(path)
+        val idValue =
+            obj["id"] ?: throw FuaranDecodeException(FuaranDecodeException.MISSING_FIELD, "$path.id", "required field absent")
+        val id = idValue.str("$path.id")
+        if (id.isEmpty()) throw FuaranDecodeException(FuaranDecodeException.EMPTY_NODE_ID, "$path.id", "node id is empty")
+        val kind = decodeNodeKind(obj.req("kind", path), "$path.kind")
+        val style = obj["style"]?.let { decodeStyle(it, "$path.style") }
+        val state = obj["state"]?.let { decodeState(it, "$path.state") }
+        val accessibility = obj["accessibility"]?.let { decodeAccessibility(it, "$path.accessibility") }
+        return Node(id = id, kind = kind, style = style, state = state, accessibility = accessibility)
+    } finally {
+        // In `finally` because a default-deny decoder leaves by a throw more often than
+        // by a return, and a counter that only decrements on success would tighten with
+        // every refusal until a valid tree was refused too.
+        NodeWalk.exitNode()
+    }
 }
 
 /**
