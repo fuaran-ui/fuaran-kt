@@ -328,15 +328,34 @@ private fun decodeState(value: JsonValue, path: String): StateBehaviour {
     )
 }
 
+/**
+ * `liveRegion` is a CLOSED token set (WIRE_FORMAT 3.1), lower-case by specification rather than
+ * PascalCase, so it does not go through [enumOf]. It was read as any string, which is why this
+ * surface accepted `"urgent"`; an unknown spelling now fails `UNKNOWN_DU_CASE` naming the three.
+ */
+private fun decodeLiveRegion(value: JsonValue, path: String): String {
+    val raw = value.str(path)
+    if (raw !in LIVE_REGIONS) {
+        throw FuaranDecodeException(
+            FuaranDecodeException.UNKNOWN_DU_CASE,
+            path,
+            "unrecognised liveRegion '$raw'; expected one of ${LIVE_REGIONS.joinToString(", ")}",
+        )
+    }
+    return raw
+}
+
+private val LIVE_REGIONS = listOf("polite", "assertive", "off")
+
 private fun decodeAccessibility(value: JsonValue, path: String): Accessibility {
     val o = value.obj(path)
     return Accessibility(
-        label = o["label"]?.let { decodeBinding(it, "$path.label") },
+        label = o["label"]?.let { decodeBindingString(it, "$path.label") },
         labelledBy = o.optStr("labelledBy", path),
         describedBy = o.optStr("describedBy", path),
         role = o.optStr("role", path),
-        liveRegion = o.optStr("liveRegion", path),
-        hidden = o["hidden"]?.let { decodeBinding(it, "$path.hidden") },
+        liveRegion = o["liveRegion"]?.let { decodeLiveRegion(it, "$path.liveRegion") },
+        hidden = o["hidden"]?.let { decodeBindingBool(it, "$path.hidden") },
     )
 }
 
@@ -370,7 +389,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 // 0.2.0 — omitted-when-default (Horizontal).
                 orientation = o.optStr("orientation", path)?.let { orientationOf(it, "$path.orientation") }
                     ?: Orientation.Horizontal,
-                activeTag = o["activeTag"]?.let { decodeBinding(it, "$path.activeTag") },
+                activeTag = o["activeTag"]?.let { decodeBindingString(it, "$path.activeTag") },
                 tabTags = o.optStrList("tabTags", path),
                 tabHeaders = o["tabHeaders"]?.array("$path.tabHeaders")?.mapIndexed { i, v ->
                     decodeTabHeader(v, "$path.tabHeaders[$i]")
@@ -391,14 +410,14 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             Disclosure(
                 children = decodeNodeList(o.req("children", path), "$path.children"),
                 heading = decodeTextSource(o.reqAliased("heading", path, "title"), "$path.heading"),
-                open = decodeBinding(o.req("open", path), "$path.open"),
+                open = decodeBindingBool(o.req("open", path), "$path.open"),
                 defaultOpen = o.req("defaultOpen", path).bool("$path.defaultOpen"),
             )
         "Modal" ->
             Modal(
                 children = decodeNodeList(o.req("children", path), "$path.children"),
                 dismissable = o.req("dismissable", path).bool("$path.dismissable"),
-                open = decodeBinding(o.req("open", path), "$path.open"),
+                open = decodeBindingBool(o.req("open", path), "$path.open"),
                 // Field alias: title → heading (the universal card/modal prior).
                 heading = o.getAliased("heading", "title")?.let { decodeTextSource(it, "$path.heading") },
                 onDismiss = o["onDismiss"]?.let { decodeAction(it, "$path.onDismiss") },
@@ -524,7 +543,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             )
         "Link" ->
             Link(
-                href = decodeBinding(o.req("href", path), "$path.href"),
+                href = decodeBindingString(o.req("href", path), "$path.href"),
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 download = o.req("download", path).bool("$path.download"),
                 rel = o.optStr("rel", path),
@@ -534,7 +553,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         "Image" ->
             Image(
                 alt = decodeTextSource(o.req("alt", path), "$path.alt"),
-                src = decodeBinding(o.req("src", path), "$path.src"),
+                src = decodeBindingString(o.req("src", path), "$path.src"),
                 variant = enumOf<ImageVariant>(o.req("variant", path).str("$path.variant"), "$path.variant"),
             )
         "List" ->
@@ -545,7 +564,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         "Toast" ->
             Toast(
                 message = decodeTextSource(o.req("message", path), "$path.message"),
-                open = decodeBinding(o.req("open", path), "$path.open"),
+                open = decodeBindingBool(o.req("open", path), "$path.open"),
                 tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
                 // 0.2.0 — omitted-when-TRUE (the one inverted default).
                 dismissable = o.optBool("dismissable", path) ?: true,
@@ -577,14 +596,14 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 fields = o.req("fields", path).array("$path.fields").mapIndexed { i, v -> decodeFormField(v, "$path.fields[$i]") },
                 onSubmit = decodeAction(o.req("onSubmit", path), "$path.onSubmit"),
                 submitLabel = decodeTextSource(o.req("submitLabel", path), "$path.submitLabel"),
-                disabled = o["disabled"]?.let { decodeBinding(it, "$path.disabled") },
+                disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
             )
         "Button" ->
             Button(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 onClick = decodeAction(o.req("onClick", path), "$path.onClick"),
                 variant = buttonVariantOf(o.req("variant", path).str("$path.variant"), "$path.variant"),
-                disabled = o["disabled"]?.let { decodeBinding(it, "$path.disabled") },
+                disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
                 icon = o.optStr("icon", path),
             )
         "FileUpload" ->
@@ -592,7 +611,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 accept = o.strList("accept", path),
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 multiple = o.req("multiple", path).bool("$path.multiple"),
-                disabled = o["disabled"]?.let { decodeBinding(it, "$path.disabled") },
+                disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
             )
         "Select" ->
             Select(
@@ -603,7 +622,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 value = o["value"]?.let { decodeBinding(it, "$path.value") },
                 values = o["values"]?.let { decodeBinding(it, "$path.values") },
                 placeholder = o["placeholder"]?.let { decodeTextSource(it, "$path.placeholder") },
-                disabled = o["disabled"]?.let { decodeBinding(it, "$path.disabled") },
+                disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
             )
         "Filters" ->
             Filters(
@@ -700,7 +719,7 @@ private fun decodeTabHeader(value: JsonValue, path: String): TabHeader {
     return TabHeader(
         label = decodeTextSource(o.req("label", path), "$path.label"),
         icon = o.optStr("icon", path),
-        disabled = o["disabled"]?.let { decodeBinding(it, "$path.disabled") },
+        disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
     )
 }
 
@@ -732,6 +751,31 @@ private fun decodeTextSource(value: JsonValue, path: String): TextSource {
 // --------------------------------------------------------------------------- //
 // Binding
 // --------------------------------------------------------------------------- //
+
+/**
+ * A `Binding<string>` / `Binding<bool>` slot — the typed SCALAR positions.
+ *
+ * WIRE_FORMAT 3.6's bare-scalar coercion is about SHAPE: every `Binding` case is a
+ * `$type`-discriminated object, so a bare scalar can only mean `Static`. The slot's own type still
+ * governs the VALUE, which is why `{"hidden": "yes"}` must be refused even though
+ * `{"label": "Home"}` is sanctioned shorthand. Without the check this surface decoded every
+ * wrong-typed scalar with its value preserved verbatim.
+ *
+ * Only the `Static` payload is checked. The other value-carrying arms hold their default raw (the
+ * render projection never types them), so typing them here would be a separate behaviour change
+ * with no fixture pinning it.
+ */
+private fun decodeBindingScalar(value: JsonValue, path: String, expect: (JsonValue, String) -> Unit): Binding {
+    val b = decodeBinding(value, path)
+    if (b is StaticBinding) expect(b.value, path)
+    return b
+}
+
+private fun decodeBindingString(value: JsonValue, path: String): Binding =
+    decodeBindingScalar(value, path) { v, p -> v.str(p) }
+
+private fun decodeBindingBool(value: JsonValue, path: String): Binding =
+    decodeBindingScalar(value, path) { v, p -> v.bool(p) }
 
 private fun decodeBinding(value: JsonValue, path: String): Binding {
     // Lenient shape coercion (§3.6, mirrored from the reference core): a bare array or
@@ -1480,9 +1524,9 @@ private fun decodeCurveCommand(value: JsonValue, path: String): CurveCommand {
 private fun decodeDrawStyle(value: JsonValue, path: String): DrawStyle {
     val o = value.obj(path)
     return DrawStyle(
-        fill = o["fill"]?.let { decodeBinding(it, "$path.fill") },
+        fill = o["fill"]?.let { decodeBindingString(it, "$path.fill") },
         opacity = o["opacity"]?.let { decodeBinding(it, "$path.opacity") },
-        stroke = o["stroke"]?.let { decodeBinding(it, "$path.stroke") },
+        stroke = o["stroke"]?.let { decodeBindingString(it, "$path.stroke") },
         strokeWidth = o["strokeWidth"]?.let { decodeBinding(it, "$path.strokeWidth") },
         emphasis = o.optStr("emphasis", path),
         fontFamily = o.optStr("fontFamily", path),
