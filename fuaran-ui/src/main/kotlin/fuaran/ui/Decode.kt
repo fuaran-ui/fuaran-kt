@@ -61,13 +61,67 @@ private fun JsonValue.str(path: String): String =
     (unwrapStaticEnvelope() as? JsonString)?.value
         ?: throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, path, "expected string")
 
+/**
+ * The three non-finite spellings a FLOAT slot accepts beside a JSON number (WIRE_FORMAT 7).
+ * JSON has no non-finite number literal, so the wire spells the three IEEE-754 values as
+ * strings — and as EXACTLY these strings, case-sensitive.
+ *
+ * Matched by map lookup (`equals`) against the literals, never by a parse, and that is
+ * load-bearing on this platform rather than a stylistic choice. `"nan".toDoubleOrNull()`
+ * returns NaN on the JVM, because `Double.parseDouble` is case-INSENSITIVE — and it also
+ * accepts `"Infinity"` with a leading `+`, the `1d` / `2.5f` type suffixes, hex literals like
+ * `0x1p3`, and leading/trailing whitespace. A parse-based reader would therefore admit a whole
+ * family of spellings the format refuses, silently and with the value preserved; the corpus
+ * pins the smallest of them (`"nan"` at a float slot) as WRONG_TYPE. The SET is the contract,
+ * so there is no parse left to get wrong.
+ *
+ * An INTEGER slot has no counterpart. `requireInt`'s vocabulary is JSON numbers alone — there
+ * is no non-finite integer, so `"NaN"` at an int slot is WRONG_TYPE, not a sentinel.
+ */
+private val FLOAT_SENTINELS: Map<String, Double> =
+    mapOf(
+        "NaN" to Double.NaN,
+        "Infinity" to Double.POSITIVE_INFINITY,
+        "-Infinity" to Double.NEGATIVE_INFINITY,
+    )
+
+/**
+ * An INTEGER slot: a JSON number, truncated by an integer cast. Deliberately narrower than
+ * [double] — see [FLOAT_SENTINELS].
+ *
+ * The discrimination is on the JSON AST's own case, never on a widening numeric conversion, so
+ * a `true` cannot reach a numeric slot by way of a boolean-to-number coercion the platform
+ * would happily perform.
+ */
 private fun JsonValue.int(path: String): Int =
     (unwrapStaticEnvelope() as? JsonNumber)?.toInt()
-        ?: throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, path, "expected number")
+        ?: throw FuaranDecodeException(
+            FuaranDecodeException.WRONG_TYPE,
+            path,
+            "expected a JSON number (an integer slot has no non-finite form, so the 'NaN' / " +
+                "'Infinity' / '-Infinity' sentinels are not accepted here)",
+        )
 
+/** A FLOAT slot: a JSON number, or one of the three exact sentinel strings ([FLOAT_SENTINELS]). */
 private fun JsonValue.double(path: String): Double =
-    (unwrapStaticEnvelope() as? JsonNumber)?.toDouble()
-        ?: throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, path, "expected number")
+    when (val v = unwrapStaticEnvelope()) {
+        is JsonNumber -> v.toDouble()
+        is JsonString ->
+            FLOAT_SENTINELS[v.value]
+                ?: throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    path,
+                    "expected a JSON number, or one of the non-finite sentinel strings " +
+                        "'NaN' / 'Infinity' / '-Infinity' — got '${v.value}'. The three spellings are " +
+                        "exact and case-sensitive",
+                )
+        else ->
+            throw FuaranDecodeException(
+                FuaranDecodeException.WRONG_TYPE,
+                path,
+                "expected a JSON number (or a 'NaN' / 'Infinity' / '-Infinity' sentinel string)",
+            )
+    }
 
 private fun JsonValue.bool(path: String): Boolean =
     (unwrapStaticEnvelope() as? JsonBool)?.value
@@ -383,7 +437,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         "Tabs" ->
             Tabs(
                 // `activeIndex` round-trips; absent (legacy wire) defaults to Static 0.
-                activeIndex = o["activeIndex"]?.let { decodeBinding(it, "$path.activeIndex") }
+                activeIndex = o["activeIndex"]?.let { decodeBindingInt(it, "$path.activeIndex") }
                     ?: StaticBinding(JsonNumber("0")),
                 children = decodeNodeList(o.req("children", path), "$path.children"),
                 // 0.2.0 — omitted-when-default (Horizontal).
@@ -397,7 +451,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             )
         "Stepper" ->
             Stepper(
-                activeStep = decodeBinding(o.req("activeStep", path), "$path.activeStep"),
+                activeStep = decodeBindingInt(o.req("activeStep", path), "$path.activeStep"),
                 children = decodeNodeList(o.req("children", path), "$path.children"),
             )
         "SummaryList" ->
@@ -477,7 +531,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 // 0.2.0 rename law — scalar displayed value ⇒ `value` (`data` alias kept;
                 // the retired `source` spelling is a hard MISSING_FIELD, mirroring the core).
-                value = decodeBinding(o.reqAliased("value", path, "data"), "$path.value"),
+                value = decodeBindingFloat(o.reqAliased("value", path, "data"), "$path.value"),
                 // 0.2.x — stylistic fields omitted-when-default.
                 format = o["format"]?.let { decodeValueFormat(it, "$path.format") } ?: NoValueFormat,
                 emphasis = o["emphasis"]?.let { decodeEmphasisEnum(it, "$path.emphasis") } ?: Emphasis.Normal,
@@ -485,7 +539,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 weight = o.optStr("weight", path)?.let { enumOf<StyleWeight>(it, "$path.weight") } ?: StyleWeight.Standard,
                 icon = o.optStr("icon", path),
                 subtext = o["subtext"]?.let { decodeTextSource(it, "$path.subtext") },
-                trend = o["trend"]?.let { decodeBinding(it, "$path.trend") },
+                trend = o["trend"]?.let { decodeBindingFloat(it, "$path.trend") },
                 trendFormat = o["trendFormat"]?.let { decodeValueFormat(it, "$path.trendFormat") },
             )
         "Badge" ->
@@ -507,7 +561,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             )
         "Progress" ->
             Progress(
-                fraction = decodeBinding(o.req("fraction", path), "$path.fraction"),
+                fraction = decodeBindingFloat(o.req("fraction", path), "$path.fraction"),
                 // 0.2.0 — omitted-when-false; label is optional; `caveat` added.
                 indeterminate = o.optBool("indeterminate", path) ?: false,
                 tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
@@ -519,7 +573,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             LabelValueRow(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 // 0.2.0 rename law — scalar displayed value ⇒ `value` (`data` alias kept).
-                value = decodeBinding(o.reqAliased("value", path, "data"), "$path.value"),
+                value = decodeBindingFloat(o.reqAliased("value", path, "data"), "$path.value"),
                 format = o["format"]?.let { decodeValueFormat(it, "$path.format") } ?: NoValueFormat,
                 // The behavioural bool; 0.2.2 — omitted-when-false.
                 emphasis = o["emphasis"]?.let { decodeEmphasisFlag(it, "$path.emphasis") } ?: false,
@@ -753,7 +807,8 @@ private fun decodeTextSource(value: JsonValue, path: String): TextSource {
 // --------------------------------------------------------------------------- //
 
 /**
- * A `Binding<string>` / `Binding<bool>` slot — the typed SCALAR positions.
+ * A `Binding<string>` / `Binding<bool>` / `Binding<float>` / `Binding<int>` slot — the typed
+ * SCALAR positions.
  *
  * WIRE_FORMAT 3.6's bare-scalar coercion is about SHAPE: every `Binding` case is a
  * `$type`-discriminated object, so a bare scalar can only mean `Static`. The slot's own type still
@@ -776,6 +831,24 @@ private fun decodeBindingString(value: JsonValue, path: String): Binding =
 
 private fun decodeBindingBool(value: JsonValue, path: String): Binding =
     decodeBindingScalar(value, path) { v, p -> v.bool(p) }
+
+/**
+ * The typed NUMERIC `Binding` slots (WIRE_FORMAT 7), on the same machinery as the string/bool
+ * pair above and for the same reason: 3.6's bare-scalar coercion is about SHAPE — a bare scalar
+ * in a Binding slot can only mean `Static` — while the slot's own type still governs the VALUE.
+ * Both arms therefore route through the slot's typed parser: the `{"$type":"Static","value":X}`
+ * envelope reaches [decodeBindingScalar] as a [StaticBinding], and so does the bare scalar, via
+ * the coercion in [decodeBinding]. Checking only the envelope would leave `fraction: "nan"` —
+ * the shorthand a model reaches for first — decoding with its wrong-typed value preserved.
+ *
+ * [decodeBindingFloat] admits the three sentinel strings; [decodeBindingInt] admits none. That
+ * asymmetry is the whole of 7 and is not an oversight at the int slot.
+ */
+private fun decodeBindingFloat(value: JsonValue, path: String): Binding =
+    decodeBindingScalar(value, path) { v, p -> v.double(p) }
+
+private fun decodeBindingInt(value: JsonValue, path: String): Binding =
+    decodeBindingScalar(value, path) { v, p -> v.int(p) }
 
 private fun decodeBinding(value: JsonValue, path: String): Binding {
     // Lenient shape coercion (§3.6, mirrored from the reference core): a bare array or
@@ -1105,11 +1178,16 @@ private fun decodeFormField(value: JsonValue, path: String): FormField {
 private fun decodeFormFieldKind(value: JsonValue, path: String, autoBind: ControlAutoBind): FormFieldKind {
     val o = value.obj(path)
     // Value slot: present ⇒ decode; absent ⇒ the context's auto-binding (never an error).
-    fun valueOr(placeholder: JsonValue): Binding =
-        o["value"]?.let { decodeBinding(it, "$path.value") } ?: autoBind.autoBinding(placeholder)
+    //
+    // `decode` selects the SLOT'S typed reader — the numeric controls pass `decodeBindingFloat`
+    // so a `Number` field's value is held to 7 exactly as `Metric.value` is. It defaults to the
+    // untyped reader so a control whose payload the projection genuinely does not type (a choice,
+    // a date, a pair) is unchanged; only the arms that name a typed reader gain a check.
+    fun valueOr(placeholder: JsonValue, decode: (JsonValue, String) -> Binding = ::decodeBinding): Binding =
+        o["value"]?.let { decode(it, "$path.value") } ?: autoBind.autoBinding(placeholder)
     return when (val t = o.discriminator(path)) {
         "Text" -> TextField(valueOr(JsonString("")))
-        "Number" -> NumberField(valueOr(JsonNumber("0")))
+        "Number" -> NumberField(valueOr(JsonNumber("0"), ::decodeBindingFloat))
         "Checkbox" -> CheckboxField(valueOr(JsonBool(false)))
         // The switch affordance beside a Checkbox: the same boolean slot, a different control.
         "Toggle" -> ToggleField(valueOr(JsonBool(false)))
@@ -1133,7 +1211,7 @@ private fun decodeFormFieldKind(value: JsonValue, path: String, autoBind: Contro
             )
         "RangedNumber" ->
             RangedNumberField(
-                value = valueOr(JsonNumber("0")),
+                value = valueOr(JsonNumber("0"), ::decodeBindingFloat),
                 min = o.optDouble("min", path),
                 max = o.optDouble("max", path),
                 step = o.optDouble("step", path),
@@ -1525,9 +1603,9 @@ private fun decodeDrawStyle(value: JsonValue, path: String): DrawStyle {
     val o = value.obj(path)
     return DrawStyle(
         fill = o["fill"]?.let { decodeBindingString(it, "$path.fill") },
-        opacity = o["opacity"]?.let { decodeBinding(it, "$path.opacity") },
+        opacity = o["opacity"]?.let { decodeBindingFloat(it, "$path.opacity") },
         stroke = o["stroke"]?.let { decodeBindingString(it, "$path.stroke") },
-        strokeWidth = o["strokeWidth"]?.let { decodeBinding(it, "$path.strokeWidth") },
+        strokeWidth = o["strokeWidth"]?.let { decodeBindingFloat(it, "$path.strokeWidth") },
         emphasis = o.optStr("emphasis", path),
         fontFamily = o.optStr("fontFamily", path),
         fontSize = o.optDouble("fontSize", path),
