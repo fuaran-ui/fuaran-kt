@@ -27,6 +27,12 @@ import java.io.File
  * builds with a bare `kotlinc`, no artefact resolution, and the exit code is the gate.
  */
 
+/** The `Static` payload of a `Binding<string>` slot, or null when it is any other form. */
+private fun staticString(b: Binding?): String? = ((b as? StaticBinding)?.value as? JsonString)?.value
+
+/** The `Static` payload of a `Binding<bool>` slot, or null when it is any other form. */
+private fun staticBool(b: Binding?): Boolean? = ((b as? StaticBinding)?.value as? JsonBool)?.value
+
 private class Runner {
     var passed = 0
     var failed = 0
@@ -691,6 +697,91 @@ fun main() {
         kotlin.system.exitProcess(1)
     }
     println("sanitization/url-floor: $urlFloorCases cases asserted against the URL floor")
+
+    // ----------------------------------------------------------------------- //
+    // The ACCESSIBILITY-TRAIT leg (WIRE_FORMAT 3.1)
+    // ----------------------------------------------------------------------- //
+    //
+    // The node-round-trip family above proves each fixture DECODES; it says nothing
+    // about what landed in the trait's six slots, because this surface has no
+    // canonical encoder to compare bytes against. So the accessibility family gets
+    // its own value assertions: the slot each fixture populated, the binding form it
+    // carried, and — the two that a fold bug and a loose reader each got wrong once
+    // — a custom role's CASE and a `liveRegion` token's membership of the closed set.
+    //
+    // This is the DECODE half of the trait's certification. The Compose PROJECTION
+    // half (the mapping onto semantics properties, and the drop set) is typed in
+    // Compose vocabulary (`Role`, `LiveRegionMode`), so it can only be asserted on a
+    // machine carrying the Android SDK — see `AccessibilityProjectionTest` in the
+    // `:fuaran-renderer` unit-test source set, which the Gradle leg runs.
+    val a11yFixtures =
+        listOf(
+            "a11y-wrapper-all-slots",
+            "a11y-wrapper-state-bound",
+            "a11y-alert-assertive",
+            "a11y-link-labelled",
+            "a11y-button-named",
+            "a11y-image-decorative",
+        )
+    var a11yChecked = 0
+    for (id in a11yFixtures) {
+        val file = File(corpus, "nodes/$id.json")
+        if (!file.isFile) continue
+        a11yChecked++
+        runner.check("accessibility/$id") {
+            val a = decodeNode(file.readText()).accessibility ?: error("the trait decoded to nothing")
+            when (id) {
+                "a11y-wrapper-all-slots" -> {
+                    if (staticString(a.label) != "Channel performance summary") error("label: ${a.label}")
+                    if (a.labelledBy != "a11y-wrapper-heading") error("labelledBy: ${a.labelledBy}")
+                    if (a.describedBy != "a11y-wrapper-note") error("describedBy: ${a.describedBy}")
+                    if (a.role != "region") error("role: ${a.role}")
+                    if (a.liveRegion != "polite") error("liveRegion: ${a.liveRegion}")
+                    // An explicit Static FALSE — distinct on the wire from omitted.
+                    if (staticBool(a.hidden) != false) error("hidden: ${a.hidden}")
+                }
+                "a11y-wrapper-state-bound" -> {
+                    // The State form carries its own declared default; the surface
+                    // keeps the binding rather than resolving it here.
+                    val label = a.label as? StateBinding ?: error("label is not State-bound: ${a.label}")
+                    if (label.key != "footerLabel") error("label key: ${label.key}")
+                    if ((label.defaultValue as? JsonString)?.value != "Site footer") {
+                        error("label default: ${label.defaultValue}")
+                    }
+                    // The CASE survives decode — the exact spelling a fold bug rewrote.
+                    if (a.role != "doc-pageFooter") error("the custom role's case was folded: ${a.role}")
+                    if (a.liveRegion != "off") error("liveRegion: ${a.liveRegion}")
+                    if (a.hidden !is StateBinding) error("hidden is not State-bound: ${a.hidden}")
+                }
+                "a11y-alert-assertive" -> {
+                    if (a.role != "alert") error("role: ${a.role}")
+                    if (a.liveRegion != "assertive") error("liveRegion: ${a.liveRegion}")
+                    if (a.label != null) error("no label slot was authored: ${a.label}")
+                }
+                "a11y-link-labelled" -> {
+                    if (staticString(a.label) != "Read the 2026 annual report (PDF)") error("label: ${a.label}")
+                    if (a.role != null) error("no role slot was authored: ${a.role}")
+                }
+                "a11y-button-named" -> {
+                    if (staticString(a.label) != "Refresh revenue figures") error("label: ${a.label}")
+                    if (a.role != "button") error("role: ${a.role}")
+                }
+                "a11y-image-decorative" -> {
+                    // The slot whose absence went unnoticed on two hosts for weeks.
+                    if (staticBool(a.hidden) != true) error("hidden: ${a.hidden}")
+                    if (a.label != null) error("no label slot was authored: ${a.label}")
+                }
+            }
+        }
+    }
+    if (a11yChecked != a11yFixtures.size) {
+        println(
+            "FAIL: the accessibility family enumerated $a11yChecked of ${a11yFixtures.size} fixtures - " +
+                "a leg that quietly checked a subset reads as covered while being untested",
+        )
+        kotlin.system.exitProcess(1)
+    }
+    println("accessibility: $a11yChecked trait-bearing fixtures asserted slot by slot")
 
     val decoded = nodeFixtures.size + lenientFixtures.size
     println()
