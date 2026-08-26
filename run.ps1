@@ -35,6 +35,12 @@
   Robolectric gate). That leg needs an Android SDK + the Gradle wrapper; it is
   auto-skipped when the SDK is absent, so this switch is only for forcing it off when the
   toolchain IS present.
+
+  It does NOT skip the accessibility projection's mapping decisions or its corpus-driven
+  drop-set leg: those assert a platform-neutral result type and run in the plain-JVM
+  harnesses above, precisely so they are re-checked on whatever machine the next change is
+  made from. What the Robolectric leg alone can answer — that the emitted semantics
+  genuinely reach the Compose tree — stays behind this switch.
 #>
 [CmdletBinding()]
 param(
@@ -78,6 +84,27 @@ Write-Host "fuaran-kt :: JDK $JavaHome" -ForegroundColor Cyan
 $MainKt = @(Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\main\kotlin"),
     (Join-Path $Repo "fuaran-core\src\main\kotlin") -Filter *.kt -ErrorAction SilentlyContinue |
     ForEach-Object FullName)
+
+# The COMPOSE-FREE half of `:fuaran-renderer`, compiled into this plain-JVM build on purpose.
+#
+# The rest of that module cannot be: it is an Android library and its composables need the Compose
+# compiler plugin plus an android.jar, which is exactly why the Robolectric gate below auto-skips on
+# a machine with no Android SDK. But the projection's DECISIONS are not Compose — the binding
+# resolver and the accessibility projection are ordinary logic over the decoded model — and a
+# decision that can only be tested on one platform is a decision nobody re-checks. So the two files
+# that carry no `androidx` import are listed here BY NAME and their assertions run in the ordinary
+# gate; the thin Compose application half stays behind the Gradle leg.
+#
+# Adding an `androidx` import to either of these breaks this build LOUDLY, which is the intended
+# guard: the split is only worth anything while the neutral half stays neutral.
+#
+# Kept OUT of `$MainKt` on purpose: that list is also what the `-Package` leg compiles into the
+# `fuaran-core` AAR's classes.jar, and shipping two renderer classes inside the JNI-binding artefact
+# would be a packaging accident rather than a decision. This set is for the test jar only.
+$RendererNeutralKt = @(
+    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\Binding.kt"),
+    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\AccessibilityProjection.kt")
+) | Where-Object { Test-Path $_ }
 # The direct kotlinc build runs the two `main()`-driven harnesses (`CorpusDecodeTest`, `SessionTest`)
 # via `java`; it deliberately compiles ONLY those, not every test file. The Gradle-only JUnit gates
 # (e.g. `:fuaran-core` `InteractionRoundTripTest`, which pulls JUnit + `:fuaran-driver`) are built and
@@ -86,6 +113,14 @@ $TestKt = @(
     Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\test\kotlin") -Filter "CorpusDecodeTest.kt" -ErrorAction SilentlyContinue |
         ForEach-Object FullName
     Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-core\src\test\kotlin") -Filter "SessionTest.kt" -ErrorAction SilentlyContinue |
+        ForEach-Object FullName
+    # The accessibility projection's two JUnit-free harnesses — the mapping decisions and the
+    # corpus-driven leg. They assert the platform-neutral result type, so they belong here rather
+    # than behind the Android-SDK gate; the Robolectric leg runs the same mapping set through a
+    # one-line delegating test and keeps the reachability assertions only it can answer.
+    Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "AccessibilityProjectionHarness.kt" -ErrorAction SilentlyContinue |
+        ForEach-Object FullName
+    Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "AccessibilityCorpusHarness.kt" -ErrorAction SilentlyContinue |
         ForEach-Object FullName
 )
 $JavaSrc = @(Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-core\src\main\java") -Filter *.java -ErrorAction SilentlyContinue |
@@ -105,10 +140,11 @@ if (-not $SkipBuild) {
 
     $ktArgs = @()
     $ktArgs += $MainKt
+    $ktArgs += $RendererNeutralKt
     $ktArgs += $TestKt
     if ($JavaSrc) { $ktArgs += @("-classpath", $ClassesDir) }
     $ktArgs += @("-include-runtime", "-d", $Jar)
-    Write-Host "kotlinc :: $($MainKt.Count) main + $($TestKt.Count) test file(s)"
+    Write-Host "kotlinc :: $($MainKt.Count) main + $($RendererNeutralKt.Count) neutral-renderer + $($TestKt.Count) test file(s)"
     & $Kotlinc @ktArgs
     if ($LASTEXITCODE -ne 0) { throw "kotlinc failed" }
     Write-Host "Built $Jar" -ForegroundColor Green
@@ -118,8 +154,25 @@ if ($SkipTests) { Write-Host "Tests skipped."; exit 0 }
 
 $Classpath = if ($JavaSrc) { "$Jar;$ClassesDir" } else { $Jar }
 
-# --- Phase 542: corpus render-coverage harness -------------------------------------- #
 if ($Corpus) { $env:FUARAN_CORPUS = $Corpus.Path }
+
+# --- The accessibility projection's platform-neutral half --------------------------- #
+# The mapping decisions and the drop set, asserted where the ordinary gate runs rather than only on
+# a machine carrying the Android SDK.
+#
+# AHEAD of the decode harness deliberately. Each leg below aborts the run on its first failure, so
+# leg order decides what a standing failure can MASK: with these last, any red in the decode
+# harness — including a reject vector this surface is known not to refuse yet — would stop a
+# mapping regression from ever being reported, and the run would blame the wrong thing. These two
+# depend on nothing the decode leg establishes (each decodes the fixtures it asserts on) and take
+# under a second, so putting them first costs nothing and buys an independent answer.
+Write-Host "`n== accessibility projection (platform-neutral) ==" -ForegroundColor Cyan
+& $Java -cp $Classpath "fuaran.renderer.AccessibilityProjectionHarnessKt"
+if ($LASTEXITCODE -ne 0) { throw "accessibility mapping harness failed" }
+& $Java -cp $Classpath "fuaran.renderer.AccessibilityCorpusHarnessKt"
+if ($LASTEXITCODE -ne 0) { throw "accessibility corpus projection harness failed" }
+
+# --- Phase 542: corpus render-coverage harness -------------------------------------- #
 Write-Host "`n== Phase 542 :: corpus render-coverage ==" -ForegroundColor Cyan
 & $Java -cp $Classpath "fuaran.ui.CorpusDecodeTestKt"
 if ($LASTEXITCODE -ne 0) { throw "Phase 542 corpus harness failed" }

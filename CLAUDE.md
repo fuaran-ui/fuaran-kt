@@ -189,7 +189,18 @@ looks correct, and the value never reaches the session store. Phase 667 found fi
 A node's `Accessibility` trait carries six slots. The HTML render tiers project them into `aria-*`
 attributes; a Compose surface has no attribute bag, so the projection is a mapping onto **semantics
 properties** — and the two vocabularies do not correspond one-for-one. The mapping lives in
-`fuaran-renderer/.../Accessibility.kt`; the decision is here.
+`fuaran-renderer/.../AccessibilityProjection.kt`; the decision is here.
+
+**The projection is SPLIT, and the split is what makes the decision checkable.** The mapping logic
+and its result type are platform-neutral — `AccessibilityProjection.kt` carries no `androidx`
+import and names the platform's concepts in its own `SemanticRole` / `LiveRegionKind` enums — while
+`Accessibility.kt` beside it holds only the translation onto `Role` / `LiveRegionMode` /
+`semantics {}`. That is not tidiness. Typed in Compose vocabulary the projection could not be
+CALLED off an Android-SDK machine, so its tests lived in the `:fuaran-renderer` Robolectric source
+set, which `run.ps1` auto-skips here — and the drop set, which is the whole content of the policy
+below, was a decision only CI could re-check. `run.ps1` therefore compiles those two Compose-free
+renderer files BY NAME into the plain-JVM build (see the `$RendererNeutralKt` list and the note
+beside it: adding an `androidx` import to either breaks that build loudly, which is the guard).
 
 | slot | Compose `semantics {}` |
 |---|---|
@@ -232,10 +243,25 @@ genuinely (`.isLink`) and cannot map `tab`, which this one can — the two nativ
 **different drop sets** by design. Neither is the other's parity target; both answer to the
 reference `aria-*` projection.
 
+*Never silently, and asserted EXACTLY.* `AccessibilityCorpusHarness` runs the shared corpus's
+accessibility family through the projection and pins, per fixture, the projected value **and** the
+drop set as an exact list rather than a superset — so a slot that becomes mappable must move
+between the two lists and turn the leg red. Both harnesses run in `pwsh ./run.ps1`, ahead of the
+decode leg (leg order decides what a standing failure elsewhere can mask; the reasoning is in
+`run.ps1`).
+
 **Forward-coupling.** A new slot on the wire trait, or a new ARIA role token, updates the mapping
-table above, `roleSemanticsOf`, and the drop-set assertions in `AccessibilityProjectionTest` in the
-same change — the same shape as the write-back rule above, and for the same reason: nothing in the
-compiler can tell that a slot went unread.
+table above, `roleSemanticsOf`, and the drop-set assertions in `AccessibilityProjectionHarness` /
+`AccessibilityCorpusHarness` in the same change — the same shape as the write-back rule above, and
+for the same reason: nothing in the compiler can tell that a slot went unread. A new `SemanticRole`
+or `LiveRegionKind` case is the one part the compiler DOES force: `composeRole` /
+`composeLiveRegion` are exhaustive `when`s, so the application half cannot silently ignore a case
+the decision half grew.
+
+`AccessibilityProjectionTest` (Robolectric) keeps only what that gate alone can answer — that the
+projected semantics genuinely reach the Compose tree, that a hidden node keeps its pixels and loses
+its announcement — plus one delegating test that re-runs the neutral mapping set, so a mapping
+regression fails there too without a second copy of the expectations.
 
 ## Public vocabulary discipline
 

@@ -709,11 +709,12 @@ fun main() {
     // carried, and — the two that a fold bug and a loose reader each got wrong once
     // — a custom role's CASE and a `liveRegion` token's membership of the closed set.
     //
-    // This is the DECODE half of the trait's certification. The Compose PROJECTION
-    // half (the mapping onto semantics properties, and the drop set) is typed in
-    // Compose vocabulary (`Role`, `LiveRegionMode`), so it can only be asserted on a
-    // machine carrying the Android SDK — see `AccessibilityProjectionTest` in the
-    // `:fuaran-renderer` unit-test source set, which the Gradle leg runs.
+    // This is the DECODE half of the trait's certification. The PROJECTION half — the
+    // mapping onto semantics properties, and the drop set — runs beside it in the same
+    // gate, over the same fixtures, in `AccessibilityCorpusHarness`: the projection's
+    // result type is platform-neutral, so it no longer needs a machine carrying the
+    // Android SDK. Only the reachability of the emitted Compose semantics does, and that
+    // is all `AccessibilityProjectionTest` keeps.
     val a11yFixtures =
         listOf(
             "a11y-wrapper-all-slots",
