@@ -268,12 +268,39 @@ data class Form(
     val disabled: Binding? = null,
 ) : NodeKind
 
+/**
+ * The cross-field operand. `against` is a `Binding`, and that IS the cross-field mechanism
+ * rather than an accident of typing: any read slot may take a Binding, and the auto-bind rule
+ * already puts every form field's value in State under the field's own id, so
+ * `{"$type":"State","key":"<sibling id>"}` reads the sibling with no coordination vocabulary.
+ */
+data class CompareRule(
+    val op: CompareOp,
+    val against: Binding,
+)
+
+/**
+ * A field's declared constraint — the ACCEPTED SET, where `FormFieldKind` names the control.
+ * Every slot is optional structurally; the two well-formedness refusals (a rule that constrains
+ * nothing; `minLength` above `maxLength`) are relations BETWEEN slots and so live in the
+ * decoder's policy layer rather than in this shape.
+ */
+data class FieldRule(
+    val format: TextFormat? = null,
+    val pattern: String? = null,
+    val minLength: Int? = null,
+    val maxLength: Int? = null,
+    val compare: CompareRule? = null,
+    val message: TextSource? = null,
+)
+
 data class FormField(
     val id: String,
     val kind: FormFieldKind,
     val label: TextSource,
     val required: Boolean,
     val help: TextSource? = null,
+    val rule: FieldRule? = null,
 )
 
 data class Button(

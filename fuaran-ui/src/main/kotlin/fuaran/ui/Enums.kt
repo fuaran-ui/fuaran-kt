@@ -85,6 +85,23 @@ enum class SortDirection(override val wire: String) : WireEnum { Asc("asc"), Des
 /** `Link.protection` — the obfuscation the host applies to a rendered `mailto:` href. */
 enum class LinkProtection(override val wire: String) : WireEnum { Email("email") }
 
+/** `FieldRule.format` — the closed named-format set a text field's value is held to. */
+enum class TextFormat(override val wire: String) : WireEnum {
+    Email("email"),
+    Url("url"),
+    Tel("tel"),
+}
+
+/** `CompareRule.op` — the cross-field comparison operator. */
+enum class CompareOp(override val wire: String) : WireEnum {
+    Eq("eq"),
+    Neq("neq"),
+    Lt("lt"),
+    Lte("lte"),
+    Gt("gt"),
+    Gte("gte"),
+}
+
 /** Resolve a bare-enum string by its WIRE spelling, or raise `UNKNOWN_DU_CASE` at [path]. */
 inline fun <reified E> wireEnumOf(raw: String, path: String): E where E : Enum<E>, E : WireEnum =
     enumValues<E>().firstOrNull { it.wire == raw }

@@ -1162,8 +1162,74 @@ private fun ControlAutoBind.autoBinding(placeholder: JsonValue): Binding =
         is ControlAutoBind.FormFieldId -> StateBinding(id, placeholder)
     }
 
+/** The cross-field operand: an operator plus a `Binding` to compare against. */
+private fun decodeCompareRule(value: JsonValue, path: String): CompareRule {
+    val o = value.obj(path)
+    return CompareRule(
+        op = wireEnumOf(o.req("op", path).str("$path.op"), "$path.op"),
+        against = decodeBinding(o.req("against", path), "$path.against"),
+    )
+}
+
+/**
+ * A field's declared constraint. Every slot is optional structurally, and two shapes are
+ * refused here as POLICY (mirroring the reference host):
+ *
+ *  - a rule with every constraint slot absent. A rule that constrains nothing is a defect,
+ *    not a no-op: it decodes, validates and renders while declaring nothing — the
+ *    fake-affordance shape the near-miss set also forecloses, arriving through an empty
+ *    object instead of a wrong key. `message` alone does not rescue it: the message is the
+ *    prose shown when some OTHER slot is unmet.
+ *  - `minLength` above `maxLength`. An inverted bound admits no value at all, so the field
+ *    could never be submitted and the form is dead on arrival.
+ *
+ * Neither is a shape — both are relations BETWEEN slots — which is why they live here rather
+ * than in the structural layer.
+ */
+private fun decodeFieldRule(value: JsonValue, path: String): FieldRule {
+    val o = value.obj(path)
+    val rule = FieldRule(
+        format = o.optStr("format", path)?.let { wireEnumOf<TextFormat>(it, "$path.format") },
+        pattern = o.optStr("pattern", path),
+        minLength = o.optInt("minLength", path),
+        maxLength = o.optInt("maxLength", path),
+        compare = o["compare"]?.let { decodeCompareRule(it, "$path.compare") },
+        message = o["message"]?.let { decodeTextSource(it, "$path.message") },
+    )
+    val constrains =
+        rule.format != null || rule.pattern != null || rule.minLength != null ||
+            rule.maxLength != null || rule.compare != null
+    if (!constrains) {
+        throw FuaranDecodeException(
+            FuaranDecodeException.WRONG_TYPE,
+            path,
+            "a rule that constrains nothing is a defect, not a no-op — declare at least one of " +
+                "format / pattern / minLength / maxLength / compare, or omit 'rule' entirely",
+        )
+    }
+    if (rule.minLength != null && rule.maxLength != null && rule.minLength > rule.maxLength) {
+        throw FuaranDecodeException(
+            FuaranDecodeException.WRONG_TYPE,
+            path,
+            "minLength ${rule.minLength} is above maxLength ${rule.maxLength} — an inverted " +
+                "length bound admits no value at all, so the field could never be submitted",
+        )
+    }
+    return rule
+}
+
 private fun decodeFormField(value: JsonValue, path: String): FormField {
     val o = value.obj(path)
+    // The near-miss check runs BEFORE the rule decode, so a field carrying both `validation`
+    // and a well-formed `rule` still names the ignored key rather than passing silently.
+    o.refuseNearMiss(
+        path,
+        mapOf(
+            "validation" to "rule",
+            "constraints" to "rule",
+            "validate" to "rule",
+        ),
+    )
     // Field alias: name → id. Id decodes first so the auto-bind can use it.
     val id = o.reqAliased("id", path, "name").str("$path.id")
     return FormField(
@@ -1172,6 +1238,7 @@ private fun decodeFormField(value: JsonValue, path: String): FormField {
         label = decodeTextSource(o.req("label", path), "$path.label"),
         required = o.req("required", path).bool("$path.required"),
         help = o["help"]?.let { decodeTextSource(it, "$path.help") },
+        rule = o["rule"]?.let { decodeFieldRule(it, "$path.rule") },
     )
 }
 
