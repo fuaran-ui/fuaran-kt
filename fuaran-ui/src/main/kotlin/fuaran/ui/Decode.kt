@@ -617,6 +617,38 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 alt = decodeTextSource(o.req("alt", path), "$path.alt"),
                 src = decodeBindingString(o.req("src", path), "$path.src"),
                 variant = enumOf<ImageVariant>(o.req("variant", path).str("$path.variant"), "$path.variant"),
+                // 3.6.2 — three identity-defaulted presentation tokens. Absent restores the
+                // pre-phase behaviour exactly, which is what makes the untouched `image-1` fixture
+                // proof of the claim rather than a restatement of it.
+                fit = o.optStr("fit", path)?.let { enumOf<ImageFit>(it, "$path.fit") } ?: ImageFit.Natural,
+                aspectRatio =
+                    o.optStr("aspectRatio", path)?.let { enumOf<ImageAspect>(it, "$path.aspectRatio") }
+                        ?: ImageAspect.Natural,
+                loading = o.optStr("loading", path)?.let { enumOf<ImageLoading>(it, "$path.loading") } ?: ImageLoading.Eager,
+                // 3.6.3 — CONTENT, so an ordinary optional field and a full TextSource. Narrowing
+                // it to a plain string costs nothing until somebody needs a locale, which is why
+                // the corpus pins an `I18n` caption on this slot specifically.
+                caption = o["caption"]?.let { decodeTextSource(it, "$path.caption") },
+                // 3.6.4 — the missing-list-field class: ABSENT means the empty list, and a present
+                // `null` is refused rather than read as a second spelling of absence (the `array`
+                // reader raises WRONG_TYPE on JsonNull, which is exactly the refusal wanted here).
+                // `mapIndexed` preserves the AUTHORED order; nothing sorts.
+                srcSet =
+                    o["srcSet"]?.array("$path.srcSet")?.mapIndexed { i, v -> decodeSrcSetEntry(v, "$path.srcSet[$i]") }
+                        ?: emptyList(),
+                // 3.6.5 — omitted at false; the stringified boolean is refused, not coerced.
+                expandable = o.optBool("expandable", path) ?: false,
+            )
+        "Media" ->
+            Media(
+                // 3.6.6 — REQUIRED. A transport has no decorative case, and there is no value to
+                // default to that would not be a fabricated name for someone else's recording.
+                label = decodeTextSource(o.req("label", path), "$path.label"),
+                src = decodeBindingString(o.req("src", path), "$path.src"),
+                kind = decodeMediaKind(o.req("kind", path), "$path.kind"),
+                // Omitted at TRUE — the inverted polarity `Toast.dismissable` also takes.
+                controls = o.optBool("controls", path) ?: true,
+                loop = o.optBool("loop", path) ?: false,
             )
         "List" ->
             ListNode(
@@ -1584,6 +1616,42 @@ private fun decodeContentHash(value: JsonValue, path: String): ContentHash {
 // --------------------------------------------------------------------------- //
 // Drawing
 // --------------------------------------------------------------------------- //
+
+/**
+ * One `srcSet` candidate (WIRE_FORMAT.md 3.6.4). Both members are required WITHIN the entry, and
+ * `width` carries the schema's `minimum: 1` as a DECODE rule: a `0w` candidate is not a small
+ * image, it is one a client can never select, so admitting it would let the wire state a rendition
+ * no host can render. The refusal names the entry by index — the corpus's reject fixture puts a
+ * well-formed entry first precisely so a host that reported the list rather than the element fails.
+ */
+private fun decodeSrcSetEntry(value: JsonValue, path: String): SrcSetEntry {
+    val o = value.obj(path)
+    return SrcSetEntry(
+        src = decodeBindingString(o.req("src", path), "$path.src"),
+        width = o.req("width", path).intAtLeast(1, "$path.width"),
+    )
+}
+
+/**
+ * The `MediaKind` variant (WIRE_FORMAT.md 3.6.6). `$type`-discriminated, so an unknown case reports
+ * at `$path.$type` — the [Binding] / [TextSource] position, not the bare-enum one.
+ *
+ * [Audio] declares NO slots, which is the whole point: `autoplay` is unrepresentable on it rather
+ * than defaulted off, so a document carrying `{"$type":"Audio","autoplay":true}` decodes to an
+ * audio surface that does not autoplay because the value has nowhere to land.
+ */
+private fun decodeMediaKind(value: JsonValue, path: String): MediaKind {
+    val o = value.obj(path)
+    return when (val t = o.discriminator(path)) {
+        "Video" ->
+            Video(
+                autoplay = o.optBool("autoplay", path) ?: false,
+                poster = o["poster"]?.let { decodeBindingString(it, "$path.poster") },
+            )
+        "Audio" -> Audio
+        else -> unknownCase(t, path, "MediaKind")
+    }
+}
 
 private fun decodeShape(value: JsonValue, path: String): Shape {
     val o = value.obj(path)

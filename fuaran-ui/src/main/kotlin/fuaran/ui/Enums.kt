@@ -32,6 +32,35 @@ enum class ScrollOrientation { Vertical, Horizontal, Both }
 
 enum class ImageVariant { Default, Avatar, Rounded }
 
+/**
+ * `Image.fit` — how the decoded pixels fill the box the layout gives the element
+ * (WIRE_FORMAT.md 3.6.2). Absent means [Natural].
+ */
+enum class ImageFit { Natural, Cover, Contain }
+
+/**
+ * `Image.aspectRatio` — the box the element reserves BEFORE the image arrives (3.6.2). Absent
+ * means [Natural].
+ *
+ * These are TOKENS, never CSS values: the slot names one of four ratios and never carries a number,
+ * a pair, or a stylesheet spelling (`"16 / 9"`, `"16:9"`, `1.7778`). Admitting an arbitrary ratio
+ * would put an author-supplied value in a style attribute, which is the free-form escape this format
+ * does not have — so `"16/9"` is `UNKNOWN_DU_CASE`, not a second spelling of [SixteenNine].
+ *
+ * It is a LAYOUT reservation, not a crop: what happens to pixels that do not match the box is
+ * [ImageFit]'s statement, and a host derives neither from the other.
+ */
+enum class ImageAspect { Natural, Square, FourThree, ThreeTwo, SixteenNine }
+
+/**
+ * `Image.loading` — whether the client fetches during initial load or defers (3.6.2). Absent means
+ * [Eager], and that default is deliberate rather than the "unoptimised" value: deferring an
+ * above-the-fold image delays the largest contentful paint, and only the author knows where the
+ * image sits. A host MUST NOT infer laziness from position, viewport, or anything else the tree
+ * does not say.
+ */
+enum class ImageLoading { Eager, Lazy }
+
 enum class DateStyle { Short, Medium, Long, Full }
 
 enum class RelativeTimeUnit { Second, Minute, Hour, Day, Week, Month, Year }

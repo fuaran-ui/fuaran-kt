@@ -42,6 +42,7 @@ fun NodeKind.category(): NodeCategory =
         is Fact -> NodeCategory.Display
         is Link -> NodeCategory.Display
         is Image -> NodeCategory.Display
+        is Media -> NodeCategory.Display
         is ListNode -> NodeCategory.Display
         is Toast -> NodeCategory.Display
         is CodeBlock -> NodeCategory.Display
@@ -90,6 +91,7 @@ fun NodeKind.discriminator(): String =
         is Fact -> "Fact"
         is Link -> "Link"
         is Image -> "Image"
+        is Media -> "Media"
         is ListNode -> "List"
         is Toast -> "Toast"
         is CodeBlock -> "CodeBlock"

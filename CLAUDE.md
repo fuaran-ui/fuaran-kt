@@ -184,6 +184,53 @@ looks correct, and the value never reaches the session store. Phase 667 found fi
 `onClick` at all) — where the 2026-07-25 survey had named two. A test per arm in
 `WriteBackGapTest` is the only real guard; add one with the arm.
 
+## The media vocabulary — one kind, and three rules about absence
+
+WIRE_FORMAT.md 3.6.2–3.6.6 landed as **six `Image` slots plus ONE `Media` kind**, not two kinds.
+The `MediaKind` variant (`Video` with flat `autoplay` + optional `poster` | `Audio` with no fields)
+is `$type`-discriminated at `kind.kind`, so an unknown case refuses at `…kind.kind.$type` while the
+bare-enum slots beside it (`fit` / `aspectRatio` / `loading`) refuse at the slot with no suffix.
+
+Three decode rules are about ABSENCE, which no stored fixture can pin, so each carries its own
+assertion in `CorpusDecodeTest`'s media leg rather than riding the corpus walk:
+
+- **Absent `srcSet` MEANS the empty list**, never null — the missing-list-field class, and the most
+  likely cross-host divergence in the slot. A present `null` is refused: absence already has a
+  spelling. **Authored order is preserved; nothing sorts.** Ascending-by-width is a *renderer's*
+  presentation rule, and the corpus fixture is authored descending precisely so a re-sorting host
+  fails it.
+- **Absent `fit` / `aspectRatio` / `loading` restore the identity defaults** (`Natural` / `Natural` /
+  `Eager`), so a pre-phase document decodes to today's behaviour. `Eager` is the default
+  deliberately and is not the "unoptimised" value — a host MUST NOT infer laziness from anything the
+  tree does not say.
+- **Absent `controls` means TRUE** — the second inverted-polarity slot in the vocabulary, after
+  `Toast.dismissable`. Reading it with the ordinary polarity silently takes the transport away from
+  every keyboard user, and the document that says so is the one that omits the key.
+
+**`Audio` has no autoplay pathway, and that is enforced by the TYPE.** The case declares no slot, so
+`{"$type":"Audio","autoplay":true}` decodes to an audio surface that does not autoplay — the value
+lands nowhere, tolerated as the unknown key it is. Stronger than a default of `false`, which is a
+switch a document can flip. A reflection assertion pins it, so the property survives someone
+"tidying" the two cases into one record with a `mediaType` string.
+
+**The render arm is a labelled transport TILE, not a player** (`RenderMedia` in
+`FuaranRenderer.kt`), on the same footing as `RenderImage`'s placeholder box: this floor carries no
+playback engine and pulling one in is not a decision a decoding surface makes. It is a real arm of
+the exhaustive spine, never `FallbackPlaceholder`. Of 3.6.6's three normative render obligations,
+the **accessible name binds and is emitted always** (`contentDescription` from the required
+`label` — a transport is never decorative); **`autoplay`-implies-`muted`** is vacuous while nothing
+plays, and the tile *states* the declaration rather than acting on it; and **`Audio`-has-no-autoplay**
+is structural, per above.
+
+**Forward-coupling.** A real player arm must, in the same change, route `Media.src` and a `Video`'s
+`poster` through `FuaranUrlPolicy` (`Media.sanitizedSrc` / `MediaKind.sanitizedPoster`), emit
+`autoplay` and muting as a pair or neither, and honour the drop-not-substitute remedy a refused
+`poster` takes — the same shape as the write-back and URL-floor rules below and above, and for the
+same reason: the compiler forces the arm to exist, it cannot force the arm to check. An `Image` arm
+that grows a real loader owes the same to every `srcSet` candidate (`SrcSetEntry.sanitizedSrc`), and
+an `expandable` affordance owes a REAL link whose target is the primary `src` — or, where the floor
+refused it, no affordance at all.
+
 ## Trend sentiment projection — `tone` and `trendPolarity` are not the same judgement
 
 `Metric` carries two slots that both look like judgements about a number, and WIRE_FORMAT.md 3.6.1

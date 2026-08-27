@@ -861,6 +861,129 @@ fun main() {
         }
     }
 
+    // ----------------------------------------------------------------------- //
+    // The MEDIA-VOCABULARY leg (WIRE_FORMAT 3.6.2 - 3.6.6)
+    // ----------------------------------------------------------------------- //
+    //
+    // The families above prove each media fixture DECODES and each media reject vector is
+    // REFUSED with the canonical code and path. They cannot prove what landed in the slots,
+    // because this surface has no canonical encoder to compare bytes against — and three of
+    // this change-set's rules are about ABSENCE, which no stored fixture can pin at all:
+    //
+    //   * absent `srcSet` MEANS the empty list (the missing-list-field class). A decoder
+    //     answering null/None here has produced a value its own encoder cannot round-trip,
+    //     and it is the single most likely cross-host divergence in the slot.
+    //   * absent `fit`/`aspectRatio`/`loading` restore the identity defaults, so a document
+    //     written before they existed decodes to today's behaviour.
+    //   * absent `controls` means TRUE — the inverted polarity — while absent `loop` and
+    //     absent `expandable` mean false. One reader getting the inversion backwards silently
+    //     takes the transport away from every keyboard user.
+    //
+    // And one rule is about a slot that does not exist: `Audio` carries NO autoplay pathway.
+    // That is stronger than a default of false, so it is asserted as unrepresentability —
+    // an `autoplay` beside an `Audio` discriminator has nowhere to land and is tolerated as
+    // the unknown key it is, never absorbed into a flag.
+    run {
+        fun imageFixture(id: String): Image? =
+            File(corpus, "nodes/$id.json").takeIf { it.isFile }?.let { decodeNode(it.readText()).kind as? Image }
+
+        fun mediaOf(kindJson: String): Media =
+            decodeNode("{\"id\":\"m\",\"kind\":{\"\$type\":\"Media\",\"label\":\"Commentary\"," +
+                "\"src\":{\"\$type\":\"Static\",\"value\":\"/a.mp3\"},\"kind\":$kindJson}}").kind as Media
+
+        runner.check("media/image-presentation-tokens-decode") {
+            val k = imageFixture("image-presentation-1") ?: error("fixture absent")
+            if (k.fit != ImageFit.Cover) error("fit: ${k.fit}")
+            if (k.aspectRatio != ImageAspect.SixteenNine) error("aspectRatio: ${k.aspectRatio}")
+            if (k.loading != ImageLoading.Lazy) error("loading: ${k.loading}")
+        }
+        runner.check("media/image-presentation-absent-restores-the-identity") {
+            // The claim `nodes/image-1.json` is the PROOF of rather than a restatement of: the
+            // pre-phase document decodes to today's behaviour on all three axes.
+            val k = imageFixture("image-1") ?: error("fixture absent")
+            if (k.fit != ImageFit.Natural) error("fit: ${k.fit}")
+            if (k.aspectRatio != ImageAspect.Natural) error("aspectRatio: ${k.aspectRatio}")
+            if (k.loading != ImageLoading.Eager) error("loading: ${k.loading}")
+            if (k.caption != null) error("a caption appeared from nowhere: ${k.caption}")
+            if (k.expandable) error("expandable must default to false")
+        }
+        runner.check("media/image-srcset-absent-is-the-EMPTY-LIST-not-null") {
+            val k = imageFixture("image-1") ?: error("fixture absent")
+            if (k.srcSet != emptyList<SrcSetEntry>()) error("absent srcSet must decode to the empty list; got ${k.srcSet}")
+        }
+        runner.check("media/image-srcset-preserves-the-AUTHORED-order") {
+            // The fixture is authored DESCENDING by width precisely so a re-sorting host fails it.
+            // Presentation order (ascending) is a renderer's business; the wire is ordered data.
+            val k = imageFixture("image-srcset-1") ?: error("fixture absent")
+            val widths = k.srcSet.map { it.width }
+            if (widths != listOf(1600, 800, 400)) error("authored order was not preserved: $widths")
+            if (staticString(k.srcSet[0].src) != "/harbour-1600.jpg") error("entry 0 src: ${k.srcSet[0].src}")
+        }
+        runner.check("media/image-caption-is-a-full-TextSource") {
+            // The rule a second host is most likely to break, because a caption reads like a
+            // string: every case of the DU rides the slot, arg bag included.
+            val literal = imageFixture("image-caption-1") ?: error("fixture absent")
+            if (literal.caption != LiteralText("The harbour at dawn, 1908. Oil on canvas.")) {
+                error("literal caption: ${literal.caption}")
+            }
+            val i18n = imageFixture("image-caption-i18n-1") ?: error("fixture absent")
+            val c = i18n.caption as? I18nText ?: error("an I18n caption narrowed to a string: ${i18n.caption}")
+            if (c.key != "gallery.caption.harbour") error("i18n key: ${c.key}")
+            if (c.args == null) error("the arg bag was dropped")
+        }
+        runner.check("media/image-expandable-composes-with-the-other-five-slots") {
+            val k = imageFixture("image-expandable-figure-1") ?: error("fixture absent")
+            if (!k.expandable) error("expandable was not read")
+            if (k.aspectRatio != ImageAspect.FourThree || k.fit != ImageFit.Cover) error("presentation slots: $k")
+            if (k.caption == null) error("caption was dropped")
+            if (k.srcSet.map { it.width } != listOf(400, 800)) error("srcSet: ${k.srcSet}")
+        }
+        runner.check("media/media-shared-bool-defaults-including-the-INVERTED-one") {
+            val k = decodeNode(File(corpus, "nodes/media-video-1.json").readText()).kind as Media
+            // `controls` is omitted at TRUE — the second such slot in the vocabulary. A reader that
+            // took the ordinary polarity here removes the transport from every keyboard user, and
+            // the document that says so is the one that omits the key.
+            if (!k.controls) error("absent controls must mean TRUE")
+            if (k.loop) error("absent loop must mean false")
+            if (k.kind != Video()) error("the minimum Video payload is the bare discriminator; got ${k.kind}")
+        }
+        runner.check("media/media-video-autoplay-and-poster-live-in-the-CASE") {
+            val autoplay = decodeNode(File(corpus, "nodes/media-video-autoplay-1.json").readText()).kind as Media
+            val v = autoplay.kind as? Video ?: error("not a Video: ${autoplay.kind}")
+            if (!v.autoplay) error("autoplay was not read")
+            if (autoplay.controls) error("an explicit controls:false was not read")
+            if (!autoplay.loop) error("loop was not read")
+            val poster = decodeNode(File(corpus, "nodes/media-video-poster-1.json").readText()).kind as Media
+            val pv = poster.kind as? Video ?: error("not a Video")
+            if (staticString(pv.poster) != "/walkthrough-poster.jpg") error("poster: ${pv.poster}")
+        }
+        runner.check("media/AUDIO-HAS-NO-AUTOPLAY-PATHWAY") {
+            // The load-bearing assertion of the whole section, and the reason the variant is a sum
+            // rather than a flag beside a `mediaType` string. `Audio` declares no slot, so an
+            // `autoplay` beside it is an ordinary unknown key: tolerated by rule 2, landing
+            // nowhere. A host modelling this as `Media(autoplay: Bool, kind: String)` would decode
+            // the same document into a page that begins making sound unbidden.
+            val plain = mediaOf("{\"\$type\":\"Audio\"}")
+            if (plain.kind != Audio) error("kind: ${plain.kind}")
+            val withAutoplay = mediaOf("{\"\$type\":\"Audio\",\"autoplay\":true}")
+            if (withAutoplay.kind != Audio) error("an autoplay declaration reached the Audio case: ${withAutoplay.kind}")
+            // Stated at the type level too, so the claim is not merely about these two documents:
+            // there is no member to read, on any Audio value this decoder can produce.
+            if (Audio::class.java.declaredFields.any { it.name.contains("autoplay", ignoreCase = true) }) {
+                error("the Audio case grew an autoplay slot — 3.6.6's strongest rule is no longer structural")
+            }
+        }
+        runner.check("media/mediaKind-is-\$type-discriminated-so-the-refusal-carries-it") {
+            // 6: the discriminated position reports at `.\$type`, not at the bare slot — which is
+            // what distinguishes this refusal from `aspectRatio`'s one line above it.
+            val e =
+                runCatching { mediaOf("{\"\$type\":\"Stream\"}") }.exceptionOrNull() as? FuaranDecodeException
+                    ?: error("'Stream' was ACCEPTED, or threw the wrong type")
+            if (e.code != FuaranDecodeException.UNKNOWN_DU_CASE) error("code: ${e.code}")
+            if (e.path != "\$.kind.kind.\$type") error("path: ${e.path}")
+        }
+    }
+
     val decoded = nodeFixtures.size + lenientFixtures.size
     println()
     println("Per-NodeKind coverage (${coverage.size} distinct kinds across $decoded decoded fixtures):")

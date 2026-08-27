@@ -215,6 +215,38 @@ val Image.sanitizedSrc: SanitizedUrl
     get() = src.sanitizedUrl
 
 /**
+ * A `srcSet` candidate's `src` put through the floor (WIRE_FORMAT.md 3.6.4). A candidate is a URL a
+ * client fetches with no user act — the same class as the primary `src`, and therefore the same
+ * obligation; a slot that skipped the floor would be a documented way around it.
+ *
+ * Note the REMEDY differs from the primary source's, and a consumer must not copy it across: an
+ * `<img>` must have a `src`, so a refused primary collapses to the refusal substitute, whereas a
+ * refused CANDIDATE is DROPPED from the list. The primary remains the fallback the whole mechanism
+ * rests on, so offering one fewer rendition costs nothing; offering one guaranteed to fail does.
+ */
+val SrcSetEntry.sanitizedSrc: SanitizedUrl
+    get() = src.sanitizedUrl
+
+/** A media element's `src` put through the URL floor, on the same terms as an image's. */
+val Media.sanitizedSrc: SanitizedUrl
+    get() = src.sanitizedUrl
+
+/**
+ * A video's `poster` put through the floor (3.6.6). Fetched with no user act exactly as `src` is,
+ * and — like a `srcSet` candidate and unlike the primary source — a refused poster is **dropped**
+ * rather than neutered: a `<video>` with no poster shows its first frame, which is a working
+ * rendering, while a poster pointing at the refusal URL is a broken image painted over the player.
+ *
+ * `null` when the case declares no poster (or is [Audio], which has no such slot at all).
+ */
+val MediaKind.sanitizedPoster: SanitizedUrl?
+    get() =
+        when (this) {
+            is Video -> poster?.sanitizedUrl
+            Audio -> null
+        }
+
+/**
  * For a `Navigate` action, its `route` put through the URL floor; `null` for every other action. A
  * `Navigate` route is always a literal on the wire, so this never reports `Dynamic`.
  *

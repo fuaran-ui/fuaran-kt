@@ -45,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import fuaran.ui.Audio
 import fuaran.ui.AutoLayout
 import fuaran.ui.Badge
 import fuaran.ui.Box
@@ -94,6 +95,7 @@ import fuaran.ui.ListNode
 import fuaran.ui.MapNode
 import fuaran.ui.Markdown
 import fuaran.ui.Math
+import fuaran.ui.Media
 import fuaran.ui.Metric
 import fuaran.ui.Modal
 import fuaran.ui.Mount
@@ -125,6 +127,7 @@ import fuaran.ui.Toast
 import fuaran.ui.ToggleField
 import fuaran.ui.ToneVariant
 import fuaran.ui.TonedPillCell
+import fuaran.ui.Video
 import fuaran.ui.discriminator
 import androidx.compose.foundation.layout.Box as CBox
 import androidx.compose.material3.Button as M3Button
@@ -189,6 +192,7 @@ private fun RenderNodeKind(node: Node, ctx: BindingContext) {
         is Icon -> RenderIcon(k, ctx)
         is Link -> RenderLink(k, ctx)
         is Image -> RenderImage(k, ctx)
+        is Media -> RenderMedia(k, ctx)
         is ListNode -> RenderList(k, ctx)
         is Toast -> RenderToast(k, ctx)
         is CodeBlock -> RenderCodeBlock(k)
@@ -578,6 +582,70 @@ private fun RenderImage(k: Image, ctx: BindingContext) {
         contentAlignment = Alignment.Center,
     ) {
         Text(ctx.resolveText(k.alt).ifEmpty { "image" }, fontSize = 10.sp, color = Color.Gray)
+    }
+}
+
+/**
+ * The media surface (WIRE_FORMAT.md 3.6.6).
+ *
+ * **This floor has no player**, exactly as it has no network image loader — pulling a playback
+ * engine in would break the dependency-light property this module holds, and a decoding surface is
+ * not where that decision belongs. So the arm is a visible, labelled transport tile: a real arm of
+ * the floor (never [FallbackPlaceholder]), stating what the document declares.
+ *
+ * Of the section's three normative render obligations, one binds a surface that renders nothing and
+ * two are discharged by construction — worth stating, because an arm that silently satisfies an
+ * obligation by not reaching it is indistinguishable from one that ignores it:
+ *
+ *  * **The accessible name is emitted ALWAYS.** `label` is required on the wire precisely because a
+ *    transport is never decorative, and it lands here as `contentDescription` on the tile. This is
+ *    the obligation that binds, and it binds even with nothing playing: a control announced as
+ *    "video" and nothing more tells the reader a player exists and nothing about what it plays.
+ *  * **`autoplay` is never emitted without muting**, because nothing here starts playback at all.
+ *    The tile SAYS the document declared autoplay rather than acting on it. A future arm that
+ *    genuinely plays must emit the pair or neither — the constraint is what the declaration MEANS,
+ *    not a default a caller overrides — and every mainstream client blocks unmuted autoplay anyway,
+ *    so honouring one half produces a player that silently never starts.
+ *  * **[Audio] has no autoplay pathway**, and that is enforced by the TYPE rather than by this
+ *    function: the case declares no such slot, so there is nothing to branch on and no arm below
+ *    can reach one. That is the whole reason the wire models the variant as a sum rather than as a
+ *    flag beside a `mediaType` string.
+ *
+ * `src` and `poster` are NOT fetched here, so neither passes the §19 floor at this site. When a
+ * real player arm lands it must route both through `FuaranUrlPolicy` in the same change — and drop
+ * a refused `poster` rather than substituting one, per the accessor's own note.
+ */
+@Composable
+private fun RenderMedia(k: Media, ctx: BindingContext) {
+    val name = ctx.resolveText(k.label)
+    // Bound to a local first: `Media.kind` is a `val` in another module, where the compiler cannot
+    // prove it unchanged, so no smart cast is available off the property itself. Same reason
+    // `RenderIcon` binds `k.label` before reading it.
+    val variant = k.kind
+    val surface = if (variant is Video) "video" else "audio"
+    val declared =
+        buildList {
+            if (variant is Video && variant.autoplay) add("autoplay+muted")
+            if (k.loop) add("loop")
+            if (!k.controls) add("no transport")
+            if (variant is Video && variant.poster != null) add("poster")
+        }
+    CBox(
+        Modifier
+            .fillMaxWidth()
+            .height(72.dp)
+            .background(Color(0xFFF0F0F0), RoundedCornerShape(4.dp))
+            .border(1.dp, Color(0xFFCCCCCC), RoundedCornerShape(4.dp))
+            // The one obligation that binds a surface rendering no playback: the accessible name,
+            // always, resolved from the required `label`.
+            .semantics(mergeDescendants = true) { contentDescription = name },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("▶ $surface", fontSize = 12.sp, color = Color.Gray)
+            Text(name, fontSize = 10.sp, color = Color.Gray)
+            if (declared.isNotEmpty()) Text(declared.joinToString(" · "), fontSize = 9.sp, color = Color.Gray)
+        }
     }
 }
 

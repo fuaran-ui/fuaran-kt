@@ -238,7 +238,90 @@ data class Link(
     val protection: LinkProtection? = null,
 ) : NodeKind
 
-data class Image(val alt: TextSource, val src: Binding, val variant: ImageVariant) : NodeKind
+/**
+ * One alternate rendition of the SAME picture at a declared intrinsic pixel width
+ * (WIRE_FORMAT.md 3.6.4). Both members are required within the entry, and [width] is the `w`
+ * descriptor a client selects on — hence positive, enforced at decode rather than left to a
+ * renderer to discover, since a `0w` candidate is one no client can ever select.
+ */
+data class SrcSetEntry(val src: Binding, val width: Int)
+
+/**
+ * WIRE_FORMAT.md 3.6.2–3.6.5. The three presentation slots are identity-defaulted (absent means
+ * [ImageFit.Natural] / [ImageAspect.Natural] / [ImageLoading.Eager]), so a document written before
+ * they existed decodes to today's behaviour.
+ *
+ * [srcSet] is the missing-list-field decode class: **absent MEANS the empty list**, never null. A
+ * present `"srcSet":null` is refused (`WRONG_TYPE`) because absence already has a spelling, and the
+ * authored ORDER is preserved — the wire is ordered data, and a surface that sorted it would be
+ * viewing a document its author did not write. Presentation order (ascending by width) is a
+ * renderer's business, not this projection's.
+ *
+ * [expandable] is the only slot here that declares an INTERACTION rather than a picture: the
+ * full-size asset is reachable from the rendered image. It carries no `Action`, reaches no
+ * closure-bearing position, and is `false` by default.
+ */
+data class Image(
+    val alt: TextSource,
+    val src: Binding,
+    val variant: ImageVariant,
+    val fit: ImageFit = ImageFit.Natural,
+    val aspectRatio: ImageAspect = ImageAspect.Natural,
+    val loading: ImageLoading = ImageLoading.Eager,
+    /** CONTENT, not an identity default — a full [TextSource], so a caption is i18n-capable. */
+    val caption: TextSource? = null,
+    val srcSet: List<SrcSetEntry> = emptyList(),
+    val expandable: Boolean = false,
+) : NodeKind
+
+/**
+ * The playback surface (WIRE_FORMAT.md 3.6.6) — **ONE kind with two variants, never two kinds**.
+ * Everything a video and an audio surface share is stated once here; only what genuinely differs
+ * lives in [kind].
+ *
+ * [label] is REQUIRED and has no default: a media element is a TRANSPORT, never decorative, and
+ * there is no value to fall back to that would not be a fabricated name for someone else's
+ * recording. A host emits the resolved label as the element's accessible name, always.
+ *
+ * [controls] is omitted on the wire at **true** (the inverted polarity [Toast.dismissable] also
+ * takes): a transport a keyboard user cannot reach is the deviation, so it is what costs a key.
+ */
+data class Media(
+    val label: TextSource,
+    val src: Binding,
+    val kind: MediaKind,
+    /** Omitted on the wire when `true` — the accessible setting is what a document gets for free. */
+    val controls: Boolean = true,
+    val loop: Boolean = false,
+) : NodeKind
+
+/**
+ * Which playback surface a [Media] node is. `$type`-discriminated at `kind.kind`, so an unknown
+ * case reports at `…kind.kind.$type` rather than at the bare slot (WIRE_FORMAT.md 6).
+ *
+ * The set is CLOSED at [Video] | [Audio]: a third surface is an admission to the vocabulary, not a
+ * spelling a decoder may guess at.
+ */
+sealed interface MediaKind
+
+/**
+ * The video surface. [autoplay] is a declaration whose rendering is constrained: a host that
+ * honours it MUST emit it together with a muted attribute, and MUST NOT mute where it is absent.
+ * There is deliberately no `muted` slot — it would be a second knob free to disagree with the
+ * first, and the only combination it would add is the one no host may render.
+ */
+data class Video(val autoplay: Boolean = false, val poster: Binding? = null) : MediaKind
+
+/**
+ * The audio surface, whose payload is the discriminator alone.
+ *
+ * **There is NO autoplay pathway here — in the type, on the wire, or in a render arm.** That is
+ * stronger than a default of `false`: a slot defaulting to off is one a document can switch on, and
+ * there is no document this format wants to be able to state in which a page begins making sound
+ * unbidden. `{"$type":"Audio","autoplay":true}` decodes to an audio surface that does not autoplay,
+ * because the value has nowhere to land — an unknown key, tolerated by rule 2 like any other.
+ */
+data object Audio : MediaKind
 
 data class ListNode(val items: List<TextSource>, val ordered: Boolean) : NodeKind
 

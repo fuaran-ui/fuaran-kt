@@ -42,11 +42,11 @@ A decoded tree is **untrusted input**. It usually arrives from a model, and a mo
 emit a `Link` whose `href` is `javascript:…` or a `Navigate` whose `route` points somewhere you did
 not intend. Two obligations, and the first is the one that bites:
 
-**1. Never open a tree-supplied URL without the floor.** `Link.href`, `Image.src` and
-`NavigateAction.route` are handed to you exactly as the wire spelled them — `dispatchAction` returns
-a `Navigate` to you rather than acting on it, precisely so that you decide. Route every one through
-`FuaranUrlPolicy` before it reaches an `Intent`, a `CustomTabsIntent`, an image loader, or any
-`WebView` you add:
+**1. Never open a tree-supplied URL without the floor.** `Link.href`, `Image.src`, every
+`Image.srcSet` candidate's `src`, `Media.src`, a `Video`'s `poster`, and `NavigateAction.route` are
+handed to you exactly as the wire spelled them — `dispatchAction` returns a `Navigate` to you rather
+than acting on it, precisely so that you decide. Route every one through `FuaranUrlPolicy` before it
+reaches an `Intent`, a `CustomTabsIntent`, an image loader, a media player, or any `WebView` you add:
 
 ```kotlin
 when (val dest = link.sanitizedHref) {              // NOT link.href
@@ -65,6 +65,15 @@ else is refused, including unknown schemes (deny by default), `intent:` URLs, pr
 to `//`. The scheme candidate is scrubbed of ASCII whitespace and control characters first, so
 `java\tscript:` is classified as `javascript:` and refused; a `startsWith("javascript:")` check of
 your own is not a floor.
+
+**The remedy for a refusal is not the same on every slot, and copying one across is a real defect.**
+An image or a media element must HAVE a source, so a refused primary `src` collapses to your blank /
+refusal substitute and keeps its marker. A `srcSet` candidate and a video `poster` have no such
+obligation, so a refused one is **dropped**: the primary is the fallback the whole mechanism rests
+on, and offering a client one fewer rendition costs nothing where offering it one guaranteed to fail
+does — while a poster pointing at a refusal URL is a broken image painted over the player. Likewise
+an `Image` declaring `expandable` over a refused `src` gets **no expand affordance at all**, because
+a link to `about:blank` is a dead control rather than a degraded one.
 
 **2. Do not build an HTML path for tree text.** This surface has no `WebView` and no
 `Html.fromHtml` path, and that absence is why it carries no script-injection sink at all.
