@@ -784,6 +784,83 @@ fun main() {
     }
     println("accessibility: $a11yChecked trait-bearing fixtures asserted slot by slot")
 
+    // ----------------------------------------------------------------------- //
+    // The TREND-POLARITY leg (WIRE_FORMAT 3.6.1)
+    // ----------------------------------------------------------------------- //
+    //
+    // `nodes/metric-inverted-polarity.json` proves the POSITIVE case through the
+    // node-round-trip family above — but only that it DECODES, since this surface has
+    // no canonical encoder to compare bytes against. So the slot gets its own value
+    // assertion, plus the three things a fixture structurally cannot prove: the
+    // DEFAULT when the key is absent (a fixture can only pin a document that exists),
+    // the REFUSAL of the spelling the specification reserved (a corpus reject fixture
+    // for it would assert the reservation is closed, which is the claim it withholds),
+    // and that an INERT declaration survives.
+    //
+    // The RENDER half of the same rule — sentiment = sign x polarity, the glyph and the
+    // spoken label — runs beside it in the same gate, in `TrendSentimentHarness`.
+    run {
+        val fixture = File(corpus, "nodes/metric-inverted-polarity.json")
+        if (fixture.isFile) {
+            runner.check("trendPolarity/metric-inverted-polarity") {
+                val k = decodeNode(fixture.readText()).kind as? Metric ?: error("not a Metric")
+                if (k.trendPolarity != TrendPolarity.LowerIsBetter) error("polarity: ${k.trendPolarity}")
+                if (k.trend == null) error("the fixture's trend slot decoded to nothing")
+                // The pair one `tone` slot could never express, and the whole argument for the
+                // field: the tile says the reading stands badly, the polarity says the quantity is
+                // improving. Nothing derives either from the other.
+                if (k.tone != ToneVariant.Warning) error("tone was rewritten by the polarity: ${k.tone}")
+            }
+        }
+        val base =
+            "{\"id\":\"m\",\"kind\":{\"\$type\":\"Metric\",\"label\":\"Revenue\"," +
+                "\"value\":{\"\$type\":\"Static\",\"value\":42.0}"
+
+        runner.check("trendPolarity/absentIsHigherIsBetter") {
+            // A DEFAULT, not a third state — which is why the model slot is total rather than
+            // nullable, and why this asserts a value rather than an absence.
+            val k = decodeNode("$base}}").kind as? Metric ?: error("not a Metric")
+            if (k.trendPolarity != TrendPolarity.HigherIsBetter) error("polarity: ${k.trendPolarity}")
+        }
+
+        runner.check("trendPolarity/inertDeclarationSurvives") {
+            // Clause 4: a polarity with no `trend` is legal and says nothing. It is KEPT rather
+            // than dropped — dropping it would silently rewrite the author's document because this
+            // surface judged the declaration pointless.
+            val k = decodeNode("$base,\"trendPolarity\":\"LowerIsBetter\"}}").kind as? Metric ?: error("not a Metric")
+            if (k.trendPolarity != TrendPolarity.LowerIsBetter) error("polarity: ${k.trendPolarity}")
+            if (k.trend != null) error("a trend appeared from nowhere: ${k.trend}")
+        }
+
+        runner.check("trendPolarity/reservedNeutralRefusedByDefaultDeny") {
+            // The whole point of modelling the reserved case as ABSENCE FROM THE CASE SET rather
+            // than as a case the decoder refuses: default-deny does the work, and the expected-list
+            // diagnostic cannot advertise a spelling the format does not accept.
+            val e =
+                runCatching { decodeNode("$base,\"trendPolarity\":\"Neutral\"}}") }.exceptionOrNull()
+                    as? FuaranDecodeException ?: error("'Neutral' was ACCEPTED, or threw the wrong type")
+            if (e.code != FuaranDecodeException.UNKNOWN_DU_CASE) error("code: ${e.code}")
+            if (e.path != "$.kind.trendPolarity") error("path: ${e.path}")
+            val msg = e.message ?: error("no message")
+            if (!msg.contains("HigherIsBetter, LowerIsBetter")) error("expected-list drifted: $msg")
+            // Scoped to the expected-list HALF deliberately: the message also echoes the rejected
+            // spelling as the got-value, so a bare contains("Neutral") reads red on a CORRECT
+            // refusal. The sibling Swift surface's first run of this assertion did exactly that.
+            val expectedList = msg.substringAfter("expected one of ", "")
+            if (expectedList.isEmpty()) error("no expected-list in: $msg")
+            if (expectedList.contains("Neutral")) error("the reserved case leaked into the expected list")
+        }
+
+        runner.check("trendPolarity/noAliasArmIsRegistered") {
+            // Neither the boolean spelling 3.6.1 refuses nor a direction word is aliased. Accepting
+            // either would silently decide a question the wire deliberately left to a declaration.
+            for (spelling in listOf("Inverted", "Descending", "lowerIsBetter")) {
+                val threw = runCatching { decodeNode("$base,\"trendPolarity\":\"$spelling\"}}") }.isFailure
+                if (!threw) error("'$spelling' must not be accepted")
+            }
+        }
+    }
+
     val decoded = nodeFixtures.size + lenientFixtures.size
     println()
     println("Per-NodeKind coverage (${coverage.size} distinct kinds across $decoded decoded fixtures):")

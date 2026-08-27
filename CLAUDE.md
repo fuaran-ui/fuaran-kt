@@ -184,6 +184,57 @@ looks correct, and the value never reaches the session store. Phase 667 found fi
 `onClick` at all) — where the 2026-07-25 survey had named two. A test per arm in
 `WriteBackGapTest` is the only real guard; add one with the arm.
 
+## Trend sentiment projection — `tone` and `trendPolarity` are not the same judgement
+
+`Metric` carries two slots that both look like judgements about a number, and WIRE_FORMAT.md 3.6.1
+exists because they are not. **`tone` says how the reading STANDS and colours the TILE;
+`trendPolarity` says which way the quantity IMPROVES and reaches the TREND element alone.** A host
+derives neither from the other. The projection lives in
+`fuaran-renderer/.../TrendSentiment.kt`; the decision is here.
+
+**Split for the same reason the accessibility projection is** — `TrendSentiment.kt` carries no
+`androidx` import, so the DECISIONS are asserted in the plain-JVM gate (`TrendSentimentHarness`,
+listed by name in `run.ps1`'s `$RendererNeutralKt` and `$TestKt`) rather than only on a machine
+carrying the Android SDK. The thin application onto a Compose colour and a `semantics {}` property
+sits in `FuaranRenderer.kt`; `TrendSentimentTest` (Robolectric) keeps only what that gate alone can
+answer — that the glyph and its announcement genuinely reach the semantics tree, and that the
+numeric text is untouched — plus one delegating test that re-runs the neutral set without a second
+copy of the expectations.
+
+- **Sentiment is `sign(trend) x polarity`** — `HigherIsBetter` is `+1`, `LowerIsBetter` is `-1`. A
+  falling -7.34% reads as an *improvement* under `LowerIsBetter`, and the numeric text — its sign
+  included — is identical either way. Polarity changes how the number READS, never what it SAYS;
+  the cheap trick of letting the emitter flip the sign is refused by the specification, because a
+  -7.34% error rate printed as +7.34% is a false statement about the world.
+- **Nothing writes back to `tone`.** A surface that inferred "improving implies the tile is Success"
+  would re-create in the render the exact conflation the wire slot exists to remove, and would
+  override an emitter's deliberate `Critical` on a metric improving from a bad place. There is no
+  path from `TrendSentiment.kt` to a `ToneVariant`, by construction rather than by discipline; the
+  render arm picks its tint from the palette BY SENTIMENT.
+- **The structural intent transfers from the reference tiers; their CSS constraint does not.** Those
+  tiers emit `fuaran-metric-trend-{improving,regressing,unchanged}` class modifiers plus a glyph
+  carrying an `aria-label`. Compose has no class vocabulary, so what crosses is the PAIR — a
+  sentiment and a non-colour channel for it. Colour alone fails WCAG 1.4.1, so the glyph is not
+  decoration; 3.6.1 makes discharging that obligation non-optional while leaving HOW to the surface.
+- **`contentDescription` sits on the GLYPH, not the trend text.** On the text it would OVERRIDE the
+  number and assistive technology would hear "improving" and lose the reading. The reference tiers
+  place it the same way and record the same reason.
+- **`Neutral` is reserved by the specification and is deliberately NOT a case** of `TrendPolarity`.
+  The case set IS the accepted wire set, so `"Neutral"` fails `UNKNOWN_DU_CASE` naming the two legal
+  spellings rather than this surface quietly deciding a question the reservation holds open — and no
+  `when` carries a dead arm. Admitting it later is one constant plus an exhaustiveness ERROR at every
+  site that must then decide what it means, which is exactly the property that made the wire slot an
+  enum rather than an `inverted` bool. No alias arm is registered: the obvious candidates
+  (`Neutral`, `Inverted`, `Descending`) are precisely the spellings that must not be accepted.
+- **An unparseable resolved trend yields NO sentiment**, matching the reference renderers' unresolved
+  branch (an unclassed trend element, no glyph). Inventing one would be a claim about a number nobody
+  has.
+
+**Forward-coupling.** A change to the composition rule, the sentiment set, or the glyph vocabulary
+updates the notes above, `TrendSentiment.kt`, and `TrendSentimentHarness` in the same change. A new
+`TrendSentiment` case is the part the compiler DOES force: the render arm's tint `when` is
+exhaustive, so the application half cannot silently ignore a case the decision half grew.
+
 ## Accessibility projection — the mapping, and what is dropped
 
 A node's `Accessibility` trait carries six slots. The HTML render tiers project them into `aria-*`

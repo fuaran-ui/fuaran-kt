@@ -61,6 +61,25 @@ inline fun <reified E : Enum<E>> enumOf(raw: String, path: String): E =
             "unrecognised ${E::class.simpleName} '$raw'; expected one of ${enumValues<E>().joinToString(", ") { it.name }}",
         )
 
+/**
+ * `Metric.trendPolarity` — which way the measured quantity IMPROVES (WIRE_FORMAT.md 3.6.1).
+ * Distinct from `tone`, which says how the reading STANDS: a host derives neither from the other,
+ * and nothing ever writes back to `tone`.
+ *
+ * **`Neutral` is reserved by the specification and is deliberately NOT a case here.** The case set
+ * IS the accepted wire set, so omitting it means `"Neutral"` fails `UNKNOWN_DU_CASE` naming the two
+ * legal spellings, rather than this surface quietly deciding a question the reservation holds open
+ * — and no `when` carries a dead arm waiting for a case the wire will not produce. That is the same
+ * modelling choice the Rust reference core made for the same slot, and it is why the wire slot is
+ * an enum rather than an `inverted` bool: admitting the third case later is one added constant plus
+ * an exhaustiveness ERROR at every site that must then decide what it means.
+ *
+ * No alias arm is registered, and that omission is deliberate: the obvious candidates are precisely
+ * the spellings that must not be accepted — `Neutral` would pre-empt the reservation, and
+ * `Inverted` / `Descending` would reinstate the boolean spelling 3.6.1 refuses.
+ */
+enum class TrendPolarity { HigherIsBetter, LowerIsBetter }
+
 enum class IconSize { Small, Medium, Large }
 
 enum class DurationUnit { Seconds, Minutes, Hours }

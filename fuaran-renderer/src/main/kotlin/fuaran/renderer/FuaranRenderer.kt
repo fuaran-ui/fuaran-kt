@@ -395,7 +395,43 @@ private fun RenderMetric(k: Metric, ctx: BindingContext) {
         Text(ctx.resolveText(k.label), fontSize = 12.sp, color = Color.Gray)
         Text(ctx.resolve(k.value), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = accent)
         k.subtext?.let { Text(ctx.resolveText(it), fontSize = 11.sp, color = Color.Gray) }
-        k.trend?.let { Text(ctx.resolve(it), fontSize = 11.sp) }
+        k.trend?.let {
+            // Phase 867 (WIRE_FORMAT.md 3.6.1) — the trend reads through its declared polarity.
+            // The numeric text is UNCHANGED by that reading; what the sentiment adds is a colour
+            // and a glyph beside it. `k.tone` is not consulted here and is not written to: the
+            // palette entries below are selected by SENTIMENT, so an emitter's deliberate
+            // `Critical` tile survives a metric that is improving from a bad place.
+            //
+            // The decisions are next door in `TrendSentiment.kt`, which carries no Compose import
+            // so they are asserted in the plain-JVM gate; this is the thin application half.
+            val text = ctx.resolve(it)
+            val sentiment = trendSentiment(k.trendPolarity, text)
+            val tint = when (sentiment) {
+                TrendSentiment.Improving -> tone(ToneVariant.Success).accent
+                TrendSentiment.Regressing -> tone(ToneVariant.Critical).accent
+                TrendSentiment.Unchanged, null -> tone(ToneVariant.Subdued).accent
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (sentiment != null) {
+                    // The label sits on the GLYPH rather than on the trend text. On the text it
+                    // would OVERRIDE the number and assistive technology would hear "improving"
+                    // and lose the reading; here it is announced beside it. The reference tiers
+                    // place it the same way and record the same reason.
+                    Text(
+                        sentiment.glyph,
+                        fontSize = 11.sp,
+                        color = tint,
+                        modifier = Modifier
+                            .padding(end = 3.dp)
+                            .semantics {
+                                contentDescription = sentiment.label
+                                role = Role.Image
+                            },
+                    )
+                }
+                Text(text, fontSize = 11.sp, color = tint)
+            }
+        }
     }
 }
 

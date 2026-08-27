@@ -541,6 +541,14 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 subtext = o["subtext"]?.let { decodeTextSource(it, "$path.subtext") },
                 trend = o["trend"]?.let { decodeBindingFloat(it, "$path.trend") },
                 trendFormat = o["trendFormat"]?.let { decodeValueFormat(it, "$path.trendFormat") },
+                // 3.6.1 — omitted-when-default, decoded independently of `trend`; an inert
+                // declaration round-trips rather than being dropped. An unrecognised spelling
+                // (`Neutral` included, and on purpose) fails UNKNOWN_DU_CASE with the canonical
+                // two-name list, because `enumOf` builds its expected list from the case set and
+                // the case set is the accepted wire set.
+                trendPolarity =
+                    o.optStr("trendPolarity", path)?.let { enumOf<TrendPolarity>(it, "$path.trendPolarity") }
+                        ?: TrendPolarity.HigherIsBetter,
             )
         "Badge" ->
             Badge(

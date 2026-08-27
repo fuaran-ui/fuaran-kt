@@ -161,6 +161,15 @@ data class Metric(
     val subtext: TextSource? = null,
     val trend: Binding? = null,
     val trendFormat: ValueFormat? = null,
+    /**
+     * 3.6.1 — which way the quantity IMPROVES. TOTAL, not nullable, and decoded independently of
+     * [trend]: the wire's "absent means `HigherIsBetter`" is a DEFAULT rather than a third state,
+     * so modelling it as `null` would push the decision back out to every reader. A polarity
+     * declared with no [trend] is inert (legal per clause 4) and is kept rather than dropped —
+     * dropping it would silently rewrite the author's document because this surface judged the
+     * declaration pointless.
+     */
+    val trendPolarity: TrendPolarity = TrendPolarity.HigherIsBetter,
 ) : NodeKind
 
 data class Badge(val label: TextSource, val variant: BadgeVariant) : NodeKind

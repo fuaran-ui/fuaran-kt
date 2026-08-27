@@ -103,7 +103,8 @@ $MainKt = @(Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\main\ko
 # would be a packaging accident rather than a decision. This set is for the test jar only.
 $RendererNeutralKt = @(
     (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\Binding.kt"),
-    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\AccessibilityProjection.kt")
+    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\AccessibilityProjection.kt"),
+    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\TrendSentiment.kt")
 ) | Where-Object { Test-Path $_ }
 # The direct kotlinc build runs the two `main()`-driven harnesses (`CorpusDecodeTest`, `SessionTest`)
 # via `java`; it deliberately compiles ONLY those, not every test file. The Gradle-only JUnit gates
@@ -121,6 +122,12 @@ $TestKt = @(
     Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "AccessibilityProjectionHarness.kt" -ErrorAction SilentlyContinue |
         ForEach-Object FullName
     Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "AccessibilityCorpusHarness.kt" -ErrorAction SilentlyContinue |
+        ForEach-Object FullName
+    # The trend-sentiment projection's decisions (WIRE_FORMAT 3.6.1 — sign x polarity, the glyph
+    # vocabulary, the drop case). Same split and same reason as the two above: `TrendSentiment.kt`
+    # carries no Compose import precisely so its decisions are re-checkable on the machine they are
+    # changed from, rather than only on the box holding the Android SDK.
+    Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "TrendSentimentHarness.kt" -ErrorAction SilentlyContinue |
         ForEach-Object FullName
 )
 $JavaSrc = @(Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-core\src\main\java") -Filter *.java -ErrorAction SilentlyContinue |
@@ -171,6 +178,14 @@ Write-Host "`n== accessibility projection (platform-neutral) ==" -ForegroundColo
 if ($LASTEXITCODE -ne 0) { throw "accessibility mapping harness failed" }
 & $Java -cp $Classpath "fuaran.renderer.AccessibilityCorpusHarnessKt"
 if ($LASTEXITCODE -ne 0) { throw "accessibility corpus projection harness failed" }
+
+# --- The trend-sentiment projection's platform-neutral half -------------------------- #
+# Same placement argument as the two legs above: it establishes nothing the decode harness needs and
+# depends on nothing the decode harness establishes, so running it ahead keeps a standing red there
+# from masking a regression in the composition rule.
+Write-Host "`n== trend sentiment projection (platform-neutral) ==" -ForegroundColor Cyan
+& $Java -cp $Classpath "fuaran.renderer.TrendSentimentHarnessKt"
+if ($LASTEXITCODE -ne 0) { throw "trend sentiment projection harness failed" }
 
 # --- Phase 542: corpus render-coverage harness -------------------------------------- #
 Write-Host "`n== Phase 542 :: corpus render-coverage ==" -ForegroundColor Cyan
