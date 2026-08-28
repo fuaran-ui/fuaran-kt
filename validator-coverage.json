@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "host": "fuaran-kt",
+  "family": "pre-emit",
+  "vocabulary": "wire-format-fixtures/validator/defect-vocabulary.json",
+  "posture": "delegating",
+  "postureReason": "A DECODE-ONLY render surface over the certified reference core, not a conformant host: it never canonically encodes, so it never emits a tree, and a PRE-EMIT validator is a check an emitter runs before it emits. There is nothing here for the family to gate. The declaration exists anyway because the alternative is silence, and the gate cannot tell a surface that carries no validator by design from one nobody remembered to declare — which is the whole reason the per-host declarations exist. Not a backlog: implementing this family here would mean this surface second-guessing a tree the core already validated, at a seam where it has no emitter of its own to correct.",
+  "implemented": [],
+  "abstentionDefault": "Not applicable. This surface emits no tree, so it runs no pre-emit gate; every code in the vocabulary belongs to the emitting host upstream of it.",
+  "abstained": {
+    "FUARAN106": "Not applicable here, and named rather than left to the default because this surface DOES participate in the §24.4 rule the code guards — asymmetrically, and the asymmetry is the point. The DERIVED VALUE is inherited: this surface carries no evaluator, so a seeded slot reaches it already resolved through the core's `projectResolved` / `resolvedRows` across the JNI seam, and there is deliberately no seeding pass here (a second pass over the same tree would be a second opinion about a value the core has already decided). Unlike the sibling Swift surface, the DECODE needed no arm — this decoder already accepted the empty carried feed, so `nodes/shared-source-seeded-pair` was green here throughout, which is precisely why a render-parity check rather than a codec one was needed to tell adoption from its absence. What can never reach this surface is the DIAGNOSIS: a conflicting pair of declarations is a defect in the document the emitter produced, reportable only where a tree is emitted.",
+    "FUARAN107": "Not applicable, same reasoning. A duplicated inline table is an authoring defect in a tree this surface receives rather than writes; reporting it here would be a render surface auditing its input for a mistake it cannot fix and its consumer did not make."
+  },
+  "otherFamilies": {},
+  "otherFamiliesNote": "This surface raises no FUARAN codes at all. Its decode refusals are the shared DecodeError vocabulary (WRONG_TYPE / UNKNOWN_DU_CASE / MISSING_FIELD / …), which the corpus reject family gates and which is a different contract from the pre-emit defect family enumerated here.",
+  "machineChecked": false,
+  "machineCheckedNote": "There is nothing to check: the implemented set is empty by design, so the gate verifies only that this declaration accounts for every vocabulary code. A future validator here would have to make the code a first-class value on a finding before this could read anything else."
+}

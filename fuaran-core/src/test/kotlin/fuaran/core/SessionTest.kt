@@ -246,6 +246,58 @@ fun main() {
                 require(sel.defaultValue != null) { "the Selection default (TCK-2041) survives the projection" }
             }
         }
+
+        // WIRE_FORMAT.md 24.4 - slot SEEDING, and the answer to this surface's
+        // adoption question: the derived value is INHERITED from the core.
+        //
+        // This surface carries no evaluator. A scalar Transform reaches it
+        // already folded by the core's project_resolved, and a row-context one
+        // arrives out of band through resolved_rows - both read the core's own
+        // binding sources, so the core's seeding pass is what fills the slot.
+        // There is deliberately no seeding pass on this side and there must not
+        // be one: a second pass over the same tree would be a second opinion
+        // about a value the core has already decided.
+        //
+        // The fixture declares two rows under $state.members on a grid's source,
+        // beside a badge whose Transform derives over the same key and carries
+        // no data of its own. 2 is what the reference tiers render. Observed RED
+        // with the core's seeding pass disabled (the badge label folds to the
+        // empty string), so this is a measurement rather than an assumption.
+        runner.check("project-resolved/state-seeded-pair") {
+            val raw = File(corpusNodes, "shared-source-seeded-pair.json").readText()
+            FuaranSession.create(NativeBridge, raw).use { session ->
+                val tree = decodeNode(session.projectResolved())
+                val badge = findNode(tree, "member-count") ?: error("member-count missing")
+                val bk = badge.kind
+                require(bk is Badge) { "expected a Badge, was ${bk::class.simpleName}" }
+                val bl = bk.label
+                require(bl is LiteralText && bl.text == "2") {
+                    "the badge must derive the SIBLING grid's two declared rows, was $bl"
+                }
+                // The grid's rows come from the SAME slot, out of band.
+                val rows = session.resolvedRows("member-grid")
+                require(rows is ResolvedRows.Rows && rows.rows.size == 2) {
+                    "the grid must resolve the two declared rows, was $rows"
+                }
+            }
+        }
+
+        // The go-red half. An assertion nobody has watched fail is a claim about
+        // the author's confidence, not about the seam - so a WRITE through the
+        // session's own channel must move the derived value, which also pins
+        // 24.4's precedence (a written value wins over a seed) from this side.
+        runner.check("project-resolved/a-write-overrides-the-seed") {
+            val raw = File(corpusNodes, "shared-source-seeded-pair.json").readText()
+            FuaranSession.create(NativeBridge, raw).use { session ->
+                session.setState("members", """[{"team":"Only"}]""")
+                val tree = decodeNode(session.projectResolved())
+                val badge = findNode(tree, "member-count") ?: error("member-count missing")
+                val bl = (badge.kind as Badge).label
+                require(bl is LiteralText && bl.text == "1") {
+                    "a written value did not override the seed, was $bl"
+                }
+            }
+        }
     }
 
     // --- set_state exercises the four-buffer marshalling path (no error envelope) ---
