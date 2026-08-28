@@ -401,8 +401,50 @@ private fun decodeLiveRegion(value: JsonValue, path: String): String {
 
 private val LIVE_REGIONS = listOf("polite", "assertive", "off")
 
+/**
+ * The `Accessibility` trait's near-miss set (WIRE_FORMAT 3.1 "Near-miss slot names are refused,
+ * not ignored") - the 3.2 grid narrowing at the position where its cost is highest.
+ *
+ * This trait has NO VISIBLE OUTPUT. A mislabelled column is on screen; an ignored `ariaLabel`
+ * looks identical to an honoured one from every side, so the refusal is the only feedback that
+ * can ever arrive.
+ *
+ * Refused rather than ALIASED, and note the argument differs from the grid's. There the names
+ * were not synonyms; here `ariaLabel` IS one, so admission turns on the other half of the lenient
+ * profile's rule - a shorthand earns its place by being a genuine assist to the emitting model,
+ * and a six-character key rename is not one. `live` settles it: the HTML idiom it comes from also
+ * spells a BOOLEAN, so an alias would bind a possibly-boolean prior onto a closed token set.
+ *
+ * Three families, grouped by the slot each points at: the ARIA attribute name, its camelCase
+ * spelling, and the un-prefixed or un-cased slot name. `mapOf` preserves insertion order, and the
+ * order is identical in every host, so which defect surfaces first is deterministic.
+ */
+private val ACCESSIBILITY_NEAR_MISSES =
+    mapOf(
+        "aria-label" to "label",
+        "ariaLabel" to "label",
+        "aria-labelledby" to "labelledBy",
+        "ariaLabelledBy" to "labelledBy",
+        "labelledby" to "labelledBy",
+        "aria-describedby" to "describedBy",
+        "ariaDescribedBy" to "describedBy",
+        "describedby" to "describedBy",
+        "aria-role" to "role",
+        "ariaRole" to "role",
+        "aria-live" to "liveRegion",
+        "ariaLive" to "liveRegion",
+        "live" to "liveRegion",
+        "liveregion" to "liveRegion",
+        "aria-hidden" to "hidden",
+        "ariaHidden" to "hidden",
+    )
+
 private fun decodeAccessibility(value: JsonValue, path: String): Accessibility {
     val o = value.obj(path)
+    // The near-miss check runs BEFORE the slot reads, matching the FormField ordering, so a trait
+    // carrying both `ariaLabel` and a well-formed `label` still names the ignored key rather than
+    // decoding half the author's intent in silence.
+    o.refuseNearMiss(path, ACCESSIBILITY_NEAR_MISSES)
     return Accessibility(
         label = o["label"]?.let { decodeBindingString(it, "$path.label") },
         labelledBy = o.optStr("labelledBy", path),
