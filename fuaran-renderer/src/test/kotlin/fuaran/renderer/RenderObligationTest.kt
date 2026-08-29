@@ -6,8 +6,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.onAllNodes
 import androidx.compose.ui.test.runComposeUiTest
+// `onAllNodes` / `waitForIdle` / `setContent` are MEMBERS of the `ComposeUiTest` receiver, not
+// top-level extensions like `hasText` above — importing them is an unresolved reference.
 import fuaran.ui.Audio
 import fuaran.ui.Binding
 import fuaran.ui.Custom
