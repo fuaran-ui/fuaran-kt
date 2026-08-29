@@ -129,6 +129,15 @@ $TestKt = @(
     # changed from, rather than only on the box holding the Android SDK.
     Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "TrendSentimentHarness.kt" -ErrorAction SilentlyContinue |
         ForEach-Object FullName
+    # The render-obligation gate (WIRE_FORMAT.md 13) — the reader, the reporting surface, the
+    # checker/exemption registries and every gate check over them. Same split and same reason as the
+    # three above: the classification half is ordinary logic over a generated artefact, so it runs on
+    # whatever machine the next change is made from, while the checkers that must observe a
+    # composition stay in the Robolectric leg (`RenderObligationTest`) and are DECLARED here by key.
+    Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "RenderObligations.kt" -ErrorAction SilentlyContinue |
+        ForEach-Object FullName
+    Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "RenderObligationHarness.kt" -ErrorAction SilentlyContinue |
+        ForEach-Object FullName
 )
 $JavaSrc = @(Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-core\src\main\java") -Filter *.java -ErrorAction SilentlyContinue |
     ForEach-Object FullName)
@@ -186,6 +195,19 @@ if ($LASTEXITCODE -ne 0) { throw "accessibility corpus projection harness failed
 Write-Host "`n== trend sentiment projection (platform-neutral) ==" -ForegroundColor Cyan
 & $Java -cp $Classpath "fuaran.renderer.TrendSentimentHarnessKt"
 if ($LASTEXITCODE -ne 0) { throw "trend sentiment projection harness failed" }
+
+# --- Render-obligation conformance (WIRE_FORMAT.md 13) ------------------------------ #
+# The checkable remainder of the render contract, enumerated from the corpus's generated
+# `render-fidelity.json` rather than from a list beside the checkers — so a newly declared
+# obligation arrives here as a claim with no checker and turns this leg red.
+#
+# AHEAD of the decode harness, for the reason the two legs above record: each leg aborts the run on
+# its first failure, so with this last, any standing red in the decode harness would stop an
+# obligation regression from ever being reported. It establishes nothing the decode leg needs and
+# depends on nothing the decode leg establishes.
+Write-Host "`n== render obligations (WIRE_FORMAT.md 13) ==" -ForegroundColor Cyan
+& $Java -cp $Classpath "fuaran.renderer.RenderObligationHarnessKt"
+if ($LASTEXITCODE -ne 0) { throw "render-obligation conformance gate failed" }
 
 # --- Phase 542: corpus render-coverage harness -------------------------------------- #
 Write-Host "`n== Phase 542 :: corpus render-coverage ==" -ForegroundColor Cyan

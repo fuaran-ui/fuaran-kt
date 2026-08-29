@@ -43,6 +43,14 @@ android {
                     "fuaran.corpus",
                     rootProject.projectDir.parentFile.resolve("wire-format-fixtures").absolutePath,
                 )
+                // Gradle does not hand the ambient environment to a test JVM, so the
+                // render-obligation gate's artefact override has to be forwarded explicitly.
+                // It exists so the gate's go-red property can be PROVEN against a perturbed
+                // scratch copy of `render-fidelity.json` without writing to the shared corpus,
+                // which is the oracle and is never edited to make this surface pass.
+                System.getenv("FUARAN_RENDER_FIDELITY")?.let {
+                    test.environment("FUARAN_RENDER_FIDELITY", it)
+                }
             }
         }
     }

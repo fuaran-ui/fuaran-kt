@@ -231,6 +231,63 @@ that grows a real loader owes the same to every `srcSet` candidate (`SrcSetEntry
 an `expandable` affordance owes a REAL link whose target is the primary `src` — or, where the floor
 refused it, no affordance at all.
 
+## Render obligations — the checkable remainder, and why most are declared exempt here
+
+WIRE_FORMAT.md §13's `render-fidelity.json` now carries, per kind, the subset of that kind's
+fallback contract stated as **checkable claims** drawn from a closed vocabulary. The three families
+that name one today are `Media` (4), `Image` (5) and `Custom` (1). A surface can decode every
+fixture in the corpus and silently fail every one of them: none is a missing discriminator arm, so
+neither the decode harness nor the `else`-free dispatch spine reaches them.
+
+**The gate enumerates from the artefact, never from a list beside its checkers** — that is the whole
+mechanism, and the reason it is worth the two files it costs. A claim newly declared on a kind this
+surface renders arrives as a claim with no checker and turns the gate RED, rather than as a
+paragraph a future reader may or may not re-read. `RenderObligations.kt` reads the artefact and
+carries the shared reporting shape; `RenderObligationHarness.kt` carries this surface's answer.
+
+**Three claims are asserted, seven are DECLARED EXEMPT with a reason, and the second number is the
+honest one.** This is a render projection with **no playback engine and no network image loader**:
+the media arm is a labelled transport tile and the image arm a labelled placeholder box, both real
+arms of the exhaustive floor and neither a player. Most of §3.6.2–3.6.6's claims are therefore
+*vacuous* here — there is no attribute for them to be true or false of — and a checker asserting the
+absence of output this surface never produces would be a green that guards nothing. A declared
+exemption naming the structural fact is a **conformant answer**; an obligation silently absent from
+the registry is not, and the difference between those two is what the artefact exists to make
+visible.
+
+| claim | here |
+|---|---|
+| `Media/accessible-name-always` | **asserted** — the one obligation that binds a surface rendering no playback |
+| `Media/no-autoplay-pathway` | **asserted** — structurally (the `Audio` case declares no slot) and in output |
+| `Custom/unregistered-custom-labelled` | **asserted for the uncarded path**, which is the whole of the path here |
+| `Media/autoplay-muted-pairing` | exempt — nothing plays, so no attribute is emitted; the tile *states* the declaration |
+| `Media/refused-source-dropped` | exempt — no `poster` destination is emitted, so nothing exists to drop |
+| the five `Image` claims | exempt — no image element, no anchor, no `srcSet` and no caption structure is emitted |
+
+The reasons are written out in full in `DECLARED_EXEMPTIONS`, one sentence each, because the reason
+is what a reader of the run has to judge. `unregistered-custom-labelled` is conditional on a
+contract card being **available**; this surface holds no card reader, so the identity-only
+placeholder is the conformant answer and the carded branches are out of scope — and asserting the
+uncarded half **does not claim §25 adoption**, which is a separate bar.
+
+**The split, and why.** The classification half — reader, registries, exemptions, every gate check
+over them — is plain JVM and runs in `run.ps1`, ahead of the decode leg for the leg-order reason
+recorded beside the other harnesses. The three checkers that must observe EMITTED OUTPUT need a
+composition, so they live in `RenderObligationTest` (Robolectric) and are *declared* by key in
+`COMPOSE_CHECKER_KEYS`. That declaration is what lets the plain-JVM gate report those three as
+asserted without running them, so it is itself guarded: `RenderObligationTest` asserts its own
+registry equals that set, and the neutral leg's orphan check catches the other direction. Neither
+half can drift into a claim nobody runs.
+
+**Forward-coupling.** An arm that grows a real player or a real image loader **retires the matching
+exemptions in the same change** and replaces them with checkers over what it emits — the exemptions
+are statements about *this floor*, never standing excuses. The URL-floor and write-back rules above
+and below say the same thing for the same reason: the compiler forces the arm to exist, it cannot
+force the arm to check. `FUARAN_RENDER_FIDELITY` overrides where the artefact is read from so the
+gate's go-red property can be proven against a perturbed scratch copy; an override naming a
+non-file is an error rather than a quiet fall-back, because a fall-back would make that proof
+unfalsifiable.
+
 ## Trend sentiment projection — `tone` and `trendPolarity` are not the same judgement
 
 `Metric` carries two slots that both look like judgements about a number, and WIRE_FORMAT.md 3.6.1

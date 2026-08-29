@@ -49,6 +49,7 @@ jobs:
       # standalone clone, and exactly how a gate ends up passing while checking
       # nothing. So prove it is here BEFORE running either.
       - name: Assert the corpus is present (a skipped gate is not a passing gate)
+        id: corpus
         run: |
           test -f _corpus/manifest.json || {
             echo "::error::corpus manifest.json missing — the gates below would skip and report success"
@@ -81,11 +82,25 @@ jobs:
             exit 1
           fi
 
-      # Gate 2 — the Compose render floor under Robolectric. This is the leg the
+      # Gate 2 — the Compose render floor under Robolectric, plus the render-obligation
+      # conformance gate's emitted-output leg (WIRE_FORMAT.md §13). This is the leg the
       # local Windows toolchain cannot run at all (AF_UNIX is blocked under
       # %LOCALAPPDATA% there, so every Gradle build task dies on its worker IPC),
       # which is the main reason this workflow exists.
-      - name: Render-coverage gate (:fuaran-renderer:testDebugUnitTest)
+      #
+      # It runs even when gate 1 is red, and that is deliberate rather than lax. The two
+      # gates cover different modules and different contracts, so a step ordering that
+      # let a standing decode failure MASK a render failure would leave the only leg
+      # nobody can run locally unreported for as long as the other stayed red — one
+      # level down from the "a gate that silently never triggers" failure this
+      # workflow's header already warns about. Both gates report; the job still fails if
+      # either does.
+      #
+      # Conditioned on the corpus assertion above rather than on `always()`: with no
+      # corpus both gates skip cleanly, and a skip standing in for a run is exactly what
+      # that assertion exists to prevent.
+      - name: Render-coverage + render-obligation gate (:fuaran-renderer:testDebugUnitTest)
+        if: always() && steps.corpus.outcome == 'success'
         run: ./gradlew :fuaran-renderer:testDebugUnitTest --console=plain
 
       - name: Upload test reports
