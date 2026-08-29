@@ -1005,10 +1005,20 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
  * Models routinely wrap that table in a binding envelope (`State` / `Static` / `Bound`) because
  * every OTHER source position on the wire takes a Binding. The envelope is accepted and unwraps to
  * its payload before the columnar decode - initial-snapshot semantics, pinned by
- * `lenient/lenient-transform-source-state-rows`. An envelope carrying NO payload member is a
- * different thing entirely: there is nothing to unwrap to, so the transform has no data and the
- * grid renders empty with no indication that a source was ever declared. That is refused
- * (`reject/reject-transform-source-empty-wrapper`).
+ * `lenient/lenient-transform-source-state-rows`.
+ *
+ * A BARE `State` envelope - `{"$type":"State","key":k}`, carrying no payload member - is ACCEPTED:
+ * WIRE_FORMAT.md 16 reads it as a LIVE source over the EMPTY initial snapshot, exactly as the
+ * `"defaultValue": []` spelling beside it. It was refused here (the retired
+ * `reject/reject-transform-source-empty-wrapper` was the pin), which was correct while nothing else
+ * could fill the slot; under 24.4 a SIBLING reader's declaration fills it, so the refusal was
+ * rejecting the most direct spelling of "I read this key and carry no data of my own" - the one
+ * FUARAN106's remedy text tells an author to write.
+ *
+ * A `Static` or `Bound` envelope carrying no payload is a different thing entirely and is STILL
+ * refused: neither names a live slot, so there is nothing for a sibling reader to seed and the
+ * transform genuinely has no data - the grid would render empty with no indication that a source
+ * was ever declared.
  *
  * The value is returned UNCHANGED - the canonical form keeps the envelope, so this validates
  * rather than rewrites.
@@ -1017,7 +1027,8 @@ private fun unwrapTransformSource(value: JsonValue, path: String): JsonValue {
     val o = value as? JsonObject ?: return value
     val payloadKey =
         when ((o["\$type"] as? JsonString)?.value) {
-            "State" -> if (o["defaultValue"] != null) null else if (o["value"] != null) null else "defaultValue` or `value"
+            // 16 - the bare wrapper names the live slot, so it needs no payload.
+            "State" -> null
             "Static" -> if (o["value"] != null) null else "value"
             "Bound" -> if (o["binding"] != null) null else "binding"
             // Not an envelope: the ordinary columnar table, passed through untouched.

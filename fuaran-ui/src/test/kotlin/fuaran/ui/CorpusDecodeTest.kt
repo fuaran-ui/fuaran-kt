@@ -984,6 +984,69 @@ fun main() {
         }
     }
 
+    // ----------------------------------------------------------------------- //
+    // The BARE STATE TRANSFORM SOURCE leg (WIRE_FORMAT 16)
+    // ----------------------------------------------------------------------- //
+    //
+    // `{"$type":"State","key":k}` in a Transform's `source` slot carries no payload member.
+    // `unwrapTransformSource` refused it: there was nothing to unwrap to, so the transform
+    // "had no data". That was correct while nothing else could fill the slot; under 24.4 a
+    // SIBLING reader's declaration fills it, so the refusal was rejecting the most direct
+    // spelling of "I read this key and carry no data of my own" - the one FUARAN106's remedy
+    // text tells an author to write.
+    //
+    // No stored fixture pins the bare spelling: the corpus is a shared gate and keeps the
+    // `"defaultValue": []` spelling deliberately, so respelling it there would redden a host
+    // that has not adopted this. The assertion therefore rides here, like the three
+    // absence rules in the media leg above and for the same reason.
+    run {
+        fun badge(source: String): Node =
+            decodeNode(
+                "{\"id\":\"member-count\",\"kind\":{\"\$type\":\"Badge\",\"label\":" +
+                    "{\"\$type\":\"Bound\",\"binding\":{\"\$type\":\"Transform\",\"pipeline\":[" +
+                    "{\"\$type\":\"groupBy\",\"aggs\":[{\"fn\":\"count\",\"name\":\"n\",\"of\":\"team\"}],\"keys\":[]}]," +
+                    "\"source\":$source}},\"variant\":\"Info\"}}",
+            )
+
+        fun transformSource(n: Node): JsonValue {
+            val label = (n.kind as? Badge)?.label ?: error("not a Badge: ${n.kind}")
+            val binding = (label as? BoundText)?.binding ?: error("label is not a bound binding: $label")
+            return (binding as? TransformBinding)?.source ?: error("not a Transform: $binding")
+        }
+
+        runner.check("state-source/the-BARE-State-wrapper-is-a-live-source-not-a-refusal") {
+            // Held RAW and returned UNCHANGED — this surface validates the envelope rather than
+            // rewriting it — so the assertion is that the bare wrapper survives verbatim, which
+            // is also what would let a canonical re-encode round-trip if this tier ever gained one.
+            val src = transformSource(badge("{\"\$type\":\"State\",\"key\":\"members\"}"))
+            val o = src as? JsonObject ?: error("the source was rewritten to ${src::class.simpleName}")
+            if ((o["\$type"] as? JsonString)?.value != "State") error("the envelope was not preserved: $o")
+            if ((o["key"] as? JsonString)?.value != "members") error("the live slot's key was lost: $o")
+            if (o["defaultValue"] != null) error("a defaultValue appeared from nowhere: $o")
+        }
+        runner.check("state-source/the-two-data-less-spellings-are-ONE-dialect") {
+            // The empty-array spelling said the same thing while the bare one was refused. Both
+            // must now reach the slot, and neither may be normalised into the other — each stays
+            // the bytes it arrived as.
+            val empty = transformSource(badge("{\"\$type\":\"State\",\"defaultValue\":[],\"key\":\"members\"}"))
+            val o = empty as? JsonObject ?: error("the source was rewritten to ${empty::class.simpleName}")
+            if (o["defaultValue"] !is JsonArray) error("the empty array was normalised away: $o")
+        }
+        runner.check("state-source/the-widening-is-SCOPED-to-the-State-envelope") {
+            // The go-red half. A check that only ever passes cannot tell a decoder that ACCEPTS
+            // the bare State wrapper from one that stopped validating envelopes at all. `Static`
+            // and `Bound` name no live slot, so nothing can seed them and an empty one genuinely
+            // has no data — both must still refuse, at their own path.
+            for (source in listOf("{\"\$type\":\"Static\"}", "{\"\$type\":\"Bound\"}")) {
+                val e =
+                    runCatching { badge(source) }.exceptionOrNull() as? FuaranDecodeException
+                        ?: error("$source was ACCEPTED — the widening is not scoped to the State wrapper")
+                if (e.code != FuaranDecodeException.WRONG_TYPE) error("$source code: ${e.code}")
+                if (!e.path.startsWith("\$")) error("$source path is not \$-rooted: ${e.path}")
+            }
+        }
+    }
+
     val decoded = nodeFixtures.size + lenientFixtures.size
     println()
     println("Per-NodeKind coverage (${coverage.size} distinct kinds across $decoded decoded fixtures):")
