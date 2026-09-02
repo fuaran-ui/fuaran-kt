@@ -94,6 +94,7 @@ import fuaran.ui.LinkCell
 import fuaran.ui.ListNode
 import fuaran.ui.MapNode
 import fuaran.ui.Markdown
+import fuaran.ui.MasonryLayout
 import fuaran.ui.Math
 import fuaran.ui.Media
 import fuaran.ui.Metric
@@ -265,6 +266,24 @@ private fun RenderChildren(children: List<Node>, layout: BoxLayout, ctx: Binding
             Column(verticalArrangement = Arrangement.spacedBy(gap)) {
                 children.chunked(cols).forEach { rowItems ->
                     Row(horizontalArrangement = Arrangement.spacedBy(gap)) { rowItems.forEach { FuaranNode(it, ctx) } }
+                }
+            }
+        }
+        // WIRE_FORMAT 3.6.7 — `Grid` fills by ROW, `Masonry` by COLUMN, and that difference is the
+        // whole content of the case. The HTML hosts realise it with the CSS multi-column family;
+        // Compose has no multi-column primitive, so this projects the SEMANTIC rather than
+        // approximating the mechanism: a Row of Columns whose children run DOWN each column in
+        // document order, which is the reading order 3.6.7 pins. Note `chunked` cuts ROWS for the
+        // grid arm above and COLUMNS here — the chunk size differs for that reason.
+        is MasonryLayout -> {
+            val cols = layout.cols.coerceAtLeast(1)
+            val gap = (layout.gap ?: 4).dp
+            val perColumn = if (children.isEmpty()) 1 else (children.size + cols - 1) / cols
+            Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+                children.chunked(perColumn).forEach { columnItems ->
+                    Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+                        columnItems.forEach { FuaranNode(it, ctx) }
+                    }
                 }
             }
         }

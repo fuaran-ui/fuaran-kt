@@ -526,6 +526,13 @@ data class FlexLayout(val direction: Orientation, val wrap: Boolean, val gap: In
 
 data class GridLayout(val cols: Int, val gap: Int? = null, val templateColumns: String? = null) : BoxLayout
 
+/**
+ * WIRE_FORMAT 3.6.7 (Phase 1082) — the column-fill mode. `cols` is REQUIRED and POSITIVE; there is
+ * deliberately no `templateColumns` twin, because the multi-column model realising masonry has no
+ * track list for one to name.
+ */
+data class MasonryLayout(val cols: Int, val gap: Int? = null) : BoxLayout
+
 data object AutoLayout : BoxLayout
 
 // --------------------------------------------------------------------------- //

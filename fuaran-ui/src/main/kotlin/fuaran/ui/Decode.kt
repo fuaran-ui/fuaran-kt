@@ -1182,6 +1182,26 @@ private fun decodeBoxLayout(value: JsonValue, path: String): BoxLayout {
                 )
             }
         }
+        // 3.6.7 — column-fill. `cols` is REQUIRED and POSITIVE, on the 3.6.4 srcSet width-floor
+        // pattern: `column-count: 0` is invalid CSS, so a container declaring it would fall back to
+        // whatever the host stylesheet last said and the wire would be carrying a host-defined
+        // layout.
+        //
+        // No auto-column leniency here, unlike `Grid` above, and the asymmetry is deliberate rather
+        // than an omission: `Grid` canonicalises a column-less spec to `Auto` because the language
+        // already owns that concept, whereas `Auto` is a ROW-fill mode — rewriting a masonry into it
+        // would discard the author's intent rather than recover it.
+        "Masonry" -> {
+            val cols = o.reqAliased("cols", path, "columns").int("$path.cols")
+            if (cols <= 0) {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    "$path.cols",
+                    "expected a positive integer column count",
+                )
+            }
+            MasonryLayout(cols = cols, gap = o.optInt("gap", path))
+        }
         "Auto" -> AutoLayout
         else -> unknownCase(t, path, "BoxLayout")
     }
