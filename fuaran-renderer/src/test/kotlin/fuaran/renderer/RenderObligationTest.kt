@@ -20,6 +20,7 @@ import fuaran.ui.LiteralText
 import fuaran.ui.Media
 import fuaran.ui.MediaKind
 import fuaran.ui.Node
+import fuaran.ui.Sparkline
 import fuaran.ui.StaticBinding
 import fuaran.ui.Video
 import fuaran.ui.decodeNode
@@ -525,4 +526,45 @@ class RenderObligationTest {
         }
 
 
+    // ── Phase 1099 — the sparkline placeholder, pinned as a CONTRACT ─────────
+
+    @Test
+    fun theSparklineArmCannotReachTheSeriesAtAll() {
+        // Phase 1099 asked each host to decide whether its placeholder becomes a real lowered
+        // drawing. This surface DECLINES, and `docs/RENDER-PROJECTION.md` carries the reasoning:
+        // the phase's contract is byte-equality against the `sparkline-lowering/*` SVG goldens, and
+        // a Compose surface emits no markup to compare — there is no byte-parity leg here to
+        // certify, by charter.
+        //
+        // Phase 551 requires a declining host to pin its placeholder as a TESTED CONTRACT rather
+        // than leave it an accident, and this is that test. It is STRUCTURAL rather than
+        // output-inspecting, deliberately: a lowered drawing would paint into a Canvas, which
+        // carries no semantics at all, so a test reading the semantics tree could not tell a
+        // painted sparkline from an unpainted one and would be permanently, uselessly green. What
+        // IS observable is that the arm takes no series: `RenderSparkline` receives no `Sparkline`,
+        // so the data is unreachable from it by the type system. Lowering means passing the kind,
+        // and this test goes red on that line — which is the point, because the decision and its
+        // documentation then have to move together.
+        val rendererClass = Class.forName("fuaran.renderer.FuaranRendererKt")
+        val sparklineArms = rendererClass.declaredMethods.filter { it.name.startsWith("RenderSparkline") }
+        assertTrue("no RenderSparkline arm was found — this probe is looking at the wrong class", sparklineArms.isNotEmpty())
+
+        // VERIFY THE PROBE before trusting its silence. A reflective search that can no longer see
+        // a kind parameter anywhere would report "the sparkline arm takes no series" while proving
+        // nothing at all — so require that it DOES see one on an arm that genuinely takes a kind.
+        val mediaArms = rendererClass.declaredMethods.filter { it.name.startsWith("RenderMedia") }
+        assertTrue(
+            "the probe cannot see a kind parameter even on RenderMedia, so its silence about " +
+                "RenderSparkline proves nothing",
+            mediaArms.any { m -> m.parameterTypes.any { it == Media::class.java } },
+        )
+
+        for (arm in sparklineArms) {
+            assertTrue(
+                "${arm.name} takes a Sparkline — the arm can now reach the series, so the decline " +
+                    "recorded in docs/RENDER-PROJECTION.md and CLAUDE.md is out of date",
+                arm.parameterTypes.none { it == Sparkline::class.java },
+            )
+        }
+    }
 }

@@ -363,7 +363,13 @@ leaves the last good tree in place and surfaces the failure on `lastError`.
   behalf.
 - **`Chart`, `MapNode`, `Mount` and `FragmentRef` render as informational
   stubs**, and `Sparkline` renders without data. Each has a real dispatch arm —
-  none falls through — but none paints the thing itself yet.
+  none falls through — but none paints the thing itself yet. **The sparkline is
+  a decision rather than a backlog item**: the cross-host lowering phase's
+  contract is byte-equality against SVG goldens, and this surface emits no
+  markup to compare, so it declines and pins the placeholder instead — the arm
+  receives no `Sparkline` at all, so the series is unreachable from it by the
+  type system, and a test asserts exactly that. Lowering means passing the
+  kind, and the test goes red on that line.
 - **A `Tree` renders FULLY EXPANDED whatever `expandedStateKey` names**, because
   this floor holds no state store to read the open-row set from. For a tree
   naming no key that is the specified rendering; for one that does, it is a

@@ -320,6 +320,32 @@ one, emit the sandbox declaration unconditionally and empty when nothing is gran
 arm that grows a state store owes the named `expandedStateKey` its actual open-row set, and this
 section moves with it.
 
+## `Sparkline` — the lowering DECLINED, and pinned as a contract
+
+Phase 1099 asked every render surface whether its sparkline placeholder
+becomes a real lowered drawing. **This surface declines, and the reason is the contract rather than
+the cost.** That phase's acceptance is byte-equality against the `sparkline-lowering/*` goldens —
+SVG emitted by the reference host — and a Compose surface emits no markup to compare. There is no
+byte-parity leg here to certify, by charter, so "adopting" would mean painting a picture against no
+oracle and calling it conformance. The same charter sentence that makes this surface a render
+projection rather than a conformant host is what decides it.
+
+Phase 551 required a declining host to pin its placeholder as a **tested contract** rather than
+leave it an accident, and `RenderObligationTest` carries that test. It is STRUCTURAL rather than
+output-inspecting, deliberately: a lowered drawing paints into a Canvas, which carries no semantics
+at all, so a test reading the semantics tree could not tell a painted sparkline from an unpainted
+one and would be permanently, uselessly green. What IS observable is that `RenderSparkline` receives
+no `Sparkline` — the series is unreachable from the arm by the type system — so lowering means
+passing the kind, and the test goes red on that line. The decision and this paragraph then have to
+move together, which is the whole point of pinning it.
+
+Two consequences worth stating so neither is mistaken for an oversight. The decoder DOES type the
+series (`Sparkline.source`'s float sequence is typed element by element — see
+`decodeBindingFloatSeq`), so declining to draw is not declining to validate. And `RenderDrawing` beside it is likewise
+an informational card rather than vector output, so lowering the sparkline into it would produce a
+second informational card, not a picture — the lowering only becomes meaningful on a surface that
+paints geometry, and neither arm does yet.
+
 ## Render obligations — the checkable remainder, and why most are declared exempt here
 
 WIRE_FORMAT.md §13's `render-fidelity.json` now carries, per kind, the subset of that kind's

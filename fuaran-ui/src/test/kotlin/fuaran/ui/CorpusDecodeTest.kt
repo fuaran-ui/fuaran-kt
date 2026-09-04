@@ -1239,6 +1239,93 @@ fun main() {
         if (!e.path.contains(".children[")) error("the refusal must name the offending ROW, got ${e.path}")
     }
 
+    // ----------------------------------------------------------------------- //
+    // Phase 1099 — `Sparkline.source`'s float SEQUENCE elements are typed
+    // ----------------------------------------------------------------------- //
+    //
+    // No corpus vector pins this yet (one is specified for the shared corpus alongside this
+    // change), and the fixture that looks like it does — `spark-nonfinite-sentinel` — does not:
+    // it proves the three §7 sentinels are ACCEPTED, which an entirely untyped slot also does, by
+    // never looking at an element at all. These are the host tests that stand in the meantime,
+    // and they stay afterwards, because they assert a pair one vector cannot: the canonical
+    // `Static` envelope AND §3.6's bare-array coercion, which report at different paths.
+    fun spark(source: String): Node = decodeNode("{\"id\":\"s\",\"kind\":{\"\$type\":\"Sparkline\",\"source\":$source}}")
+
+    fun sparkRefusal(source: String): FuaranDecodeException =
+        runCatching { spark(source) }.exceptionOrNull() as? FuaranDecodeException
+            ?: error("a wrong-typed spark element was ACCEPTED: $source")
+
+    runner.check("spark-elements/wrong-typed-element-refused-under-the-Static-envelope") {
+        val e = sparkRefusal("{\"\$type\":\"Static\",\"value\":[1,\"lots\",3]}")
+        if (e.code != FuaranDecodeException.WRONG_TYPE) error("expected WRONG_TYPE, got ${e.code} at ${e.path}")
+        // The path must name the OFFENDING ELEMENT, and under the envelope it sits one level in —
+        // the position the reference host reports. A refusal naming the slot alone would leave a
+        // document of forty points saying only that one of them is wrong.
+        if (e.path != "\$.kind.source.value[1]") error("expected \$.kind.source.value[1], got ${e.path}")
+    }
+    runner.check("spark-elements/wrong-typed-element-refused-under-the-bare-array-coercion") {
+        // 3.6's shape coercion reaches the same slot by a shorter path, and a host that typed only
+        // the envelope would accept this one silently — the coerced form is a model's first guess,
+        // so it is the shape most likely to arrive.
+        val e = sparkRefusal("[1,true,3]")
+        if (e.code != FuaranDecodeException.WRONG_TYPE) error("expected WRONG_TYPE, got ${e.code} at ${e.path}")
+        if (e.path != "\$.kind.source[1]") error("expected \$.kind.source[1], got ${e.path}")
+    }
+    runner.check("spark-elements/a-nested-composite-element-is-refused-too") {
+        // An object or an array in an element position is the same defect wearing a shape a
+        // number-only test would walk straight past.
+        sparkRefusal("{\"\$type\":\"Static\",\"value\":[1,{\"n\":2},3]}")
+        sparkRefusal("{\"\$type\":\"Static\",\"value\":[[1,2]]}")
+    }
+    runner.check("spark-elements/the-corrected-twin-decodes") {
+        // The go-red half of every check above: the same documents with the one offending element
+        // repaired must DECODE. Without it a decoder that refused every Sparkline passes all four.
+        spark("{\"\$type\":\"Static\",\"value\":[1,2,3]}")
+        spark("[1,2,3]")
+    }
+    runner.check("spark-elements/the-three-sentinels-survive-the-element-check") {
+        // 7 at the ELEMENT position. The typed reader is the same one every float slot uses, so
+        // the three exact spellings are admitted here exactly as they are at a scalar — and a fix
+        // that typed elements by testing for a JSON number alone would break this fixture, which
+        // is why it is asserted beside the refusals rather than left to the corpus leg.
+        val node = decodeNode(corpusText("nodes/spark-nonfinite-sentinel.json"))
+        val src = (node.kind as Sparkline).source as StaticBinding
+        val items = (src.value as JsonArray).items
+        if (items.size != 6) error("expected the six-element series, got ${items.size}")
+    }
+    runner.check("spark-elements/no-looser-non-finite-spelling-is-admitted") {
+        // The accept SET is the contract. `Double.parseDouble` on the JVM is case-INSENSITIVE and
+        // also takes `+Infinity`, the `1d` / `2.5f` suffixes, hex literals and surrounding
+        // whitespace, so a parse-based element reader would admit a family of spellings the format
+        // refuses — silently, with the value preserved.
+        for (spelling in listOf("nan", "NAN", "+Infinity", "infinity", " NaN")) {
+            val e = sparkRefusal("{\"\$type\":\"Static\",\"value\":[1,\"$spelling\",3]}")
+            if (e.code != FuaranDecodeException.WRONG_TYPE) error("'$spelling': ${e.code} at ${e.path}")
+        }
+    }
+    runner.check("spark-elements/the-two-read-compat-payloads-are-still-accepted") {
+        // 5, indefinitely and not a migration window: every tree persisted or op-stream-logged
+        // before the typed form carries one of these in this position, and both denote the EMPTY
+        // feed. A typing change that refused them would break replay of every such tree, which is
+        // the cost this leg exists to keep visible.
+        spark("{\"\$type\":\"Static\",\"value\":null}")
+        spark("{\"\$type\":\"Static\",\"value\":\"<opaque>\"}")
+    }
+    runner.check("spark-elements/but-an-arbitrary-string-payload-is-not") {
+        // The go-red half of the read-compat leg. Without it, "a string is fine here" would be
+        // indistinguishable from "these two enumerated sentinels are fine here", and the exception
+        // would have quietly become a hole.
+        val e = sparkRefusal("{\"\$type\":\"Static\",\"value\":\"lots\"}")
+        if (e.code != FuaranDecodeException.WRONG_TYPE) error("expected WRONG_TYPE, got ${e.code} at ${e.path}")
+    }
+    runner.check("spark-elements/a-dynamic-binding-is-untouched") {
+        // Only the `Static` payload is typed, exactly as the scalar slots are — the other
+        // value-carrying arms are held raw because this projection never types them, and typing
+        // them here would be a separate behaviour change with no fixture behind it.
+        val node = spark("{\"\$type\":\"State\",\"key\":\"series\"}")
+        if ((node.kind as Sparkline).source !is StateBinding) error("a State-bound series must survive untyped")
+    }
+
     val decoded = nodeFixtures.size + lenientFixtures.size
     println()
     println("Per-NodeKind coverage (${coverage.size} distinct kinds across $decoded decoded fixtures):")

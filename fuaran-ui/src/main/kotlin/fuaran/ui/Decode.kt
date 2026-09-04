@@ -614,7 +614,8 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 variant = badgeVariantOf(o.req("variant", path).str("$path.variant"), "$path.variant"),
             )
         // Field alias: data → source (the chart-library prior).
-        "Sparkline" -> Sparkline(source = decodeBinding(o.reqAliased("source", path, "data"), "$path.source"))
+        // 5 + Phase 1099 — a typed float SEQUENCE slot, so the elements are typed too.
+        "Sparkline" -> Sparkline(source = decodeBindingFloatSeq(o.reqAliased("source", path, "data"), "$path.source"))
         "Callout" ->
             Callout(
                 body = decodeTextSource(o.req("body", path), "$path.body"),
@@ -991,6 +992,58 @@ private fun decodeBindingFloat(value: JsonValue, path: String): Binding =
 
 private fun decodeBindingInt(value: JsonValue, path: String): Binding =
     decodeBindingScalar(value, path) { v, p -> v.int(p) }
+
+/**
+ * The residual-opaque sentinel (WIRE_FORMAT.md 5). A pre-429 encoder wrote it wherever a typed
+ * `Static` payload is now emitted, and every host stays decode-accepting of it INDEFINITELY —
+ * every tree persisted, permalinked or op-stream-logged before those phases carries it.
+ */
+private const val OPAQUE_SENTINEL: String = "<opaque>"
+
+/**
+ * A `Binding<float seq>` slot — today only `Sparkline.source` (WIRE_FORMAT.md 5, Phase 1099).
+ *
+ * **The element type is the point.** [decodeBindingScalar] above types the `Static` payload of a
+ * SCALAR slot, so `Metric.value: "lots"` is refused; a SEQUENCE slot needs the same check one
+ * level in, and without it a spark array carrying a string, a boolean or an object decoded here
+ * with its wrong-typed elements preserved verbatim — accepted on this surface and nowhere else.
+ * `spark-nonfinite-sentinel` passed throughout and proved nothing about the element type, because
+ * the untyped path never looked at an element at all.
+ *
+ * Each element goes through the SAME [double] reader every other float slot uses, so §7's three
+ * exact sentinel strings are admitted at an element exactly as they are at a scalar, and no
+ * looser spelling is (`"nan"` is `WRONG_TYPE`, because the accept SET is the contract and there
+ * is no parse left to get wrong).
+ *
+ * **Two read-compat payloads are accepted and NOT typed** (§5, indefinitely — not a migration
+ * window): a `null`, which is the pre-429 F# `box ([]: 'a list)` null reference an older encoder
+ * wrote for an empty seq, and the [OPAQUE_SENTINEL] string. Both denote the empty feed. Any OTHER
+ * non-array payload is refused as the wrong type, which is what keeps the two exceptions
+ * enumerated rather than a hole shaped like "a string is fine here".
+ *
+ * The payload PATH is computed from the shape that actually arrived, so the refusal names the
+ * position the reference host names: `…source.value[i]` under the canonical `Static` envelope and
+ * `…source[i]` under §3.6's bare-array coercion. [decodeBinding] collapses both into a
+ * [StaticBinding], which is why the discrimination happens here, before it is called.
+ */
+private fun decodeBindingFloatSeq(value: JsonValue, path: String): Binding {
+    val payloadPath =
+        if (value is JsonObject && (value["\$type"] as? JsonString)?.value == "Static") "$path.value" else path
+    val b = decodeBinding(value, path)
+    if (b is StaticBinding) {
+        when (val v = b.value) {
+            is JsonNull -> {}
+            is JsonString ->
+                if (v.value != OPAQUE_SENTINEL) {
+                    // Not a recognised read-compat spelling — refuse it as the array it is not,
+                    // rather than letting an arbitrary string stand in for a series.
+                    v.array(payloadPath)
+                }
+            else -> v.array(payloadPath).forEachIndexed { i, e -> e.double("$payloadPath[$i]") }
+        }
+    }
+    return b
+}
 
 private fun decodeBinding(value: JsonValue, path: String): Binding {
     // Lenient shape coercion (§3.6, mirrored from the reference core): a bare array or
