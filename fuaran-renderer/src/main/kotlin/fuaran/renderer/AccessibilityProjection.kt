@@ -69,8 +69,40 @@ data class AccessibilityProjection(
     }
 }
 
-/** The six slots of the wire trait, named so a dropped one can be reported rather than vanish. */
-enum class A11ySlot { Label, LabelledBy, DescribedBy, Role, LiveRegion, Hidden }
+/**
+ * The slots of a node's ANNOUNCEMENT surface, named so a dropped one can be reported rather than
+ * vanish: the six of the `accessibility` trait, plus the §3.1 [Tooltip] trait that sits beside it
+ * on the envelope and asks the same question of this platform.
+ */
+enum class A11ySlot {
+    Label,
+    LabelledBy,
+    DescribedBy,
+    Role,
+    LiveRegion,
+    Hidden,
+
+    /**
+     * `Node.tooltip` (WIRE_FORMAT.md 3.1, Phase 1112) — reported dropped for the identical
+     * structural reason [DescribedBy] is, and reported only through the NODE overload of
+     * [accessibilityProjection], since the trait does not live on the `accessibility` record.
+     *
+     * §3.1 states the hint is a DESCRIPTION and that a host MUST NOT project it as a NAME.
+     * Compose's semantics vocabulary has exactly one announcement channel for a node's own text —
+     * `contentDescription` — and setting it makes the string the node's accessible NAME. So the
+     * one available projection is the one the specification forbids in terms: an icon-only control
+     * needs both slots saying different things, and a surface that conflated them would leave such
+     * a control with two competing names and no description. `stateDescription` is not a second
+     * channel either — it announces a control's STATE, so a hint routed there is announced as
+     * though it were the control's current value.
+     *
+     * Dropped, then, and never silently — the policy this drop set exists to keep honest. The
+     * trait still DECODES and reaches [fuaran.ui.Node.tooltip], so an embedding app that has a
+     * description channel of its own can project it; what this surface reports is that the render
+     * floor does not.
+     */
+    Tooltip,
+}
 
 /**
  * A semantics role this surface can carry, named platform-neutrally so the mapping decision stays
@@ -184,6 +216,18 @@ fun accessibilityProjection(a11y: Accessibility?, ctx: BindingContext): Accessib
     )
 }
 
-/** Project a node's trait — the shape the dispatch spine calls. */
-fun accessibilityProjection(node: Node, ctx: BindingContext): AccessibilityProjection =
-    accessibilityProjection(node.accessibility, ctx)
+/**
+ * Project a node's announcement surface — the shape the dispatch spine calls.
+ *
+ * This overload covers the ENVELOPE, so it sees one slot the trait overload cannot: the §3.1
+ * `tooltip`. It is reported as a drop rather than projected, and [A11ySlot.Tooltip] carries the
+ * structural reason. §3.1 obligation 5 decides the condition: a hint that resolves to empty or
+ * whitespace must produce nothing at all — "advertising a description that is not there is worse
+ * than silence" — so a whitespace-only hint is not even reported as dropped, because there was
+ * nothing to carry.
+ */
+fun accessibilityProjection(node: Node, ctx: BindingContext): AccessibilityProjection {
+    val base = accessibilityProjection(node.accessibility, ctx)
+    val hint = node.tooltip?.let { ctx.resolveText(it) }
+    return if (hint.isNullOrBlank()) base else base.copy(unmapped = base.unmapped + A11ySlot.Tooltip)
+}

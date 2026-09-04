@@ -256,7 +256,23 @@ private fun decodeNode(value: JsonValue, path: String): Node {
         val style = obj["style"]?.let { decodeStyle(it, "$path.style") }
         val state = obj["state"]?.let { decodeState(it, "$path.state") }
         val accessibility = obj["accessibility"]?.let { decodeAccessibility(it, "$path.accessibility") }
-        return Node(id = id, kind = kind, style = style, state = state, accessibility = accessibility)
+        // 3.1 the tooltip trait (Phase 1112) — a node-level TRAIT read from the ENVELOPE, never
+        // from inside `kind`. `ButtonSpec`'s legacy host-only `tooltip` slot is not a second
+        // spelling of it: a `tooltip` key inside a `kind` object stays an unknown key, tolerated
+        // and ignored under rule 2, precisely because nothing here goes looking for one there.
+        //
+        // Read through the ordinary TextSource reader, so the canonical BARE STRING and the
+        // `{"$type":"Literal"}` envelope both land, and `42` is WRONG_TYPE at `$.tooltip` rather
+        // than a hint stringified out of a JSON type — a fabrication no downstream check catches.
+        val tooltip = obj["tooltip"]?.let { decodeTextSource(it, "$path.tooltip") }
+        return Node(
+            id = id,
+            kind = kind,
+            style = style,
+            state = state,
+            accessibility = accessibility,
+            tooltip = tooltip,
+        )
     } finally {
         // In `finally` because a default-deny decoder leaves by a throw more often than
         // by a return, and a counter that only decrements on success would tighten with
@@ -691,6 +707,50 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 // Omitted at TRUE — the inverted polarity `Toast.dismissable` also takes.
                 controls = o.optBool("controls", path) ?: true,
                 loop = o.optBool("loop", path) ?: false,
+                // 3.6.6 text tracks (Phase 1110) — the missing-list-field class, exactly as
+                // `Image.srcSet` above: ABSENT means the empty list and a present `null` is
+                // refused. `mapIndexed` preserves the AUTHORED order, and here that is normative
+                // rather than incidental — a reader picks a track from a menu the user agent
+                // builds in document order, so re-sorting would be rewriting someone else's menu.
+                tracks =
+                    o["tracks"]?.array("$path.tracks")?.mapIndexed { i, v -> decodeTrackEntry(v, "$path.tracks[$i]") }
+                        ?: emptyList(),
+                // An ordinary optional TextSource: absent means the document offers no transcript,
+                // which is a different statement from offering an empty one.
+                transcript = o["transcript"]?.let { decodeTextSource(it, "$path.transcript") },
+            )
+        // 3.6.8 (Phase 1111). `title` is required — a browsing context has no decorative case —
+        // and the permission list omits at EMPTY, which means total denial.
+        "Embed" ->
+            Embed(
+                src = decodeBindingString(o.req("src", path), "$path.src"),
+                title = decodeTextSource(o.req("title", path), "$path.title"),
+                // REUSES ImageAspect: pure layout ratios, bare strings on the wire, so the type
+                // name reaches no document and a parallel enum would be two sets to keep in step.
+                aspectRatio =
+                    o.optStr("aspectRatio", path)?.let { enumOf<ImageAspect>(it, "$path.aspectRatio") }
+                        ?: ImageAspect.Natural,
+                // A BARE enum per element, so the refusal reports at the ELEMENT's own path with
+                // no `.$type` suffix. Both refusals are load-bearing and neither may become a
+                // silent drop: a bare `true` cannot be read as a granted permission (a host would
+                // have to invent WHICH one it names), and dropping an unrecognised token would
+                // turn a document asking for something this vocabulary cannot name into one
+                // asking for LESS — which reads as success.
+                permissions =
+                    o["permissions"]?.array("$path.permissions")?.mapIndexed { i, v ->
+                        enumOf<EmbedPermission>(v.str("$path.permissions[$i]"), "$path.permissions[$i]")
+                    } ?: emptyList(),
+            )
+        // 3.6.12 (Phase 1120) — the format's first self-referential shape. `onSelect` is a
+        // closure and is dropped, as every other handler slot in this projection is.
+        "Tree" ->
+            Tree(
+                items =
+                    o.req("items", path).array("$path.items").mapIndexed { i, v ->
+                        decodeTreeItem(v, "$path.items[$i]", 1)
+                    },
+                expandedStateKey = o.optStr("expandedStateKey", path),
+                selectionStateKey = o.optStr("selectionStateKey", path),
             )
         "List" ->
             ListNode(
@@ -1376,6 +1436,20 @@ private fun decodeFormFieldKind(value: JsonValue, path: String, autoBind: Contro
                 options = decodeBinding(o.req("options", path), "$path.options"),
                 value = valueOr(JsonNull),
             )
+        // 3.6.9 (Phase 1113) — the searchable form of `Choice`, and its slots are `Choice`'s
+        // DELIBERATELY: a document migrating between the two changes its `$type` and nothing else,
+        // so a different value contract here would break exactly that migration. An async
+        // suggestion feed needs no vocabulary — a `Query` in the ordinary `options` slot IS it.
+        "Combobox" ->
+            ComboboxField(
+                options = decodeBinding(o.req("options", path), "$path.options"),
+                value = valueOr(JsonNull),
+                // Omits at false, and the polarity is load-bearing: the SHORTEST combobox document
+                // is the CONSTRAINED one. A non-boolean is WRONG_TYPE and never coerced — `"yes"`,
+                // `"no"` and `"false"` are all non-empty, so a truthiness read would widen the
+                // field on two of the three.
+                allowFreeText = o.optBool("allowFreeText", path) ?: false,
+            )
         "TextArea" ->
             TextAreaField(
                 value = valueOr(JsonString("")),
@@ -1702,6 +1776,82 @@ private fun decodeSrcSetEntry(value: JsonValue, path: String): SrcSetEntry {
     return SrcSetEntry(
         src = decodeBindingString(o.req("src", path), "$path.src"),
         width = o.req("width", path).intAtLeast(1, "$path.width"),
+    )
+}
+
+/**
+ * One `TrackEntry` (WIRE_FORMAT.md 3.6.6, Phase 1110) — the strictest record on the wire: four of
+ * its five members are REQUIRED and only `default` omits, at `false`.
+ *
+ * Every member is read through its own typed reader, at the entry's own indexed path. That is what
+ * the corpus's two reject vectors measure and it is the class they were written for: a host
+ * decoding ARRAY ELEMENTS with a looser walker than its records accepts a stringified `"true"` one
+ * level further in than the record-level fixtures reach, and reports nothing. The array index in
+ * the path is equally deliberate — a document with four tracks must name the one at fault.
+ */
+private fun decodeTrackEntry(value: JsonValue, path: String): TrackEntry {
+    val o = value.obj(path)
+    return TrackEntry(
+        // A BARE TrackKind enum, so an unrecognised token reports here with no `.$type` suffix.
+        kind = enumOf<TrackKind>(o.req("kind", path).str("$path.kind"), "$path.kind"),
+        src = decodeBindingString(o.req("src", path), "$path.src"),
+        // REQUIRED on every kind, where HTML makes it mandatory only on subtitles. There is no
+        // value to default to that would not be an invented claim about someone else's recording.
+        srcLang = o.req("srcLang", path).str("$path.srcLang"),
+        label = decodeTextSource(o.req("label", path), "$path.label"),
+        // Omitted at false; the stringified boolean is refused rather than coerced. Two hosts
+        // ruling differently on truthiness would disagree about which caption track opens, which
+        // is a difference the reader meets on the first frame.
+        default = o.optBool("default", path) ?: false,
+    )
+}
+
+/**
+ * One `TreeItem` (WIRE_FORMAT.md 3.6.12, Phase 1120) — the recursive row record, and the walk that
+ * bounds its own nesting axis.
+ *
+ * **The bound is on the ITEM axis (§21.5), counted separately from the node axis and from the
+ * syntactic one.** A whole hierarchy lives inside one node, so [NodeWalk] cannot see it at all,
+ * and at roughly two JSON levels per row the syntactic bound is nowhere near reached — which is
+ * why an unbounded item walk would be a hole in an otherwise-total decoder rather than a
+ * duplicate of a guard that already exists.
+ *
+ * [depth] is a plain parameter rather than a thread-local, deliberately and unlike [NodeWalk]:
+ * that machinery exists because the node walk is spread across ~200 functions, whereas the item
+ * recursion is contained in this one, so a parameter is correct by construction — no counter to
+ * leave behind on a throw, and no shared state for two concurrent decodes to mis-bound each other
+ * through. It starts at 1 for a root row, so the check fires on the row that BREACHES the bound
+ * and the reported path names that row.
+ *
+ * The refusal is raised BEFORE the required-member reads, so a too-deep row is `LIMIT_EXCEEDED`
+ * rather than whatever its contents happen to say — and after it, the SAME reader walks children
+ * as walks roots, which is what the corpus's nested missing-`id` vector exists to measure: a host
+ * whose child walker is looser than its root walker passes every top-level case.
+ */
+private fun decodeTreeItem(value: JsonValue, path: String, depth: Int): TreeItem {
+    if (depth > WireLimits.MAX_TREE_ITEM_DEPTH) {
+        throw FuaranDecodeException(
+            FuaranDecodeException.LIMIT_EXCEEDED,
+            path,
+            "tree-item nesting deeper than the wire limit MAX_TREE_ITEM_DEPTH = " +
+                "${WireLimits.MAX_TREE_ITEM_DEPTH}; expected a hierarchy nesting rows no more than " +
+                "${WireLimits.MAX_TREE_ITEM_DEPTH} levels deep inside one node",
+        )
+    }
+    val o = value.obj(path)
+    return TreeItem(
+        // REQUIRED: both State slots address rows BY id, so an id-less row can never be expanded,
+        // selected or restored, and a synthesised positional id would move the reader's open
+        // branches the moment a sibling was inserted.
+        id = o.req("id", path).str("$path.id"),
+        // A TextSource because a row label is CONTENT — authored, translated, bindable.
+        label = decodeTextSource(o.req("label", path), "$path.label"),
+        // Omits at the EMPTY list, which is why a leaf carries two keys and nothing else.
+        children =
+            o["children"]?.array("$path.children")?.mapIndexed { i, v ->
+                decodeTreeItem(v, "$path.children[$i]", depth + 1)
+            } ?: emptyList(),
+        icon = o.optStr("icon", path),
     )
 }
 

@@ -5,6 +5,7 @@ package fuaran.renderer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box as CBox
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,15 +16,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button as M3Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.Switch as M3Switch
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch as M3Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -61,7 +63,7 @@ import fuaran.ui.CheckboxCell
 import fuaran.ui.CheckboxField
 import fuaran.ui.ChoiceField
 import fuaran.ui.CodeBlock
-import fuaran.ui.GridColumn
+import fuaran.ui.ComboboxField
 import fuaran.ui.Custom
 import fuaran.ui.CustomCell
 import fuaran.ui.DataGrid
@@ -71,6 +73,8 @@ import fuaran.ui.DateRangeField
 import fuaran.ui.Disclosure
 import fuaran.ui.Drawing
 import fuaran.ui.EditableCell
+import fuaran.ui.Embed
+import fuaran.ui.EmbedPermission
 import fuaran.ui.ErrorBoundary
 import fuaran.ui.Fact
 import fuaran.ui.FileUpload
@@ -81,11 +85,13 @@ import fuaran.ui.FormField
 import fuaran.ui.FormFieldKind
 import fuaran.ui.FragmentDecl
 import fuaran.ui.FragmentRef
+import fuaran.ui.GridColumn
 import fuaran.ui.GridLayout
 import fuaran.ui.Heading
-import fuaran.ui.Image
 import fuaran.ui.Icon
 import fuaran.ui.IconSize
+import fuaran.ui.Image
+import fuaran.ui.ImageAspect
 import fuaran.ui.JsonValue
 import fuaran.ui.LabelShape
 import fuaran.ui.LabelValueRow
@@ -128,10 +134,11 @@ import fuaran.ui.Toast
 import fuaran.ui.ToggleField
 import fuaran.ui.ToneVariant
 import fuaran.ui.TonedPillCell
+import fuaran.ui.TrackKind
+import fuaran.ui.Tree
+import fuaran.ui.TreeItem
 import fuaran.ui.Video
 import fuaran.ui.discriminator
-import androidx.compose.foundation.layout.Box as CBox
-import androidx.compose.material3.Button as M3Button
 
 // --------------------------------------------------------------------------- //
 // Public entry — the else-free exhaustive dispatch spine
@@ -153,7 +160,10 @@ import androidx.compose.material3.Button as M3Button
 @Composable
 fun FuaranNode(node: Node, ctx: BindingContext = BindingContext.Empty) {
     LocalRenderCoverage.current?.count(node.kind.discriminator())
-    val a11y = accessibilityProjection(node.accessibility, ctx)
+    // The NODE overload, not the trait one: it covers the whole announcement surface, so the
+    // §3.1 `tooltip` beside `accessibility` on the envelope is reported in the drop set rather
+    // than vanishing. Neither overload RENDERS a drop, so the composition is unchanged.
+    val a11y = accessibilityProjection(node, ctx)
     if (a11y.isEmpty) {
         RenderNodeKind(node, ctx)
     } else {
@@ -194,6 +204,8 @@ private fun RenderNodeKind(node: Node, ctx: BindingContext) {
         is Link -> RenderLink(k, ctx)
         is Image -> RenderImage(k, ctx)
         is Media -> RenderMedia(k, ctx)
+        is Embed -> RenderEmbed(k, ctx)
+        is Tree -> RenderTree(k, ctx)
         is ListNode -> RenderList(k, ctx)
         is Toast -> RenderToast(k, ctx)
         is CodeBlock -> RenderCodeBlock(k)
@@ -649,22 +661,189 @@ private fun RenderMedia(k: Media, ctx: BindingContext) {
             if (!k.controls) add("no transport")
             if (variant is Video && variant.poster != null) add("poster")
         }
-    CBox(
+    Column {
+        CBox(
+            Modifier
+                .fillMaxWidth()
+                .height(72.dp)
+                .background(Color(0xFFF0F0F0), RoundedCornerShape(4.dp))
+                .border(1.dp, Color(0xFFCCCCCC), RoundedCornerShape(4.dp))
+                // The one obligation that binds a surface rendering no playback: the accessible
+                // name, always, resolved from the required `label`.
+                .semantics(mergeDescendants = true) { contentDescription = name },
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("▶ $surface", fontSize = 12.sp, color = Color.Gray)
+                Text(name, fontSize = 10.sp, color = Color.Gray)
+                if (declared.isNotEmpty()) Text(declared.joinToString(" · "), fontSize = 9.sp, color = Color.Gray)
+            }
+        }
+        RenderMediaTracks(k, ctx)
+        RenderMediaTranscript(k, ctx)
+    }
+}
+
+/**
+ * The text-track menu (WIRE_FORMAT.md 3.6.6, Phase 1110).
+ *
+ * A `<track>` is markup a user agent turns into a menu, and this floor has neither. What it does
+ * have is the two rules that decide what such a menu SAYS, and both are ordinary logic over the
+ * decoded list rather than anything a player owns — so they are discharged here rather than
+ * exempted, and the emitted rows are what the Compose gate asserts them against:
+ *
+ *  * **Authored order is preserved, never re-sorted.** The opposite of `srcSet`'s rule and not an
+ *    inconsistency with it: a browser picks ONE candidate from a srcset by an algorithm, so
+ *    ordering it is canonicalisation, while a reader picks a track from a menu built in DOCUMENT
+ *    order, so ordering it is rewriting someone else's menu.
+ *  * **At most one default per KIND, first election wins.** A document electing two default
+ *    captions tracks is legal bytes — the decoder does not refuse it, because HTML leaves the case
+ *    undefined — so the RENDERER resolves it, and every host resolves it the same way. The later
+ *    election keeps its ROW and loses only its claim on the menu, which is why the losing track is
+ *    still listed here. The election is per kind, so a captions default and a subtitles default
+ *    coexist.
+ *
+ * The track's `src` is never fetched and its destination never emitted, which is why
+ * `Media/refused-source-dropped` stays a declared exemption: a real player arm owes every track
+ * source the §19 floor (`TrackEntry.sanitizedSrc`) and owes a refused one the DROP remedy.
+ */
+@Composable
+private fun RenderMediaTracks(k: Media, ctx: BindingContext) {
+    if (k.tracks.isEmpty()) return
+    val defaultedKinds = mutableSetOf<TrackKind>()
+    // `map` over the list AS IT ARRIVED — the ordering rule is that nothing sorts, so the
+    // resolution walks the authored order and the first election of a kind is the one honoured.
+    val rows =
+        k.tracks.map { t ->
+            val honoured = t.default && defaultedKinds.add(t.kind)
+            val label = ctx.resolveText(t.label)
+            "${t.kind} · ${t.srcLang} · $label" + if (honoured) " · default" else ""
+        }
+    Column(Modifier.padding(top = 2.dp)) {
+        for (row in rows) Text(row, fontSize = 9.sp, color = Color.Gray)
+    }
+}
+
+/**
+ * The transcript disclosure (3.6.6, Phase 1110).
+ *
+ * The obligation is placement plus naming: the transcript renders BESIDE the transport and never
+ * inside it, and it carries the MEDIA's resolved label as its own accessible name so a reader
+ * meeting it out of context is told which recording it transcribes. Both halves are structural
+ * rather than markup-specific, so both are discharged here: this composable is a sibling of the
+ * tile in the enclosing [Column], never a child of it, and its semantics name is the media's
+ * label rather than the transcript text.
+ *
+ * The `<details>` collapse itself is not reproduced — this floor renders the text — and that is a
+ * presentation difference rather than an unmet claim: the obligation is about where the transcript
+ * is and what it is called, not about whether it starts folded.
+ */
+@Composable
+private fun RenderMediaTranscript(k: Media, ctx: BindingContext) {
+    val transcript = k.transcript?.let { ctx.resolveText(it) } ?: return
+    if (transcript.isBlank()) return
+    val name = ctx.resolveText(k.label)
+    Column(Modifier.padding(top = 2.dp).semantics(mergeDescendants = true) { contentDescription = name }) {
+        Text("Transcript", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Color.Gray)
+        Text(transcript, fontSize = 10.sp, color = Color.Gray)
+    }
+}
+
+/**
+ * The sandboxed third-party embed (WIRE_FORMAT.md 3.6.8 + 19.1, Phase 1111).
+ *
+ * **This floor mounts no browsing context**, exactly as it runs no player and loads no image over
+ * the network — an embed's whole content is a third-party document EXECUTING, and standing one up
+ * is not a decision a decoding surface makes on a consumer's behalf. So the arm is a visible,
+ * labelled frame tile: a real arm of the exhaustive floor, never [FallbackPlaceholder], stating
+ * what the document declares.
+ *
+ * One of the section's obligations binds a surface that mounts nothing, and it is the same one the
+ * media tile honours: **the accessible name is emitted ALWAYS.** `title` is required on the wire
+ * precisely because a frame is a focus container with no decorative case, and it lands here as
+ * `contentDescription`.
+ *
+ * The other two are declared exemptions with reasons, and each is pinned by a supporting test so
+ * the exemption reads as a decision rather than a gap: the tile STATES the granted relaxations in
+ * the vocabulary's declaration order (and says plainly that an empty list grants nothing, which is
+ * the polarity most easily lost), and it NEVER shows the source destination.
+ *
+ * **Forward-coupling.** An arm that genuinely mounts a frame must, in the same change, route `src`
+ * through [fuaran.ui.sanitizedSrc]'s `embed` class — `https` and nothing else, no schemeless
+ * reference — emit no source attribute at all on refusal rather than substituting one, emit the
+ * sandbox declaration unconditionally and empty when nothing is granted, and retire both
+ * exemptions for real checkers.
+ */
+@Composable
+private fun RenderEmbed(k: Embed, ctx: BindingContext) {
+    val title = ctx.resolveText(k.title)
+    // Declaration order, de-duplicated: the ENUM's order, never the document's, so two documents
+    // naming the same set state the same thing. (The wire preserves what the document authored;
+    // the determinism is established at render time — 3.6.8 obligation 2.)
+    val granted = EmbedPermission.entries.filter { it in k.permissions }
+    val ratio = if (k.aspectRatio == ImageAspect.Natural) null else k.aspectRatio.name
+    Column(
         Modifier
             .fillMaxWidth()
-            .height(72.dp)
             .background(Color(0xFFF0F0F0), RoundedCornerShape(4.dp))
             .border(1.dp, Color(0xFFCCCCCC), RoundedCornerShape(4.dp))
-            // The one obligation that binds a surface rendering no playback: the accessible name,
-            // always, resolved from the required `label`.
-            .semantics(mergeDescendants = true) { contentDescription = name },
-        contentAlignment = Alignment.Center,
+            .padding(8.dp)
+            .semantics(mergeDescendants = true) { contentDescription = title },
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("▶ $surface", fontSize = 12.sp, color = Color.Gray)
-            Text(name, fontSize = 10.sp, color = Color.Gray)
-            if (declared.isNotEmpty()) Text(declared.joinToString(" · "), fontSize = 9.sp, color = Color.Gray)
+        Text("▢ embed", fontSize = 12.sp, color = Color.Gray)
+        Text(title, fontSize = 10.sp, color = Color.Gray)
+        // The empty list is TOTAL DENIAL and the tile says so rather than staying silent: an
+        // absent line and a line reading "no permissions granted" are the same bytes and very
+        // different statements to a reader auditing what a page grants a third party.
+        Text(
+            if (granted.isEmpty()) "no permissions granted" else granted.joinToString(" · ") { it.name },
+            fontSize = 9.sp,
+            color = Color.Gray,
+        )
+        if (ratio != null) Text(ratio, fontSize = 9.sp, color = Color.Gray)
+    }
+}
+
+/**
+ * Recursive disclosure with tree semantics (WIRE_FORMAT.md 3.6.12, Phase 1120).
+ *
+ * The one claim `render-fidelity.json` declares for this kind is **the stated accessible name**,
+ * and it is honoured here: each row announces its OWN visible label. A `treeitem` owns its child
+ * group, so a name computed from contents reads the whole branch out as the row's own name — which
+ * is exactly what `mergeDescendants` on a row containing its children would produce, and is why
+ * the label element is a leaf and the child group its SIBLING rather than its content.
+ *
+ * **What this floor does not carry, stated rather than implied.** Compose has no `tree` /
+ * `treeitem` role and no `aria-level` / `aria-setsize` / `aria-posinset`, so the hierarchy is
+ * conveyed by INDENTATION alone; there is no roving tabindex, no key bindings and no selection
+ * affordance. And the tree renders FULLY EXPANDED whatever `expandedStateKey` names, because this
+ * floor holds no state store to read the open-row set from — for a tree naming no key that is the
+ * specified rendering, and for one that does name a key it is a degradation, recorded in
+ * `docs/RENDER-PROJECTION.md` rather than papered over with a toggle that writes nothing. None of
+ * those is a declared obligation, so none is silently claimed here.
+ */
+@Composable
+private fun RenderTree(k: Tree, ctx: BindingContext) {
+    Column {
+        for (item in k.items) RenderTreeRow(item, 1, ctx)
+    }
+}
+
+@Composable
+private fun RenderTreeRow(item: TreeItem, level: Int, ctx: BindingContext) {
+    val name = ctx.resolveText(item.label)
+    Column {
+        Row(Modifier.padding(start = ((level - 1) * 12).dp), verticalAlignment = Alignment.CenterVertically) {
+            // Expandability is derived from the presence of children and from nothing else
+            // (3.6.12 obligation 8). A leaf carries no marker: a marker on a leaf asserts a
+            // collapsed subtree that does not exist.
+            if (item.children.isNotEmpty()) Text("▾ ", fontSize = 11.sp, color = Color.Gray)
+            item.icon?.let { Text("$it ", fontSize = 9.sp, color = Color.Gray) }
+            // STATED, not computed — and on a leaf element, so the branch below is not swallowed
+            // into this row's own name.
+            Text(name, fontSize = 13.sp, modifier = Modifier.semantics { contentDescription = name })
         }
+        for (child in item.children) RenderTreeRow(child, level + 1, ctx)
     }
 }
 
@@ -782,6 +961,35 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
             // sees a decision, not an omission.
             val v = ctx.resolve(kind.value)
             OutlinedTextField(value = v, onValueChange = {}, label = { Text(label) }, readOnly = true, modifier = Modifier.fillMaxWidth())
+        }
+        // 3.6.9 (Phase 1113) — the searchable form of Choice. WRITABLE, unlike the `ChoiceField`
+        // arm above, and the difference is the control rather than an inconsistency: a combobox IS
+        // a text input a reader types into, so `onValueChange` genuinely fires from user input and
+        // an arm that swallowed it would be a control that types and commits nothing.
+        //
+        // It is writable in BOTH polarities of `allowFreeText`, which is the specified floor: the
+        // static-host floor is `<input type="text" list="…">`, and a datalist is a SUGGESTION list
+        // — HTML has no native membership constraint for one. Per §3.6.9 obligation 4, membership
+        // is not enforceable by any static host and MUST NOT be claimed as if it were; per §22 a
+        // host that accepts submissions re-checks membership server-side.
+        //
+        // NO `role="combobox"` / `aria-expanded` is emitted (obligation 3's MUST NOT): this floor
+        // has no popup, and a claim that can never become true replaces the platform's correct
+        // semantics with inert markup. The resolved option source is SHOWN instead, which is the
+        // one thing that distinguishes a combobox from a plain text field on a floor with no popup.
+        is ComboboxField -> {
+            var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
+            val key = stateKeyOf(kind.value)
+            val options = ctx.resolve(kind.options)
+            Column {
+                OutlinedTextField(
+                    value = v,
+                    onValueChange = { v = it; if (key != null) sink?.writeBack(key, it) },
+                    label = { Text(label) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (options.isNotEmpty()) Text(options, fontSize = 9.sp, color = Color.Gray)
+            }
         }
         is SegmentedChoiceField -> {
             val selected = ctx.resolve(kind.value)

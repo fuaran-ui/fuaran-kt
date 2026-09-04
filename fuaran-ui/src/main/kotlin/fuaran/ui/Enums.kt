@@ -61,6 +61,38 @@ enum class ImageAspect { Natural, Square, FourThree, ThreeTwo, SixteenNine }
  */
 enum class ImageLoading { Eager, Lazy }
 
+/**
+ * A `TrackEntry.kind` — which timed-text channel a media track carries (WIRE_FORMAT.md 3.6.6).
+ * A BARE enum (3.5), so an unrecognised token reports at the entry's own `kind` path with no
+ * `$type` suffix.
+ *
+ * **`Metadata` is absent by design and is not a spelling to guess at.** Its cues are rendered by
+ * no user agent and read only by script, so a declarative document naming it would state an intent
+ * no conformant host could honour without leaving the vocabulary. The set is closed at four; a
+ * fifth is an addition to the format, which is exactly what an `UNKNOWN_DU_CASE` here says.
+ */
+enum class TrackKind { Subtitles, Captions, Descriptions, Chapters }
+
+/**
+ * An `Embed.permissions` element — one sandbox relaxation a document asks for (3.6.8). A BARE enum,
+ * so an unrecognised token reports at `$.kind.permissions[i]` with no `$type` suffix.
+ *
+ * **The empty list is TOTAL DENIAL, and that polarity is the design**: the wire-cheapest document
+ * is the most locked-down one, so the default a careless emitter produces is the safe one.
+ *
+ * **Two relaxations are excluded rather than defaulted off, and are not reserved either** —
+ * top-level navigation (the drive-by redirect) and downloads (a file-save prompt in a third
+ * party's hands). Both are names a later phase must NOT take. Popups, modals, pointer lock,
+ * presentation and orientation lock have no recorded demand and ARE reserved, which is the whole
+ * reason the slot is an enum rather than a record of booleans: a fifth case is a bare-string
+ * addition rather than a type replacement.
+ *
+ * A decoder MUST NOT silently drop an unrecognised token: that would turn a document asking for
+ * something this vocabulary has no name for into a document asking for LESS, which reads as
+ * success. [enumOf]'s refusal is what keeps that honest.
+ */
+enum class EmbedPermission { AllowScripts, AllowSameOrigin, AllowForms, AllowFullscreen }
+
 enum class DateStyle { Short, Medium, Long, Full }
 
 enum class RelativeTimeUnit { Second, Minute, Hour, Day, Week, Month, Year }

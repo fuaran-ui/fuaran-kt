@@ -232,6 +232,69 @@ val Media.sanitizedSrc: SanitizedUrl
     get() = src.sanitizedUrl
 
 /**
+ * A text track's `src` put through the floor (3.6.6, Phase 1110). A track file is fetched by the
+ * client with no user act, exactly as [Media.src] is, so it carries the same obligation — a slot
+ * that skipped the floor would be a documented way around it.
+ *
+ * The REMEDY is the POSTER's rather than the source's, and a consumer must not copy the source's
+ * across: an element must have a source, but it need not have this track, so a refused track is
+ * **DROPPED**. A `<track>` pointing at the refusal URL is a caption menu entry that opens onto
+ * nothing.
+ */
+val TrackEntry.sanitizedSrc: SanitizedUrl
+    get() = src.sanitizedUrl
+
+/**
+ * The `embed` egress class (WIRE_FORMAT.md 19.1, Phase 1111) — a **stricter** floor for a slot
+ * that EXECUTES.
+ *
+ * Everything else §19 governs is fetch-and-display or navigate-on-a-click; an embed fetches a
+ * document and lets it RUN, so it does not ride [FuaranUrlPolicy.allowedSchemes] at all. Rule 1's
+ * normalisation and rule 2's scheme extraction are shared unchanged — that is what makes any
+ * positional or prefix test see the string a parser will see — and then the accept set is
+ * `https` and nothing else.
+ *
+ * **Two of the exclusions are things §19 accepts, and both are deliberate.** `http` is refused
+ * because a document delivered over a channel any intermediary can rewrite is an intermediary's
+ * script running in a frame this page created — a risk that does not arise when the same channel
+ * delivers an image. And a **schemeless** reference is refused, which is the sharper departure: a
+ * relative reference names a same-origin document, and a same-origin frame is exactly the shape
+ * where a document granted both `AllowSameOrigin` and `AllowScripts` can reach its own frame
+ * ELEMENT and strip the sandbox from it.
+ *
+ * Because the class admits exactly one scheme it performs no positional test, so it needs no
+ * analogue of §19's protocol-relative rule and cannot inherit that rule's historic evasions.
+ *
+ * **This is a RENDER-time obligation and not a wire constraint**: a document naming an `http` or
+ * relative embed source is a valid wire document, the decoder does not reject it, and this
+ * accessor is what a consumer consults before mounting a browsing context. The remedy on refusal
+ * is likewise its own: emit the element with **no source at all** — never `about:blank`, never the
+ * original value — because a frame pointed at a refusal URL renders that page, where one with no
+ * source is a well-defined empty context that fetches nothing.
+ */
+val Embed.sanitizedSrc: SanitizedUrl
+    get() =
+        src.literalString?.let { raw ->
+            val trimmed = FuaranUrlPolicy.normaliseForFloor(raw)
+            when (FuaranUrlPolicy.schemeOf(trimmed)) {
+                "https" -> SanitizedUrl.Allowed(trimmed)
+                null ->
+                    SanitizedUrl.Rejected(
+                        raw,
+                        "the embed class admits no schemeless reference — a same-origin frame granted " +
+                            "AllowSameOrigin and AllowScripts can reach its own frame element and remove " +
+                            "the sandbox; compose your own content with Mount instead",
+                    )
+                else ->
+                    SanitizedUrl.Rejected(
+                        raw,
+                        "the embed class accepts 'https:' and nothing else — a document that EXECUTES " +
+                            "does not ride the ordinary §19 accept set",
+                    )
+            }
+        } ?: SanitizedUrl.Dynamic
+
+/**
  * A video's `poster` put through the floor (3.6.6). Fetched with no user act exactly as `src` is,
  * and — like a `srcSet` candidate and unlike the primary source — a refused poster is **dropped**
  * rather than neutered: a `<video>` with no poster shows its first frame, which is a working

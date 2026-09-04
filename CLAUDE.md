@@ -165,10 +165,27 @@ placeholder, and filtering during decode would also stop the projection being a 
 wire. The consumer obligations live in the README's "Safety floor" section; keep them there, since
 that is what a consumer reads.
 
+**§19.1's `embed` class is a SECOND, STRICTER floor and not a narrower spelling of the first.**
+`Embed.sanitizedSrc` shares rule 1's normalisation and rule 2's scheme extraction — which is what
+makes any positional test see the string a parser would see — and then accepts `https` and nothing
+else. Two of its exclusions are things the ordinary floor ACCEPTS, and both are deliberate: `http`,
+because a document delivered over a channel any intermediary can rewrite is an intermediary's
+SCRIPT running in a frame this page created (a risk that does not arise when the same channel
+delivers an image); and a **schemeless** reference, because a relative reference names a same-origin
+document, and a same-origin frame is exactly the shape where a guest granted both `AllowSameOrigin`
+and `AllowScripts` can reach its own frame ELEMENT and strip the sandbox from it. A host that wants
+to compose its own content has `Mount`. Because the class admits exactly one scheme it performs no
+positional test at all, so it needs no analogue of rule 5 and cannot inherit that rule's historic
+evasions. Its refusal remedy is its own too: emit **no source attribute**, never `about:blank` and
+never the original value — a frame pointed at a refusal URL renders that page, where one with no
+source is a well-defined empty context that fetches nothing. As everywhere in §19 this is a
+RENDER-time obligation and not a wire constraint: a document naming an `http` embed source is a
+VALID wire document and the decoder accepts it, which the corpus leg asserts directly.
+
 A renderer or interaction arm that ever *does* route a URL onward — a real image loader, a tappable
-link, an `Intent` — must go through `FuaranUrlPolicy.sanitize` in the same change that adds it. Same
-shape as the write-back rule below, and for the same reason: the compiler forces the arm to exist,
-it cannot force the arm to check.
+link, an `Intent`, a mounted frame — must go through `FuaranUrlPolicy.sanitize` (or, for an embed,
+`Embed.sanitizedSrc`) in the same change that adds it. Same shape as the write-back rule below, and
+for the same reason: the compiler forces the arm to exist, it cannot force the arm to check.
 
 ## Control write-back — a forward-coupling rule (Phase 667)
 
@@ -222,6 +239,10 @@ the **accessible name binds and is emitted always** (`contentDescription` from t
 plays, and the tile *states* the declaration rather than acting on it; and **`Audio`-has-no-autoplay**
 is structural, per above.
 
+**Text tracks and the transcript** (Phase 1110) landed on the SPEC rather than on `MediaKind.Video`
+and are covered in "The platform-baseline wave" below, together with the two track claims this floor
+ASSERTS rather than exempts.
+
 **Forward-coupling.** A real player arm must, in the same change, route `Media.src` and a `Video`'s
 `poster` through `FuaranUrlPolicy` (`Media.sanitizedSrc` / `MediaKind.sanitizedPoster`), emit
 `autoplay` and muting as a pair or neither, and honour the drop-not-substitute remedy a refused
@@ -231,13 +252,82 @@ that grows a real loader owes the same to every `srcSet` candidate (`SrcSetEntry
 an `expandable` affordance owes a REAL link whose target is the primary `src` — or, where the floor
 refused it, no affordance at all.
 
+## The platform-baseline wave — five capabilities, and what each cost this surface
+
+The wave that landed `Media` text tracks, `Embed`, the `tooltip` trait, `Combobox` and `Tree` is a
+useful case study, because the five cost this surface five *different* things and only two of them
+were "grow a discriminator arm". The decisions are here; the mechanics are in the code.
+
+**Refusal must be met BY CLASS, and a discriminator arm is not by itself a refusal.** Before the
+wave, every `Embed`, `Tree` and `Combobox` document was refused at the discriminator —
+`WRONG_NODE_KIND` / `UNKNOWN_DU_CASE` — so a surface could grow the arm, decode nothing inside it,
+and watch a whole family of reject vectors go green off the back of a refusal that has nothing to do
+with the value each vector is about. `CorpusDecodeTest`'s **corrected-twin** leg exists for exactly
+that: each malformed corpus document is paired with a twin differing in the offending VALUE and in
+nothing else, and the twin must DECODE. Every repair is written out at the call site, because a twin
+whose substitutions are hidden is a probe nobody can audit — and one of them found a second defect
+in the vector it was repairing (`reject-combobox-allowfreetext-nonbool` also carries a bare
+`"<closure>"` in an `Action` slot, which the reference host refuses too), which a naive twin would
+have reported as a failure of the decoder rather than of the probe.
+
+- **Text tracks (`Media.tracks` / `.transcript`).** Both slots sit on the SPEC, not on `Video`, and
+  the second placement is the one worth remembering: a transcript is the affordance an AUDIO surface
+  needs most. `tracks` omits at EMPTY, so a decoder restores `[]` and never a null — the
+  missing-list-field class `Image.srcSet` already carries. `TrackEntry` is the strictest record on
+  the wire (four of five members REQUIRED), and both of its corpus reject vectors sit one level
+  INSIDE an array element, which is the position a host walking elements with a looser walker than
+  its records gets wrong.
+- **`Embed`.** A KIND, never a `Mount` variant and never a `Media` one: `Mount` composes a
+  COOPERATING guest and an embed cannot acquire any of what that requires, while `Media` fetches an
+  asset and DISPLAYS it where an embed fetches a document and lets it EXECUTE. That last difference
+  is why the source takes its own egress class — see "The URL safety floor" above — and why
+  `permissions` omitting at the empty list means TOTAL DENIAL rather than "unspecified": the
+  wire-cheapest document is the most locked-down one, so the default a careless emitter produces is
+  the safe one. An unrecognised permission token is REFUSED and never dropped: dropping it would
+  turn a document asking for something this vocabulary cannot name into one asking for LESS, which
+  reads as success.
+- **The `tooltip` trait.** An ENVELOPE trait, so it is read beside `accessibility` and never from
+  inside `kind` — `ButtonSpec`'s legacy host-only slot stays an unknown key, tolerated and ignored.
+  It is a DESCRIPTION and never a NAME, which is what decides this surface's answer; see the
+  accessibility-projection section below, where it joins the drop set for the same structural reason
+  `describedBy` is in it.
+- **`Combobox`.** Its `options` and `value` are `Choice`'s slots deliberately and normatively, so a
+  document migrating between the two changes its `$type` and nothing else. `allowFreeText` omits at
+  `false` and a non-boolean is refused rather than coerced — `"yes"`, `"no"` and `"false"` are all
+  non-empty, so a truthiness read would widen the field on two of the three. The render arm is
+  WRITABLE, unlike the `ChoiceField` arm beside it, and the difference is the control rather than an
+  inconsistency: a combobox IS a text input a reader types into. It emits **no** `role="combobox"` /
+  `aria-expanded` (§3.6.9 obligation 3's MUST NOT — this floor has no popup, and a claim that can
+  never become true replaces the platform's correct semantics with an inert one), and it claims no
+  membership enforcement (obligation 4 + §22: client validation is not a trust boundary).
+- **`Tree`.** The format's first self-referential shape, and the one that brought a THIRD depth
+  axis. `WireLimits.MAX_TREE_ITEM_DEPTH` is declared separately from `MAX_NODE_DEPTH` even though
+  the two carry the same figure: a whole hierarchy lives inside ONE node, so the node counter cannot
+  see it at all, and at roughly two JSON levels per row the syntactic bound is nowhere near reached.
+  The item walk is a plain `depth` PARAMETER rather than a thread-local — unlike `NodeWalk`, whose
+  machinery exists because the node walk is spread across ~200 functions — so it is correct by
+  construction, with no counter to leave behind on a throw. The render floor carries the kind's one
+  declared obligation and states plainly what it does not carry: no `tree`/`treeitem` role, no
+  `aria-level` / `setsize` / `posinset`, no roving tabindex, no key bindings, no selection, and the
+  hierarchy shown FULLY EXPANDED whatever `expandedStateKey` names, because this floor holds no
+  state store to read the open-row set from.
+
+**Forward-coupling.** An arm that grows a real frame must route `Embed.src` through
+`Embed.sanitizedSrc`'s 19.1 class, emit **no** source attribute on refusal rather than substituting
+one, emit the sandbox declaration unconditionally and empty when nothing is granted, and retire both
+`Embed` exemptions for real checkers in the same change. An arm that grows a real player owes every
+`TrackEntry.src` the §19 floor and owes a refused track the DROP remedy, not a substitute. A `Tree`
+arm that grows a state store owes the named `expandedStateKey` its actual open-row set, and this
+section moves with it.
+
 ## Render obligations — the checkable remainder, and why most are declared exempt here
 
 WIRE_FORMAT.md §13's `render-fidelity.json` now carries, per kind, the subset of that kind's
-fallback contract stated as **checkable claims** drawn from a closed vocabulary. The three families
-that name one today are `Media` (4), `Image` (5) and `Custom` (1). A surface can decode every
-fixture in the corpus and silently fail every one of them: none is a missing discriminator arm, so
-neither the decode harness nor the `else`-free dispatch spine reaches them.
+fallback contract stated as **checkable claims** drawn from a closed vocabulary. A surface can
+decode every fixture in the corpus and silently fail every one of them: none is a missing
+discriminator arm, so neither the decode harness nor the `else`-free dispatch spine reaches them.
+**Do not restate the per-kind counts here** — the artefact enumerates them and the gate prints the
+totals on every run; a count in prose is the one thing in this section guaranteed to go stale.
 
 **The gate enumerates from the artefact, never from a list beside its checkers** — that is the whole
 mechanism, and the reason it is worth the two files it costs. A claim newly declared on a kind this
@@ -245,24 +335,45 @@ surface renders arrives as a claim with no checker and turns the gate RED, rathe
 paragraph a future reader may or may not re-read. `RenderObligations.kt` reads the artefact and
 carries the shared reporting shape; `RenderObligationHarness.kt` carries this surface's answer.
 
-**Three claims are asserted, seven are DECLARED EXEMPT with a reason, and the second number is the
-honest one.** This is a render projection with **no playback engine and no network image loader**:
-the media arm is a labelled transport tile and the image arm a labelled placeholder box, both real
-arms of the exhaustive floor and neither a player. Most of §3.6.2–3.6.6's claims are therefore
-*vacuous* here — there is no attribute for them to be true or false of — and a checker asserting the
-absence of output this surface never produces would be a green that guards nothing. A declared
-exemption naming the structural fact is a **conformant answer**; an obligation silently absent from
-the registry is not, and the difference between those two is what the artefact exists to make
-visible.
+**Some claims are asserted, several are DECLARED EXEMPT with a reason, and the second group being
+non-empty is the honest state.** This is a render projection with **no playback engine, no network
+image loader and no browsing context**: the media arm is a labelled transport tile, the image arm a
+labelled placeholder box and the embed arm a labelled frame tile — all real arms of the exhaustive
+floor, none of them a player, a loader or a frame. A claim about an ATTRIBUTE such an arm never
+emits is *vacuous* here, and a checker asserting the absence of output this surface never produces
+would be a green that guards nothing. A declared exemption naming the structural fact is a
+**conformant answer**; an obligation silently absent from the registry is not, and the difference
+between those two is what the artefact exists to make visible.
+
+**The line between the two groups is worth stating, because it is not "did the wave land here".**
+An obligation is ASSERTED when its substance survives the crossing to this platform, and exempted
+when the substance IS the markup. The Phase 1110 track claims are the clearest case: `Media`'s two
+player claims are about attributes (`autoplay`, `muted`, a dropped `poster`) and stay exempt, while
+`authored-child-order`, `single-default-per-kind` and `transcript-disclosure-named` are about what
+the track MENU says — which order it is in, which entry carries the default claim, where the
+transcript sits relative to the transport — and every one of those is ordinary logic over the
+decoded list that a surface with no player can get exactly right or exactly wrong. They are
+asserted. `Embed`'s sandbox claim goes the other way: the token-vs-`allow` split it turns on is
+HTML attribute vocabulary this surface does not emit at all, so it is exempt — with a supporting
+test pinning what the tile DOES state, which is what makes the exemption a decision rather than a
+gap.
 
 | claim | here |
 |---|---|
-| `Media/accessible-name-always` | **asserted** — the one obligation that binds a surface rendering no playback |
+| `Media/accessible-name-always` | **asserted** — the one playback-independent obligation on the tile |
 | `Media/no-autoplay-pathway` | **asserted** — structurally (the `Audio` case declares no slot) and in output |
+| `Media/authored-child-order` | **asserted** — the track rows are stated in the wire's order; nothing sorts |
+| `Media/single-default-per-kind` | **asserted** — first election wins, and the loser keeps its row |
+| `Media/transcript-disclosure-named` | **asserted** — beside the transport, named by the media's own label |
+| `Embed/accessible-name-always` | **asserted** — the required `title` lands as the tile's `contentDescription` |
+| `Tree/accessible-name-always` | **asserted** — a row states its OWN label, never one computed from its branch |
 | `Custom/unregistered-custom-labelled` | **asserted for the uncarded path**, which is the whole of the path here |
 | `Media/autoplay-muted-pairing` | exempt — nothing plays, so no attribute is emitted; the tile *states* the declaration |
-| `Media/refused-source-dropped` | exempt — no `poster` destination is emitted, so nothing exists to drop |
+| `Media/refused-source-dropped` | exempt — no `poster` and no track destination is emitted, so nothing exists to drop |
+| `Embed/sandbox-always-exactly-declared` | exempt — no frame, so no `sandbox` attribute and no token-vs-`allow` split; the tile states the SET instead |
+| `Embed/refused-embed-source-omitted` | exempt — no source is emitted at all; the 19.1 class itself IS implemented, as `Embed.sanitizedSrc` |
 | the five `Image` claims | exempt — no image element, no anchor, no `srcSet` and no caption structure is emitted |
+| `FileUpload/picker-always-present`, `Modal/aria-modal-only-when-blocking` | **owed and unanswered** — the ingress and modality slots (Phases 1115 / 1119) are not modelled on this surface yet, so the gate is RED on these two by design until they are |
 
 The reasons are written out in full in `DECLARED_EXEMPTIONS`, one sentence each, because the reason
 is what a reader of the run has to judge. `unregistered-custom-labelled` is conditional on a
@@ -365,6 +476,7 @@ beside it: adding an `androidx` import to either breaks that build loudly, which
 | `role` | `button` → `Role.Button`, `tab` → `Role.Tab`, `heading` → `heading()`; every other token **dropped, reported** |
 | `liveRegion` | `polite` / `assertive` → `LiveRegionMode.Polite` / `.Assertive` — an **exact** mapping; `off` → nothing (`off` is the platform default) |
 | `hidden` | `hideFromAccessibility()` when the binding resolves true |
+| `tooltip` (§3.1, the ENVELOPE trait beside the six above) | **no mapping** — dropped, reported |
 
 **An unmappable slot is DROPPED, never refused — and never silently.** Two halves, both
 load-bearing:

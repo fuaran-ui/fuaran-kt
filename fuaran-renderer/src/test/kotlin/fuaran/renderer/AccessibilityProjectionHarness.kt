@@ -5,9 +5,15 @@ package fuaran.renderer
 import fuaran.ui.Accessibility
 import fuaran.ui.JsonBool
 import fuaran.ui.JsonString
+import fuaran.ui.LiteralText
+import fuaran.ui.Markdown
+import fuaran.ui.Node
+import fuaran.ui.NodeKind
 import fuaran.ui.QueryBinding
 import fuaran.ui.StateBinding
 import fuaran.ui.StaticBinding
+import fuaran.ui.TextSource
+import fuaran.ui.decodeNode
 
 /**
  * The accessibility projection's MAPPING DECISIONS, asserted in the plain-JVM gate.
@@ -265,6 +271,74 @@ fun a11yMappingFailures(): List<String> {
             )
         if (!p.isEmpty) error("an unmappable-only trait projects nothing")
         c.eq("drop count", 3, p.unmapped.size)
+    }
+
+
+    // ── The tooltip trait (WIRE_FORMAT.md 3.1, Phase 1112) ───────────────────
+    //
+    // Asserted HERE, in the platform-neutral leg, for the reason the drop set already records: a
+    // decision testable only on a machine carrying the Android SDK is a decision nobody re-checks.
+    // Note these use the NODE overload — the hint sits on the envelope beside `accessibility`, not
+    // inside it, so the trait overload structurally cannot see it.
+
+    fun node(kind: NodeKind = Markdown(LiteralText("Body")), tooltip: TextSource? = null, a11y: Accessibility? = null) =
+        Node(id = "n", kind = kind, accessibility = a11y, tooltip = tooltip)
+
+    c.check("aTooltipIsReportedDroppedRatherThanProjected") {
+        // §3.1: the hint is a DESCRIPTION and MUST NOT be projected as a NAME. Compose has exactly
+        // one announcement channel for a node's own text, and writing to it makes the string the
+        // NAME — so the one available projection is the one the specification forbids in terms.
+        // Dropped, then, and reported, which is this surface's whole policy for an unmappable slot.
+        val p = accessibilityProjection(node(tooltip = LiteralText("Updated nightly.")), ctx)
+        c.eq("drops", listOf(A11ySlot.Tooltip), p.unmapped)
+        if (!p.isEmpty) error("a hint must project NO semantics — projecting it would make it the name")
+        if (p.label != null) error("the hint reached the accessible NAME, which §3.1 forbids in terms")
+    }
+
+    c.check("aTooltipAndAnAccessibilityLabelAreDIFFERENTSlots") {
+        // The case §3.1 is written about: an icon-only control needs both, saying different things.
+        // The label must survive as the name AND the hint must be reported dropped — a surface that
+        // conflated them would leave such a control with two competing names and no description.
+        val p =
+            accessibilityProjection(
+                node(
+                    tooltip = LiteralText("Exports the rows currently shown, not the whole table."),
+                    a11y = Accessibility(label = text("Download CSV"), describedBy = "note"),
+                ),
+                ctx,
+            )
+        c.eq("label", "Download CSV", p.label)
+        // BOTH description-shaped slots drop, and in this order: the trait's own first, then the
+        // envelope's. That the two drop together is the honest statement — this platform has no
+        // description channel at all, not merely no `aria-describedby`.
+        c.eq("drops", listOf(A11ySlot.DescribedBy, A11ySlot.Tooltip), p.unmapped)
+    }
+
+    c.check("anEmptyOrWhitespaceHintIsNotEVENReportedAsDropped") {
+        // §3.1 obligation 5: a host emits NOTHING AT ALL when the hint resolves to empty or
+        // whitespace — "advertising a description that is not there is worse than silence". So the
+        // condition is on the RESOLVED value, and there was nothing to carry, which is a different
+        // fact from a hint this platform could not carry.
+        for (hint in listOf("", "   ", "\t\n")) {
+            val p = accessibilityProjection(node(tooltip = LiteralText(hint)), ctx)
+            if (p.unmapped.isNotEmpty()) error("a hint resolving to '${hint.trim()}' has nothing to drop: ${p.unmapped}")
+        }
+    }
+
+    c.check("aNodeWithNoHintReportsNoTooltipDrop") {
+        // The go-red half of the three above: without it, a projection that reported `Tooltip`
+        // unconditionally would pass every one of them.
+        val p = accessibilityProjection(node(), ctx)
+        if (A11ySlot.Tooltip in p.unmapped) error("a node with no hint must not report one dropped")
+    }
+
+    c.check("theHintSTILLDecodesAndIsReachableOnTheModel") {
+        // Dropped by the RENDER floor is not dropped by the surface. The trait decodes and reaches
+        // `Node.tooltip`, so an embedding app that has a description channel of its own can project
+        // it — which is what makes the drop a statement about this floor rather than about the
+        // Kotlin surface.
+        val n = decodeNode("{\"id\":\"t\",\"kind\":{\"\$type\":\"Markdown\",\"text\":\"Body\"},\"tooltip\":\"Updated nightly.\"}")
+        c.eq("tooltip", LiteralText("Updated nightly."), n.tooltip)
     }
 
     a11yMappingChecksRun = c.passed + c.failures.size

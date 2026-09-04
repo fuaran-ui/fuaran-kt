@@ -606,6 +606,77 @@ fun main() {
     }
 
     // ----------------------------------------------------------------------- //
+    // Phase 1111 — the `embed` egress class (WIRE_FORMAT 19.1)
+    // ----------------------------------------------------------------------- //
+    //
+    // A slot that EXECUTES does not ride the ordinary §19 accept set, so `Embed.sanitizedSrc` is a
+    // separate accessor rather than a third caller of `Binding.sanitizedUrl`. These checks pin the
+    // two departures that make it a different class rather than a narrower spelling of the same
+    // one — and both are things §19 ACCEPTS, which is why neither can be left to the shared floor's
+    // own corpus cases.
+    fun embed(src: String): Embed = Embed(src = StaticBinding(JsonString(src)), title = LiteralText("t"))
+
+    runner.check("embed-egress/https-is-the-whole-accept-set") {
+        if (embed("https://player.example/x").sanitizedSrc != SanitizedUrl.Allowed("https://player.example/x")) {
+            error("an https embed source must be allowed")
+        }
+    }
+    runner.check("embed-egress/http-is-refused-where-the-ordinary-floor-accepts-it") {
+        // The sharper of the two departures to get wrong, because §19 accepts `http` for every
+        // other slot: a document delivered over a channel any intermediary can rewrite is an
+        // intermediary's SCRIPT running in a frame this page created, which is a risk that does
+        // not arise when the same channel delivers an image.
+        if (FuaranUrlPolicy.sanitize("http://player.example/x") == null) {
+            error("the probe is vacuous — the ordinary floor already refuses http, so refusing it here proves nothing")
+        }
+        if (embed("http://player.example/x").sanitizedSrc !is SanitizedUrl.Rejected) {
+            error("an http embed source must be refused by the embed class")
+        }
+    }
+    runner.check("embed-egress/a-schemeless-reference-is-refused") {
+        // The subtler departure: a relative reference names a SAME-ORIGIN document, and a
+        // same-origin frame is exactly the shape where a document granted both AllowSameOrigin and
+        // AllowScripts can reach its own frame element and remove the sandbox from it. A host that
+        // wants to compose its own content has `Mount`; this kind is for the uncooperative third
+        // party. The ordinary floor accepts a relative path, so again the probe is verified first.
+        if (FuaranUrlPolicy.sanitize("/embed/harbour") == null) {
+            error("the probe is vacuous — the ordinary floor already refuses a relative path")
+        }
+        for (relative in listOf("/embed/harbour", "embed/harbour", "?q=1", "#frag", "")) {
+            if (embed(relative).sanitizedSrc !is SanitizedUrl.Rejected) {
+                error("the schemeless reference '$relative' must be refused by the embed class")
+            }
+        }
+    }
+    runner.check("embed-egress/normalisation-is-shared-with-rule-1") {
+        // 19.1 rule 1 is §19's, unchanged, and sharing it is deliberate: it is what makes any
+        // positional or prefix test see the string a parser will see. An interior tab and leading
+        // C0 space must not smuggle a scheme past the single-scheme accept set.
+        if (embed("  https://player.example/x  ").sanitizedSrc != SanitizedUrl.Allowed("https://player.example/x")) {
+            error("leading and trailing C0-or-space must be stripped before the scheme test")
+        }
+        if (embed("java\tscript:alert(1)").sanitizedSrc !is SanitizedUrl.Rejected) {
+            error("the classic tab evasion must not reach the accept set")
+        }
+    }
+    runner.check("embed-egress/a-dynamic-source-is-not-knowable-here") {
+        // The same three-case posture every other accessor takes: "refused" and "not knowable yet"
+        // are different facts and call for different handling.
+        val dynamic = Embed(src = StateBinding("url", null), title = LiteralText("t"))
+        if (dynamic.sanitizedSrc != SanitizedUrl.Dynamic) error("a State-bound embed source is not knowable at decode time")
+        if (dynamic.sanitizedSrc.openable != null) error("a dynamic source must not be openable")
+    }
+    runner.check("embed-egress/the-wire-document-is-still-VALID") {
+        // 19.1's closing sentence, and the half a host most easily gets wrong by being helpful:
+        // this is a RENDER-time obligation, not a wire constraint. A document naming an http or
+        // relative embed source decodes cleanly; the accessor is where the refusal lives.
+        decodeNode(
+            "{\"id\":\"e\",\"kind\":{\"\$type\":\"Embed\",\"src\":{\"\$type\":\"Static\",\"value\":\"http://x.example/y\"}," +
+                "\"title\":\"t\"}}",
+        )
+    }
+
+    // ----------------------------------------------------------------------- //
     // The SANITIZATION family (WIRE_FORMAT 19 + 22) - semantic invariants
     // ----------------------------------------------------------------------- //
     //
@@ -1045,6 +1116,127 @@ fun main() {
                 if (!e.path.startsWith("\$")) error("$source path is not \$-rooted: ${e.path}")
             }
         }
+    }
+
+
+    // ----------------------------------------------------------------------- //
+    // Phase 1128 — refusal by CLASS, proven with corrected twins
+    // ----------------------------------------------------------------------- //
+    //
+    // The reject leg above pins the code and the path, and that is already stronger than most
+    // hosts manage. It is still not enough on its own for a wave that ADDS KINDS, and the reason
+    // is specific: before this change every Embed, Tree and Combobox document was refused —
+    // `WRONG_NODE_KIND` / `UNKNOWN_DU_CASE` at the discriminator — so a surface could grow a
+    // discriminator arm, decode nothing inside it, and watch a whole family of reject vectors go
+    // green off the back of a refusal that has nothing to do with the value the vector is about.
+    // That accident is recorded on an earlier phase of this repo; it is not hypothetical.
+    //
+    // So each malformed document is paired with a CORRECTED TWIN that differs from it in the
+    // offending VALUE and in nothing else — the substitution is written out, one per pair, so a
+    // reader can see it is a repair rather than a different document. A twin that decodes proves
+    // the refusal was about that value; a twin that does not proves the checker is measuring
+    // something incidental, which is the failure this pairing exists to make visible.
+    fun corpusText(relative: String): String = File(corpus, relative).readText()
+
+    //
+    // [repairs] is a LIST because one vector needs two, and that turned out to be a finding rather
+    // than an inconvenience: `reject-combobox-allowfreetext-nonbool` also carries
+    // `"onSubmit":"<closure>"`, a bare sentinel string in an `Action` slot that the reference host
+    // refuses too (WRONG_TYPE, with a didactic message). The vector is unaffected — field order
+    // means the `allowFreeText` refusal comes first, which is what it pins — but a twin repairing
+    // only that value is refused for the SECOND reason and proves nothing about the first. Every
+    // repair is written out here for exactly that reason: a twin whose substitutions are hidden
+    // is a probe nobody can audit.
+    fun twin(name: String, relative: String, vararg repairs: Pair<String, String>) =
+        runner.check("refusal-by-class/$name") {
+            val malformed = corpusText(relative)
+            for ((from, _) in repairs) {
+                if (!malformed.contains(from)) {
+                    error("the substitution target is not in $relative — this twin repairs nothing")
+                }
+            }
+            // The malformed original must still be REFUSED. Without this leg a decoder that
+            // stopped refusing altogether would pass the twin half and say nothing.
+            runCatching { decodeNode(malformed) }.exceptionOrNull() as? FuaranDecodeException
+                ?: error("$relative was ACCEPTED — the vector's own refusal is gone")
+            val repaired = repairs.fold(malformed) { acc, (from, to) -> acc.replace(from, to) }
+            if (repaired == malformed) error("the substitution changed nothing")
+            // …and the twin must DECODE. If it does not, the refusal above was about something
+            // other than the value under test.
+            decodeNode(repaired)
+        }
+
+    // 3.6.6 text tracks (1110). Both vectors sit one level INSIDE an array element, which is the
+    // position a host walking array elements more loosely than its records gets wrong.
+    twin(
+        "media-track-missing-srclang",
+        "reject/reject-media-track-missing-srclang.json",
+        "\"label\":\"English captions\"" to "\"label\":\"English captions\",\"srcLang\":\"en\"",
+    )
+    twin(
+        "media-track-default-nonbool",
+        "reject/reject-media-track-default-nonbool.json",
+        "\"default\":\"true\"" to "\"default\":true",
+    )
+    // 3.6.8 Embed (1111). The permission pair is the sharpest of the set: both refusals report at
+    // the ELEMENT's own path with no `${'$'}type`, so a host that had merely grown a node-kind arm and
+    // left the list untyped fails them at the PATH even where the code happens to agree.
+    twin(
+        "embed-missing-title",
+        "reject/reject-embed-missing-title.json",
+        "\"kind\":{\"\$type\":\"Embed\"," to "\"kind\":{\"\$type\":\"Embed\",\"title\":\"Harbour restoration, part two\",",
+    )
+    twin("embed-permission-nonstring", "reject/reject-embed-permission-nonstring.json", "[true]" to "[\"AllowForms\"]")
+    twin(
+        "embed-unknown-permission",
+        "reject/reject-embed-unknown-permission.json",
+        "\"allow-top-navigation\"" to "\"AllowScripts\"",
+    )
+    // 3.1 the tooltip trait (1112) — an ENVELOPE slot, so the twin also proves the trait is read
+    // from the envelope rather than from inside `kind`.
+    twin("tooltip-nonstring", "reject/reject-tooltip-nonstring.json", "\"tooltip\":42" to "\"tooltip\":\"Updated nightly.\"")
+    // 3.6.9 Combobox (1113).
+    twin(
+        "combobox-allowfreetext-nonbool",
+        "reject/reject-combobox-allowfreetext-nonbool.json",
+        "\"allowFreeText\":\"yes\"" to "\"allowFreeText\":true",
+        // The second defect described on [twin] — not part of what this vector pins.
+        "\"onSubmit\":\"<closure>\"" to "\"onSubmit\":{\"\$type\":\"Chain\",\"ops\":[]}",
+    )
+    // 3.6.12 Tree (1120). The nested vector is the one that separates a host whose child walker
+    // is looser than its root walker from one that runs the same reader at both.
+    twin(
+        "tree-item-missing-id",
+        "reject/reject-tree-item-missing-id.json",
+        "{\"label\":\"Goods\"}" to "{\"id\":\"goods\",\"label\":\"Goods\"}",
+    )
+    twin(
+        "tree-item-missing-label",
+        "reject/reject-tree-item-missing-label.json",
+        "{\"id\":\"a\"}" to "{\"id\":\"a\",\"label\":\"A\"}",
+    )
+    twin(
+        "tree-nested-item-missing-id",
+        "reject/reject-tree-nested-item-missing-id.json",
+        "{\"label\":\"Cocoa\"}" to "{\"id\":\"cocoa\",\"label\":\"Cocoa\"}",
+    )
+
+    runner.check("refusal-by-class/tree-item-depth-is-bounded-on-its-own-axis") {
+        // 21.5. The at-max fixture and its past-the-bound twin are BOTH in the corpus, which
+        // makes this the one pair needing no substitution — and the strongest form of the claim,
+        // because an unbounded walker passes the first and an off-by-one fails it.
+        decodeNode(corpusText("nodes/limit-tree-item-depth-at-max.json"))
+        val e =
+            runCatching { decodeNode(corpusText("reject/reject-limit-tree-item-depth.json")) }
+                .exceptionOrNull() as? FuaranDecodeException
+                ?: error("25 nested rows inside one node were ACCEPTED — the item axis is unbounded")
+        if (e.code != FuaranDecodeException.LIMIT_EXCEEDED) {
+            error("a too-deep hierarchy must be LIMIT_EXCEEDED, not ${e.code} at ${e.path}")
+        }
+        // The node axis cannot see this at all — the whole hierarchy is ONE node — so a host
+        // reporting it from the node counter would be right for the wrong reason. The path names
+        // a ROW, which only the item walk can produce.
+        if (!e.path.contains(".children[")) error("the refusal must name the offending ROW, got ${e.path}")
     }
 
     val decoded = nodeFixtures.size + lenientFixtures.size

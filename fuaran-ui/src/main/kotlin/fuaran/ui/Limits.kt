@@ -57,6 +57,19 @@ object WireLimits {
     const val MAX_NODE_DEPTH: Int = 24
 
     /**
+     * Bounds TREE-ITEM nesting — the longest chain of `TreeItem` rows inside ONE `Tree` node, the
+     * outermost row counting as 1 (WIRE_FORMAT.md 3.6.12 + 21.5).
+     *
+     * **The same figure as [MAX_NODE_DEPTH], on a THIRD and separate axis** — the `TreeOp.Batch`
+     * lesson applied again. A whole hierarchy lives inside one node, so the node axis cannot see
+     * it at all; and at roughly two JSON levels per row the syntactic bound at 256 is nowhere near
+     * reached, so [MAX_JSON_DEPTH] cannot either. Sharing the number is the specification's choice
+     * and not a coincidence to be tidied into an alias: the two axes are declared separately
+     * because either could move without the other.
+     */
+    const val MAX_TREE_ITEM_DEPTH: Int = 24
+
+    /**
      * Bounds SYNTACTIC nesting: every `{` and `[` counts, whether it carries a node, a
      * spec, or a structured payload — and whether or not it is empty. The empty
      * composite is the trap: an implementation that tests the bound *after* deciding a

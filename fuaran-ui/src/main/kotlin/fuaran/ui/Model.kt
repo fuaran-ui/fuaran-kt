@@ -19,13 +19,34 @@ package fuaran.ui
 // Node envelope
 // --------------------------------------------------------------------------- //
 
-/** A UI tree node: a non-empty [id], its [kind], and the optional style/state facets. */
+/** A UI tree node: a non-empty [id], its [kind], and the optional style/state/hint facets. */
 data class Node(
     val id: String,
     val kind: NodeKind,
     val style: SemanticStyle? = null,
     val state: StateBehaviour? = null,
     val accessibility: Accessibility? = null,
+    /**
+     * The supplementary hint (WIRE_FORMAT.md 3.1, "the tooltip trait" — Phase 1112).
+     *
+     * **A node-level TRAIT, not a field of any kind.** "A short supplementary description of this
+     * thing" does not vary with whether the thing is a button or a metric, so it sits on the
+     * envelope beside [accessibility]. `ButtonSpec`'s legacy host-only `tooltip` slot (§10.1) is
+     * NOT a second spelling: a `tooltip` inside a `kind` object is an unknown key, tolerated and
+     * ignored under rule 2, and this decoder never reads one from there.
+     *
+     * **It is a DESCRIPTION, never a NAME.** [Accessibility.label] names the element; this
+     * supplements a name that already exists. A consumer projects it as a description
+     * (`aria-describedby` on an HTML host) and never as a label — an icon-only control needs both
+     * slots saying different things, and conflating them leaves such a control with two competing
+     * names and no description.
+     *
+     * The canonical encoding of a literal hint is a BARE STRING; the `{"$type":"Literal"}`
+     * envelope is decode-accepted, exactly as at every other [TextSource] slot. A non-string
+     * scalar is refused rather than stringified — a number one lenient `toString` away from
+     * minting hint text out of a JSON type is a defect no downstream check could ever catch.
+     */
+    val tooltip: TextSource? = null,
 )
 
 /** Semantic style facet (WIRE_FORMAT.md 3.1). `role` / `voice` are held as raw tokens (render-only). */
@@ -293,7 +314,63 @@ data class Media(
     /** Omitted on the wire when `true` — the accessible setting is what a document gets for free. */
     val controls: Boolean = true,
     val loop: Boolean = false,
+    /**
+     * The element's timed-text tracks (3.6.6, Phase 1110), in the AUTHORED order the wire carries.
+     *
+     * Omitted on the wire when EMPTY — an absent list and an empty one denote the same document —
+     * so this restores `[]` and never a null. **Nothing sorts it**, and that is the opposite of
+     * [Image.srcSet]'s rule rather than an inconsistency with it: a browser picks ONE candidate
+     * from a srcset by an algorithm, so ordering it is canonicalisation, while a reader picks a
+     * track from a menu the user agent builds in DOCUMENT order, so ordering it would be rewriting
+     * someone else's menu.
+     */
+    val tracks: List<TrackEntry> = emptyList(),
+    /**
+     * The text alternative (3.6.6, Phase 1110). On the SPEC rather than on [Video], deliberately:
+     * a transcript is the affordance an AUDIO surface needs most, because a recording with no
+     * visual channel has nowhere else to put its words.
+     *
+     * An ordinary optional — absent means the document offers no transcript, which is a different
+     * statement from offering an empty one.
+     */
+    val transcript: TextSource? = null,
 ) : NodeKind
+
+/**
+ * One timed-text track on a [Media] element (WIRE_FORMAT.md 3.6.6, Phase 1110).
+ *
+ * **Four of the five members are REQUIRED, which makes it the strictest record on the wire.**
+ * [default] is the one omitted-at-`false` slot.
+ *
+ * [srcLang] is required on EVERY kind, where HTML makes it mandatory only on a subtitles track.
+ * The extra strictness costs an author one value and buys a menu a user agent can order, a speech
+ * engine can pronounce and a reader can tell apart; a track with no language is one nothing
+ * downstream can route, and there is no value to default to that would not be an invented claim
+ * about someone else's recording.
+ *
+ * [label] is required for the same reason [Media.label] is: it is the entry a user agent puts in
+ * its track menu and the only thing distinguishing one track from another there.
+ *
+ * [src] is fetched by the browser with no user act, exactly as [Media.src] is, so it carries the
+ * §19 render-time obligation — see [fuaran.ui.sanitizedSrc] on this record. The remedy is the
+ * POSTER's rather than the source's: an element must have a source but it need not have this
+ * track, so a refused track is DROPPED. A `<track>` pointing at the refusal URL is a menu entry
+ * that opens onto nothing.
+ */
+data class TrackEntry(
+    val kind: TrackKind,
+    val src: Binding,
+    val srcLang: String,
+    val label: TextSource,
+    /**
+     * Whether the entry elects itself the default of its kind. Legal bytes elect two — the decoder
+     * does not refuse it, because a lenient host would render it anyway and HTML leaves the case
+     * undefined — so the RENDERER resolves it, and every host resolves it the same way: the FIRST
+     * election of a kind is honoured and a later one loses only its claim on the menu. The
+     * election is per kind, so a captions default and a subtitles default coexist.
+     */
+    val default: Boolean = false,
+)
 
 /**
  * Which playback surface a [Media] node is. `$type`-discriminated at `kind.kind`, so an unknown
@@ -322,6 +399,93 @@ data class Video(val autoplay: Boolean = false, val poster: Binding? = null) : M
  * because the value has nowhere to land — an unknown key, tolerated by rule 2 like any other.
  */
 data object Audio : MediaKind
+
+/**
+ * The sandboxed third-party embed (WIRE_FORMAT.md 3.6.8, Phase 1111) — a Display kind carrying a
+ * document URL, a mandatory accessible title, an optional declared aspect ratio, and a closed list
+ * of sandbox relaxations that is EMPTY by default.
+ *
+ * **A KIND, not a [Mount] variant and not a [Media] one.** `Mount` composes a COOPERATING guest —
+ * a scope id, a declared message channel, a capability request list, a host-side loader that
+ * produced the guest tree — and a third-party page has none of those and cannot acquire them;
+ * widening `Mount` to admit an uncooperative third party would weaken every guarantee it makes.
+ * `Media` fetches an asset and DISPLAYS it, decoded by the user agent's own codec into no scripting
+ * context, where an embed fetches a document and lets it EXECUTE. That difference is why [src]
+ * takes its own, stricter egress class (§19.1 — `https` and nothing else) rather than reusing the
+ * §19 accept set: see [fuaran.ui.sanitizedSrc] on this record.
+ *
+ * [title] is REQUIRED, on [Media.label]'s argument one kind over: a frame is a focus container a
+ * reader tabs INTO, so there is no decorative embed, and a frame with no accessible name is
+ * announced as "frame" and nothing else.
+ *
+ * [aspectRatio] REUSES [ImageAspect]. The cases are pure layout ratios with nothing image-specific
+ * in them and the wire carries bare strings, so the type name reaches no document; minting a
+ * parallel enum with identical cases would create two closed sets that must be kept in step.
+ */
+data class Embed(
+    val src: Binding,
+    val title: TextSource,
+    val aspectRatio: ImageAspect = ImageAspect.Natural,
+    /** Omitted on the wire at the EMPTY list, and empty means TOTAL DENIAL — see [EmbedPermission]. */
+    val permissions: List<EmbedPermission> = emptyList(),
+) : NodeKind
+
+/**
+ * Recursive disclosure with tree semantics (WIRE_FORMAT.md 3.6.12, Phase 1120) — a hierarchy of
+ * ROWS and, optionally, the names of the two State slots a reader opens rows and selects one
+ * through.
+ *
+ * Its rows are [TreeItem] records rather than [Node]s, and [TreeItem.children] is a list of the
+ * same record, which makes this the format's first **self-referential** shape. Item nesting is
+ * therefore bounded on its OWN axis (§21.5): the whole hierarchy lives inside one node and consumes
+ * no node depth at all.
+ *
+ * **This kind carries no `expandable` and no `selectable` boolean, and none is coming.** A
+ * behaviour the reader drives is declared as a named State key the host both writes and reads; a
+ * flag with no key behind it is a decorative control writing state nothing reads.
+ *
+ * The two slot shapes are fixed by the specification, because a host reading them must not guess:
+ * [expandedStateKey] names a JSON **array of row ids** (the rows currently open) and
+ * [selectionStateKey] a bare **row-id string**. A value of any other shape reads as *empty* /
+ * *none* rather than as an error — this is a host's own state slot, not a wire document, so there
+ * is nothing here to refuse, and refusing would blank a tree over a value the reader never
+ * authored.
+ *
+ * **A tree naming no [expandedStateKey] renders FULLY EXPANDED and does not toggle**, which is the
+ * only reading under which such a tree shows its content at all.
+ *
+ * `onSelect` is a closure and is DROPPED here, as every other handler slot in this projection is
+ * ([Select] carries no `onChange`, [Disclosure] no `onToggle`).
+ */
+data class Tree(
+    val items: List<TreeItem>,
+    val expandedStateKey: String? = null,
+    val selectionStateKey: String? = null,
+) : NodeKind
+
+/**
+ * One row of a [Tree] (3.6.12).
+ *
+ * [id] and [label] are required; [children] omits at the EMPTY LIST and [icon] when absent — so a
+ * leaf carries two keys and nothing else, which is most of a real hierarchy.
+ *
+ * [id] is required because it is what the two State slots NAME: an id-less row can never be
+ * expanded, selected or restored, and a synthesised positional id would move the reader's open
+ * branches the moment a sibling was inserted. [label] is a [TextSource] because it is content —
+ * authored, translated, bindable.
+ *
+ * **Row ids MUST be unique within one tree, and that is an EMIT-side obligation rather than a
+ * decode refusal** (§8.1's position for `NodeId`, transferred for §8.1's own reason): duplicate
+ * detection is a whole-tree property, a decoder streaming a document is not required to carry the
+ * id set, and there is no error code for it. A decoder that accepts a duplicate is still
+ * conformant, and this one does.
+ */
+data class TreeItem(
+    val id: String,
+    val label: TextSource,
+    val children: List<TreeItem> = emptyList(),
+    val icon: String? = null,
+)
 
 data class ListNode(val items: List<TextSource>, val ordered: Boolean) : NodeKind
 
@@ -726,6 +890,38 @@ data class CheckboxField(val value: Binding) : FormFieldKind
 data class ToggleField(val value: Binding) : FormFieldKind
 
 data class ChoiceField(val options: Binding, val value: Binding) : FormFieldKind
+
+/**
+ * The typeahead / autocomplete field (WIRE_FORMAT.md 3.6.9, Phase 1113) — the searchable form of
+ * [ChoiceField].
+ *
+ * **The line an emitter and a host both have to hold is one sentence:** a BOUNDED KNOWN set the
+ * reader scans is a `Choice`; a LARGE, SEARCHABLE or ASYNCHRONOUS set — or one that admits a value
+ * not on the list — is a `Combobox`. The failure this distinction prevents is not an invalid
+ * document but a valid one: a `Choice` over two hundred options parses, validates and renders
+ * everywhere, and is unusable.
+ *
+ * [options] and [value] are `Choice`'s slots **deliberately and normatively**: the constrained
+ * combobox IS a searchable select, so a document migrating between the two changes its `$type` and
+ * nothing else, and a host implementing a different value contract here would break exactly that
+ * migration. An asynchronous suggestion source needs no vocabulary of its own — a `Query` binding
+ * in the ordinary [options] slot IS the async feed, with `dependsOn` giving it the dependency edge.
+ *
+ * [allowFreeText] omits at `false`, and the polarity is load-bearing: the SHORTEST combobox
+ * document is the CONSTRAINED one, so an emitter that says nothing gets the shape a select would
+ * have had, and admitting off-list values is the thing it has to ask for. A present member of any
+ * type other than boolean is `WRONG_TYPE` and is never coerced — a lenient truthiness read would
+ * widen the field on `"no"` and `"false"` alike.
+ *
+ * **`allowFreeText = false` is not enforceable by any static host and must not be claimed as if it
+ * were.** Per §22, client validation is not a trust boundary: a host that accepts submissions
+ * re-checks membership server-side, exactly as it re-checks every other declared constraint.
+ */
+data class ComboboxField(
+    val options: Binding,
+    val value: Binding,
+    val allowFreeText: Boolean = false,
+) : FormFieldKind
 
 data class TextAreaField(val value: Binding, val rows: Int) : FormFieldKind
 

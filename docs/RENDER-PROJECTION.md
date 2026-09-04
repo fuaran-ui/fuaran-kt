@@ -115,8 +115,11 @@ generic node.
 document is well formed and merely too large to walk. The reader raises two
 exception types rather than one with a flag, precisely so a `catch` site cannot
 lose the distinction by forgetting to read the flag. The limits themselves live
-in `WireLimits` — node depth 24, JSON depth 256, string 1 MiB, array 100 000,
-nodes 100 000 — and they are protocol numbers, not tuning knobs.
+in `WireLimits` — node depth 24, tree-item depth 24, JSON depth 256, string
+1 MiB, array 100 000, nodes 100 000 — and they are protocol numbers, not tuning
+knobs. The first two carry the same figure and are declared separately on
+purpose: a `Tree`'s whole hierarchy lives inside ONE node, so the node counter
+cannot see it at all, and either axis could move without the other.
 
 ### The decoder is lenient in specific, enumerated ways
 
@@ -167,7 +170,18 @@ when (val dest = link.sanitizedHref) {              // NOT link.href
 
 Accessors exist for every slot the wire hands you verbatim: `Link.sanitizedHref`,
 `Image.sanitizedSrc`, each `SrcSetEntry.sanitizedSrc`, `Media.sanitizedSrc`, a
-video's `sanitizedPoster`, and `Action.sanitizedNavigateRoute`.
+video's `sanitizedPoster`, each `TrackEntry.sanitizedSrc`, `Embed.sanitizedSrc`,
+and `Action.sanitizedNavigateRoute`.
+
+**`Embed.sanitizedSrc` is a stricter floor, not the same one on a different
+slot.** An embed fetches a document and lets it EXECUTE, where everything else
+here is fetch-and-display or navigate-on-a-click, so it accepts `https` and
+nothing else — refusing `http` and refusing a schemeless reference, both of
+which the ordinary floor accepts. On refusal the remedy is its own too: mount
+the element with **no source at all**, never a substitute. A refused *track* or
+*poster*, by contrast, is DROPPED rather than substituted, and a refused primary
+`src` collapses to the refusal substitute; the three remedies differ because
+what an element can do without the slot differs.
 
 `Dynamic` is a case rather than a null on purpose: "refused" and "not knowable
 yet" call for different handling, and a binding's value may not exist until the
@@ -321,24 +335,50 @@ leaves the last good tree in place and surfaces the failure on `lastError`.
 
 ## What is pending — stated plainly
 
-- **The most recent platform-baseline wave has not been adopted here.** The
-  shared corpus carries node kinds `Embed` and `Tree`, and form-field kinds
-  `Color`, `Combobox`, `Rating` and `Tokens`, which this surface does not yet
-  model; `WriteToClipboard` still takes a bare `String` where the corpus has
-  moved to a text source; `FileUpload` carries neither the capture nor the
-  destination slot. A fixture using any of them raises `UNKNOWN_DU_CASE` —
-  loudly, which is the design, but it is a gap rather than a refusal.
+- **The platform-baseline wave is PART-adopted, and the part is enumerable.**
+  Five capabilities landed here: `Media`'s text tracks and transcript, the
+  `Embed` kind, the node-level `tooltip` trait, the `Combobox` field and the
+  `Tree` kind. What the corpus still carries and this surface does not model:
+  form-field kinds `Color`, `Rating` and `Tokens`; `WriteToClipboard` still
+  takes a bare `String` where the corpus has moved to a text source;
+  `FileUpload` carries neither the capture nor the destination slot; and
+  `Modal` carries neither `modality` nor `anchor`. A fixture using any of them
+  raises `UNKNOWN_DU_CASE` — loudly, which is the design, but it is a gap
+  rather than a refusal. Two declared render obligations follow from the last
+  two of those (`FileUpload/picker-always-present`,
+  `Modal/aria-modal-only-when-blocking`) and are the reason the
+  render-obligation gate is currently RED: they are owed, unanswered, and not
+  exempted, because silence is not a conformant answer.
 - **Three specification adoption bars are open**: contract cards, timed advance
   on a `Switch`, and streamed upload. A host that has not adopted is not thereby
   exempt — it owes the obligation and has simply not made its answer visible.
-- **Render obligations: three asserted, seven declared exempt with reasons.** The
-  exemptions are real and specific: this floor carries **no playback engine and
-  no network image loader**, so a `Media` node renders as a labelled transport
-  tile and an `Image` as a placeholder box. Pulling either in is not a decision a
-  decoding surface makes on your behalf.
+- **Render obligations: several asserted, several declared exempt with reasons,
+  two owed and unanswered.** The gate prints all three groups by name on every
+  run; the repository's `CLAUDE.md` carries the current table and the rule that
+  decides which group a claim lands in. The exemptions are real and specific:
+  this floor carries **no playback engine, no network image loader and no
+  browsing context**, so a `Media` node renders as a labelled transport tile,
+  an `Image` as a placeholder box, and an `Embed` as a labelled frame tile.
+  Pulling any of those in is not a decision a decoding surface makes on your
+  behalf.
 - **`Chart`, `MapNode`, `Mount` and `FragmentRef` render as informational
   stubs**, and `Sparkline` renders without data. Each has a real dispatch arm —
   none falls through — but none paints the thing itself yet.
+- **A `Tree` renders FULLY EXPANDED whatever `expandedStateKey` names**, because
+  this floor holds no state store to read the open-row set from. For a tree
+  naming no key that is the specified rendering; for one that does, it is a
+  degradation, stated here rather than papered over with a toggle that writes
+  nothing. Rows state their own accessible names; there is no `tree`/`treeitem`
+  role, no `aria-level` / `setsize` / `posinset`, no roving tabindex, no key
+  bindings and no selection.
+- **The `tooltip` trait decodes and reaches `Node.tooltip`, and the render floor
+  reports it DROPPED.** §3.1 says the hint is a description and must never be
+  projected as a name; Compose has exactly one announcement channel for a node's
+  own text, and writing to it makes the string the name. So the one available
+  projection is the one the specification forbids, and the honest answer is the
+  accessibility projection's existing drop-set discipline — dropped, never
+  refused, and never silently. An embedding app with a description channel of
+  its own can project the slot itself.
 - **Nothing publishes from this repository.** The `io.fuaran:fuaran-ui:0.1.0`
   coordinate is declared, but there is no publishing configuration and no
   publish workflow. Consume it from a local build for now.

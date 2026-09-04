@@ -12,6 +12,8 @@ import androidx.compose.ui.test.runComposeUiTest
 import fuaran.ui.Audio
 import fuaran.ui.Binding
 import fuaran.ui.Custom
+import fuaran.ui.Embed
+import fuaran.ui.EmbedPermission
 import fuaran.ui.JsonObject
 import fuaran.ui.JsonString
 import fuaran.ui.LiteralText
@@ -20,6 +22,8 @@ import fuaran.ui.MediaKind
 import fuaran.ui.Node
 import fuaran.ui.StaticBinding
 import fuaran.ui.Video
+import fuaran.ui.decodeNode
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -185,6 +189,11 @@ class RenderObligationTest {
         linkedMapOf(
             "Media/accessible-name-always" to ::checkAccessibleNameAlways,
             "Media/no-autoplay-pathway" to ::checkNoAutoplayPathwayInOutput,
+            "Media/authored-child-order" to ::checkAuthoredChildOrder,
+            "Media/single-default-per-kind" to ::checkSingleDefaultPerKind,
+            "Media/transcript-disclosure-named" to ::checkTranscriptDisclosureNamed,
+            "Embed/accessible-name-always" to ::checkEmbedAccessibleNameAlways,
+            "Tree/accessible-name-always" to ::checkTreeAccessibleNameAlways,
             "Custom/unregistered-custom-labelled" to ::checkUnregisteredCustomLabelled,
         )
 
@@ -233,6 +242,22 @@ class RenderObligationTest {
 
     @Test
     fun owesMediaNoAutoplayPathway() = composeCheckers.getValue("Media/no-autoplay-pathway")()
+
+    @Test
+    fun owesMediaAuthoredChildOrder() = composeCheckers.getValue("Media/authored-child-order")()
+
+    @Test
+    fun owesMediaSingleDefaultPerKind() = composeCheckers.getValue("Media/single-default-per-kind")()
+
+    @Test
+    fun owesMediaTranscriptDisclosureNamed() =
+        composeCheckers.getValue("Media/transcript-disclosure-named")()
+
+    @Test
+    fun owesEmbedAccessibleNameAlways() = composeCheckers.getValue("Embed/accessible-name-always")()
+
+    @Test
+    fun owesTreeAccessibleNameAlways() = composeCheckers.getValue("Tree/accessible-name-always")()
 
     @Test
     fun owesCustomUnregisteredCustomLabelled() =
@@ -297,4 +322,207 @@ class RenderObligationTest {
                 onAllNodes(hasText("collector.example", substring = true)).fetchSemanticsNodes().isEmpty(),
             )
         }
+
+    // ── Phase 1128 — the wave's claims, in emitted output ────────────────────
+
+    /** Decode a corpus fixture by name; the corpus is the oracle for these five, never a hand model. */
+    private fun fixture(id: String): Node {
+        val corpus = locateA11yCorpus() ?: error("the corpus is absent — this leg would certify nothing")
+        return decodeNode(File(corpus, "nodes/$id.json").readText())
+    }
+
+    /**
+     * `Media/authored-child-order` — the tracks are stated in the order the wire carried them.
+     *
+     * `media-video-tracks-2` is authored in an order no sort produces, which is what makes this
+     * separately testable from `srcSet`'s opposite rule rather than a restatement of it. The
+     * assertion is on VERTICAL POSITION rather than on the order `fetchSemanticsNodes` happens to
+     * return, because that ordering is an implementation detail of the test framework and the claim
+     * is about what a reader meets.
+     */
+    private fun checkAuthoredChildOrder() =
+        runComposeUiTest {
+            setContent { MaterialTheme { FuaranNode(fixture("media-video-tracks-2")) } }
+            waitForIdle()
+            fun rowY(exact: String): Float {
+                val nodes = onAllNodes(hasText(exact)).fetchSemanticsNodes()
+                assertTrue("no track row reads '$exact'", nodes.isNotEmpty())
+                return nodes.first().positionInRoot.y
+            }
+            val gaelic = rowY("Subtitles · gd · Gàidhlig")
+            val english = rowY("Captions · en · English captions · default")
+            val verbose = rowY("Captions · en · English captions (verbose)")
+            // The authored order is Subtitles(gd), Captions(en), Captions(en, verbose). Any sort a
+            // host might reach for — by kind, by language, by label — reorders at least one pair.
+            assertTrue("the subtitles track is stated first, as authored", gaelic < english)
+            assertTrue("…and the verbose captions cut last, as authored", english < verbose)
+        }
+
+    /**
+     * `Media/single-default-per-kind` — first election wins, and the loser keeps its ROW.
+     *
+     * The same fixture elects TWO default captions tracks, which is legal bytes: the decoder does
+     * not refuse it because HTML leaves the case undefined, so the renderer resolves it and every
+     * host resolves it the same way. Both halves are asserted, and the second is the one a naive
+     * implementation loses — dropping the losing track entirely is a different rendering from
+     * dropping only its claim on the menu.
+     */
+    private fun checkSingleDefaultPerKind() =
+        runComposeUiTest {
+            setContent { MaterialTheme { FuaranNode(fixture("media-video-tracks-2")) } }
+            waitForIdle()
+            assertTrue(
+                "the FIRST captions election is honoured",
+                onAllNodes(hasText("Captions · en · English captions · default")).fetchSemanticsNodes().isNotEmpty(),
+            )
+            assertTrue(
+                "the second election of the same kind loses its claim on the menu",
+                onAllNodes(hasText("Captions · en · English captions (verbose) · default"))
+                    .fetchSemanticsNodes()
+                    .isEmpty(),
+            )
+            assertTrue(
+                "…but keeps its row — only the claim is dropped, never the track",
+                onAllNodes(hasText("Captions · en · English captions (verbose)")).fetchSemanticsNodes().isNotEmpty(),
+            )
+        }
+
+    /**
+     * `Media/transcript-disclosure-named` — beside the transport, carrying the MEDIA's name.
+     *
+     * Two halves, and both are structural rather than markup-specific, which is why this is
+     * asserted here rather than exempted with the player claims. The `<details>` fold itself is not
+     * reproduced — this floor shows the text — and that is a presentation difference, not an unmet
+     * claim: what the obligation fixes is WHERE the transcript is and WHAT it is called.
+     */
+    private fun checkTranscriptDisclosureNamed() =
+        runComposeUiTest {
+            setContent { MaterialTheme { FuaranNode(fixture("media-audio-transcript-1")) } }
+            waitForIdle()
+            val snippet = "The harbour was rebuilt twice"
+            assertTrue(
+                "the transcript carries the MEDIA's resolved label as its own accessible name, so a reader " +
+                    "meeting it out of context is told which recording it transcribes",
+                onAllNodes(hasText(snippet, substring = true).and(hasContentDescription("Curator's commentary")))
+                    .fetchSemanticsNodes()
+                    .isNotEmpty(),
+            )
+            assertTrue(
+                "…and sits BESIDE the transport, never inside it — inside a media element a browser " +
+                    "treats it as fallback content and never shows it",
+                onAllNodes(hasText("▶ audio", substring = true).and(hasText(snippet, substring = true)))
+                    .fetchSemanticsNodes()
+                    .isEmpty(),
+            )
+        }
+
+    /**
+     * `Embed/accessible-name-always` — the one 3.6.8 claim that binds a surface mounting no frame.
+     *
+     * `title` is required on the wire because a browsing context is a focus container with no
+     * decorative case, and it lands on the tile as `contentDescription`, unconditionally. Both the
+     * minimal and the permission-bearing fixtures are asserted, because the title is mandatory for
+     * the KIND rather than for one shape of it.
+     */
+    private fun checkEmbedAccessibleNameAlways() {
+        for (id in listOf("embed-1", "embed-permissions-1", "embed-aspect-1")) {
+            runComposeUiTest {
+                setContent { MaterialTheme { FuaranNode(fixture(id)) } }
+                waitForIdle()
+                assertTrue(
+                    "$id: the resolved title is emitted as the accessible name",
+                    onAllNodes(hasContentDescription("Harbour restoration, part two")).fetchSemanticsNodes().isNotEmpty(),
+                )
+            }
+        }
+    }
+
+    /**
+     * `Tree/accessible-name-always` — a row states its OWN label.
+     *
+     * A `treeitem` OWNS its child group, so a name computed from contents reads the whole branch
+     * out as the row's own name. That is the failure this claim exists to prevent, so it is
+     * asserted in both directions: the parent row's name is exactly its own label, and no announced
+     * name anywhere in the output carries a parent's label and a child's together.
+     */
+    private fun checkTreeAccessibleNameAlways() =
+        runComposeUiTest {
+            setContent { MaterialTheme { FuaranNode(fixture("tree-1")) } }
+            waitForIdle()
+            for (row in listOf("Goods", "Cocoa", "Yarn", "Ledger")) {
+                assertTrue(
+                    "the row '$row' states its own name",
+                    onAllNodes(hasContentDescription(row)).fetchSemanticsNodes().isNotEmpty(),
+                )
+            }
+            assertTrue(
+                "no announced name swallows the branch — a parent named 'Goods Cocoa Yarn' is the " +
+                    "computed-from-contents failure this claim is about",
+                onAllNodes(
+                    hasContentDescription("Goods", substring = true)
+                        .and(hasContentDescription("Cocoa", substring = true)),
+                )
+                    .fetchSemanticsNodes()
+                    .isEmpty(),
+            )
+        }
+
+    // ── The floor the two Embed exemptions describe ──────────────────────────
+
+    @Test
+    fun theEmbedTileStatesTheGrantedSetInDeclarationOrderAndSaysWhenNothingIsGranted() {
+        // `Embed/sandbox-always-exactly-declared` is declared EXEMPT — no frame is mounted, so
+        // there is no attribute and no token-vs-`allow` split to get right. What the tile does is
+        // state the SET, and the two properties that survive the crossing are asserted here so the
+        // exemption reads as a decision: the empty list is announced as total denial rather than
+        // left silent, and the order is the VOCABULARY's, not the document's.
+        runComposeUiTest {
+            setContent { MaterialTheme { FuaranNode(fixture("embed-1")) } }
+            waitForIdle()
+            assertTrue(
+                "an embed granting nothing SAYS so — an absent line and 'no permissions granted' are " +
+                    "the same bytes and very different statements to a reader auditing the page",
+                onAllNodes(hasText("no permissions granted", substring = true)).fetchSemanticsNodes().isNotEmpty(),
+            )
+        }
+        runComposeUiTest {
+            // Authored in the REVERSE of the vocabulary's order, which is what makes the claim
+            // testable: the wire preserves what the document wrote, and the determinism is
+            // established at render time so two documents naming the same set state the same thing.
+            val node =
+                Node(
+                    id = "e",
+                    kind =
+                        Embed(
+                            src = StaticBinding(JsonString("https://player.example/x")),
+                            title = LiteralText("Harbour"),
+                            permissions = listOf(EmbedPermission.AllowForms, EmbedPermission.AllowScripts),
+                        ),
+                )
+            setContent { MaterialTheme { FuaranNode(node) } }
+            waitForIdle()
+            assertTrue(
+                "the granted set is stated in the vocabulary's declaration order, not the document's",
+                onAllNodes(hasText("AllowScripts · AllowForms", substring = true)).fetchSemanticsNodes().isNotEmpty(),
+            )
+        }
+    }
+
+    @Test
+    fun theEmbedTileNeverShowsTheSourceDestination() =
+        runComposeUiTest {
+            // `Embed/refused-embed-source-omitted` is declared EXEMPT for the structural reason this
+            // test pins: nothing is mounted and no destination is emitted, so there is no source
+            // attribute whose omission could distinguish a conformant surface from a broken one. A
+            // destination reaching the output is the change that makes the exemption false, and it
+            // fails here on the day it lands.
+            setContent { MaterialTheme { FuaranNode(fixture("embed-1")) } }
+            waitForIdle()
+            assertTrue(
+                "no destination is emitted anywhere in the render",
+                onAllNodes(hasText("player.example", substring = true)).fetchSemanticsNodes().isEmpty(),
+            )
+        }
+
+
 }

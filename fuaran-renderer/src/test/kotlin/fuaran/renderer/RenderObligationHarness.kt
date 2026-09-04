@@ -137,6 +137,21 @@ internal val COMPOSE_CHECKER_KEYS: Set<String> =
         "Media/accessible-name-always",
         // The emitted-output half of the structural claim above: an audio tile states no autoplay.
         "Media/no-autoplay-pathway",
+        // 3.6.6 text tracks (Phase 1110). These three are ASSERTED rather than exempted, and the
+        // distinction is worth stating because the media arm's other two claims are not: those are
+        // about ATTRIBUTES a player emits, where these three are about what the track MENU says —
+        // which order it is in, which entry carries the default claim, and where the transcript
+        // sits relative to the transport. All three are ordinary logic over the decoded list, so a
+        // surface with no playback engine can and does get them exactly right or exactly wrong.
+        "Media/authored-child-order",
+        "Media/single-default-per-kind",
+        "Media/transcript-disclosure-named",
+        // 3.6.8 (Phase 1111) — the one embed claim that binds a surface mounting no browsing
+        // context, on `Media/accessible-name-always`'s argument one kind over.
+        "Embed/accessible-name-always",
+        // 3.6.12 (Phase 1120) — the kind's only declared claim, and one this floor honours in
+        // full: a row states its OWN label rather than letting a name be computed from a branch.
+        "Tree/accessible-name-always",
         // 25.4, the UNCARDED path — see the note on the exemptions below.
         "Custom/unregistered-custom-labelled",
     )
@@ -169,10 +184,27 @@ internal val DECLARED_EXEMPTIONS: Map<String, String> =
                 "by a supporting test) rather than acting on it; a real player arm must emit the pair or " +
                 "neither, per the forward-coupling rule in this repo's CLAUDE.md",
         "Media/refused-source-dropped" to
-            "a `poster` is never fetched on this floor and its destination is never emitted anywhere in the " +
-                "render — the tile records only THAT a poster was declared — so there is no emitted source " +
-                "for the URL-scheme and egress floor to have dropped; a real player arm must route `src` and " +
-                "`poster` through FuaranUrlPolicy and drop a refused poster rather than substitute one",
+            "neither a `poster` nor a text-track source is ever fetched on this floor and no destination is " +
+                "emitted anywhere in the render — the tile records only THAT a poster was declared, and a " +
+                "track row states its kind, language and label and never its URL — so there is no emitted " +
+                "source for the URL-scheme and egress floor to have dropped; a real player arm must route " +
+                "`src`, `poster` and every track through FuaranUrlPolicy and DROP a refused poster or track " +
+                "rather than substitute one",
+        "Embed/sandbox-always-exactly-declared" to
+            "this floor mounts no browsing context, so there is no `sandbox` attribute for the claim to be " +
+                "true or false of, and the token split it turns on — three relaxations riding `sandbox` while " +
+                "AllowFullscreen rides `allow` — is HTML attribute vocabulary this surface does not emit at " +
+                "all; what the tile does instead is STATE the granted set in the vocabulary's declaration " +
+                "order and say plainly that an empty list grants nothing, both pinned by a supporting test, " +
+                "and a real frame arm must emit the attribute unconditionally and empty in the same change " +
+                "that adds it",
+        "Embed/refused-embed-source-omitted" to
+            "no source is emitted or fetched here, because no frame is mounted — the tile never shows the " +
+                "destination at all, pinned by a supporting test — so there is no attribute whose omission " +
+                "could distinguish a conformant surface from a broken one; the 19.1 class itself IS " +
+                "implemented, as the `Embed.sanitizedSrc` accessor a consumer must consult, and separately " +
+                "the C-ABI session this surface renders through opens under a deny-non-local-egress policy " +
+                "exposing no knob, so a remote source is already refused on that path",
         "Image/alt-always-emitted" to
             "this floor has no network image loader, so the arm renders a labelled placeholder box rather " +
                 "than an image element and there is no alternative-text attribute to emit always; the " +
