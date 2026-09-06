@@ -56,6 +56,16 @@ jobs:
             exit 1
           }
           echo "FUARAN_CORPUS=$GITHUB_WORKSPACE/_corpus" >> "$GITHUB_ENV"
+          # "a corpus is present here, so its absence downstream is a DEFECT, not a
+          # platform fact." The harnesses' own default is `return` on a missing
+          # corpus, which is right for a standalone clone and is a vacuous green
+          # here — and it was firing: a Gradle test JVM inherits no ambient
+          # environment, so FUARAN_CORPUS above never reached gate 2, and its
+          # derived `-Dfuaran.corpus` default names <repo>/../wire-format-fixtures,
+          # which is not where this job puts the corpus. The render gate — the one
+          # leg that exists BECAUSE it cannot run on the reference dev box — was
+          # returning green having certified nothing.
+          echo "FUARAN_REQUIRE_CORPUS=1" >> "$GITHUB_ENV"
           echo "corpus fixtures declared: $(grep -o '"id"' _corpus/manifest.json | wc -l)"
 
       - uses: actions/setup-java@v4
@@ -76,7 +86,7 @@ jobs:
       - name: Corpus decode gate (:fuaran-ui:corpusCheck)
         run: |
           set -o pipefail
-          ./gradlew :fuaran-ui:corpusCheck --console=plain | tee corpus.log
+          ./gradlew :fuaran-ui:corpusCheck --console=plain -Dfuaran.corpus="$FUARAN_CORPUS" | tee corpus.log
           if grep -q '^SKIP:' corpus.log; then
             echo "::error::the corpus harness SKIPPED — it found no corpus, so this gate checked nothing"
             exit 1
@@ -99,9 +109,60 @@ jobs:
       # Conditioned on the corpus assertion above rather than on `always()`: with no
       # corpus both gates skip cleanly, and a skip standing in for a run is exactly what
       # that assertion exists to prevent.
+      #
+      # It FORWARDS THE CORPUS the way gate 1 does. It used not to, and the
+      # `build.gradle.kts` default it fell back on names a sibling path this job
+      # does not use — so the harnesses found nothing and `return`ed green. That
+      # is now impossible from two directions at once: the path is passed
+      # explicitly, and FUARAN_REQUIRE_CORPUS makes a miss FAIL rather than skip.
       - name: Render-coverage + render-obligation gate (:fuaran-renderer:testDebugUnitTest)
         if: always() && steps.corpus.outcome == 'success'
-        run: ./gradlew :fuaran-renderer:testDebugUnitTest --console=plain
+        run: ./gradlew :fuaran-renderer:testDebugUnitTest --console=plain -Dfuaran.corpus="$FUARAN_CORPUS"
+
+      # The go-red proof for the residue comparison. `conformance-residue.txt` names
+      # the render obligations this surface owes and does not answer; the gate is red
+      # for a CHANGE to that set in either direction, so both directions are exercised
+      # here against a perturbed scratch copy — the committed file is never edited.
+      #
+      # Without this, the residue mechanism could be silently inert and the gate would
+      # stay green: exactly the class this whole workflow is being hardened against.
+      - name: Residue gate go-red proof (both directions)
+        if: always() && steps.corpus.outcome == 'success'
+        run: |
+          set -euo pipefail
+          scratch="$RUNNER_TEMP/residue"
+          mkdir -p "$scratch"
+
+          # 1. WITHHELD: an owed obligation that the residue does not name reads as a
+          #    regression. Strip every entry.
+          grep -v '^\[obligation\]' conformance-residue.txt > "$scratch/withheld.txt"
+          if FUARAN_RESIDUE="$scratch/withheld.txt" ./gradlew :fuaran-renderer:testDebugUnitTest                --console=plain --rerun-tasks -Dfuaran.corpus="$FUARAN_CORPUS"; then
+            echo "::error::an empty residue set did NOT read as a regression — the comparison is inert"
+            exit 1
+          fi
+          echo "go-red 1 OK: an unnamed owed obligation reds the gate."
+
+          # 2. STALE: a residue entry nothing owes reads as a stale cap.
+          cp conformance-residue.txt "$scratch/stale.txt"
+          echo '[obligation] ZZNoSuchKind/no-such-claim' >> "$scratch/stale.txt"
+          if FUARAN_RESIDUE="$scratch/stale.txt" ./gradlew :fuaran-renderer:testDebugUnitTest                --console=plain --rerun-tasks -Dfuaran.corpus="$FUARAN_CORPUS"; then
+            echo "::error::a residue entry that cannot be owed did NOT read as stale"
+            exit 1
+          fi
+          echo "go-red 2 OK: a stale residue entry reds the gate."
+
+      # The corpus-required proof: with FUARAN_REQUIRE_CORPUS set and no corpus, the
+      # render gate must FAIL rather than return green. This is the exact condition
+      # that stood on every run of this workflow before today.
+      - name: Corpus-required go-red proof (a missing corpus must fail, not skip)
+        if: always() && steps.corpus.outcome == 'success'
+        run: |
+          set -uo pipefail
+          if FUARAN_CORPUS="$RUNNER_TEMP/definitely-not-a-corpus" ./gradlew                :fuaran-renderer:testDebugUnitTest --console=plain --rerun-tasks                -Dfuaran.corpus="$RUNNER_TEMP/definitely-not-a-corpus"; then
+            echo "::error::the render gate PASSED with no corpus — a skip is still reading as a pass"
+            exit 1
+          fi
+          echo "go-red 3 OK: a missing corpus fails the render gate instead of skipping it." 
 
       - name: Upload test reports
         if: always()

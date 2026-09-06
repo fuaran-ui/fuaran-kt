@@ -85,13 +85,30 @@ if (-not (Test-Path $header)) {
 }
 
 # 1. Build the reference core.
+#
+# A MISSING TOOLCHAIN AND A FAILED BUILD ARE NOT THE SAME ANSWER, and this script
+# used to give both of them as "SKIP ... return", which the caller reads as "this
+# machine cannot run the leg". So a genuine compile error in the reference core
+# retired the whole desktop JNI leg and the run went green. The prerequisite
+# checks above still SKIP — that is honest, the tool is absent. From here on a
+# tool that is PRESENT and FAILS throws, and the caller's `$LASTEXITCODE -ne 0`
+# branch is no longer the only thing standing between a broken core and a green
+# gate.
+#
+# The output went to Write-Verbose, which is suppressed unless -Verbose is passed,
+# so the one thing a reader needed — what the compiler actually said — was the one
+# thing that never reached the transcript. It is captured now and PRINTED on
+# failure.
 Write-Host "cargo build :: fuaran-rs ($rsRepo)"
 Push-Location $rsRepo
 try {
-    & $cargo build 2>&1 | ForEach-Object { Write-Verbose $_ }
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "SKIP (native): fuaran-rs cargo build failed." -ForegroundColor Yellow
-        return
+    $cargoOut = & $cargo build 2>&1
+    $cargoExit = $LASTEXITCODE
+    $cargoOut | ForEach-Object { Write-Verbose $_ }
+    if ($cargoExit -ne 0) {
+        Write-Host "FAILED (native): fuaran-rs cargo build exited $cargoExit." -ForegroundColor Red
+        $cargoOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        throw "fuaran-rs cargo build failed (exit $cargoExit) -- the reference core did not build, so the desktop JNI leg cannot be certified. This is a FAILURE, not an unavailable prerequisite."
     }
 } finally {
     Pop-Location
@@ -101,8 +118,10 @@ $dbg = Join-Path $rsRepo "target\debug"
 $importLib = Join-Path $dbg "fuaran_rs.dll.lib"
 $coreDll = Join-Path $dbg "fuaran_rs.dll"
 if (-not (Test-Path $importLib) -or -not (Test-Path $coreDll)) {
-    Write-Host "SKIP (native): fuaran-rs build artefacts missing (expected $importLib + $coreDll)." -ForegroundColor Yellow
-    return
+    # cargo exited 0 above, so the artefacts must exist. Their absence means the
+    # build produced something other than what this script expects (a crate-type
+    # change, a target-dir override) -- a defect to name, never a leg to retire.
+    throw "fuaran-rs built successfully but its artefacts are missing (expected $importLib + $coreDll). This is a FAILURE, not an unavailable prerequisite."
 }
 
 # 2. Compile + link the JNI shim — host clang if present, else MSVC cl.exe under vcvars64.
@@ -126,18 +145,27 @@ if ($cc) {
         "-I", $incWin32
     )
     Write-Host "clang :: JNI shim -> $jniShim"
-    & $cc @ccArgs 2>&1 | ForEach-Object { Write-Verbose $_ }
+    $ccOut = & $cc @ccArgs 2>&1
+    $ccExit = $LASTEXITCODE
+    $ccOut | ForEach-Object { Write-Verbose $_ }
 } else {
     # MSVC path: run vcvars64 then cl in one cmd shell (cl builds a DLL with /LD; the JNI functions are
     # `JNIEXPORT` = `__declspec(dllexport)` on win32, so cl exports the Java_* symbols without a .def).
     $clLine = "call `"$vcvars`" && cd /d `"$nativeOut`" && cl /nologo /LD /Fe:fuaran_jni.dll `"$shim`" " +
         "/I `"$shimDir`" /I `"$incJni`" /I `"$incWin32`" `"$importLib`""
     Write-Host "cl.exe (MSVC) :: JNI shim -> $jniShim"
-    cmd /c $clLine 2>&1 | ForEach-Object { Write-Verbose $_ }
+    $ccOut = cmd /c $clLine 2>&1
+    $ccExit = $LASTEXITCODE
+    $ccOut | ForEach-Object { Write-Verbose $_ }
 }
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jniShim)) {
-    Write-Host "SKIP (native): JNI shim compile failed." -ForegroundColor Yellow
-    return
+if ($ccExit -ne 0 -or -not (Test-Path $jniShim)) {
+    # Same distinction as the cargo step: the compiler was PRESENT (the branch
+    # above chose it) and it failed. Print what it said -- Write-Verbose swallowed
+    # the diagnostics unless someone thought to pass -Verbose, so the transcript
+    # carried a yellow SKIP and no reason.
+    Write-Host "FAILED (native): the JNI shim compile exited $ccExit." -ForegroundColor Red
+    $ccOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+    throw "the JNI shim did not compile (exit $ccExit) -- this is a FAILURE, not an unavailable prerequisite."
 }
 
 # 3. Stage the dependent core DLL beside the shim so it resolves at load.

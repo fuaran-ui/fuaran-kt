@@ -99,6 +99,56 @@ fun parseRenderFidelityManifest(json: String): RenderFidelityManifest {
 /** The environment variable that overrides where the artefact is read from. */
 internal const val RENDER_FIDELITY_ENV = "FUARAN_RENDER_FIDELITY"
 
+/** Where the committed residue set lives, relative to the repository root. */
+internal const val RESIDUE_FILE = "conformance-residue.txt"
+
+private val RESIDUE_CANDIDATES =
+    listOf(RESIDUE_FILE, "../$RESIDUE_FILE", "../../$RESIDUE_FILE", "fuaran-kt/$RESIDUE_FILE")
+
+/**
+ * The committed residue set for one section (`obligation`, `reject`).
+ *
+ * The file is REQUIRED, and its absence is an error rather than an empty set. A missing list is not
+ * a list with nothing on it: it means the gate does not know what it is capping, and a gate that
+ * cannot say what it excludes must not report success — the same rule the corpus locators here
+ * already apply to a missing corpus.
+ *
+ * `FUARAN_RESIDUE` overrides the location, so the go-red property can be PROVEN against a perturbed
+ * scratch copy without editing the committed file. An override naming a non-file is an error and
+ * never a quiet fall-back, for the reason [locateRenderFidelityArtifact] states: a fall-back makes
+ * the proof unfalsifiable, because a mistyped path produces the same run as an unperturbed one.
+ */
+internal fun loadResidue(section: String): Set<String> {
+    val declared = System.getenv("FUARAN_RESIDUE")
+    val file =
+        if (declared != null) {
+            val f = File(declared)
+            if (!f.isFile) {
+                error(
+                    "FUARAN_RESIDUE names ${f.absolutePath}, which is not a file. Refusing to fall back to " +
+                        "the committed list: a silent fall-back would make an override-driven proof unfalsifiable.",
+                )
+            }
+            f
+        } else {
+            RESIDUE_CANDIDATES.map { File(it) }.firstOrNull { it.isFile }
+                ?: error(
+                    "the committed residue set ($RESIDUE_FILE) is at none of the paths tried " +
+                        "(${RESIDUE_CANDIDATES.joinToString()} from ${File(".").absolutePath}). It is REQUIRED: " +
+                        "without it this gate cannot say what it is capping, and a gate that cannot say what it " +
+                        "excludes must not report success.",
+                )
+        }
+    val prefix = "[$section]"
+    return file
+        .readLines()
+        .map { it.trim() }
+        .filter { it.startsWith(prefix) }
+        .map { it.removePrefix(prefix).trim() }
+        .filter { it.isNotEmpty() }
+        .toSet()
+}
+
 /**
  * Locate `render-fidelity.json`.
  *
