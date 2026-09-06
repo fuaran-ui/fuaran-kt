@@ -37,3 +37,57 @@ class FuaranDecodeException(
         const val LIMIT_EXCEEDED = "LIMIT_EXCEEDED"
     }
 }
+
+/**
+ * The failures a live host can meet while RE-PROJECTING a session's tree, mapped onto the single
+ * typed shape a host surfaces — or `null` for a throwable that is not one of them.
+ *
+ * This exists because there are several of them and only one was ever caught. A host loop naturally
+ * expects [FuaranException]: the Rust core rejected the write, the last-good tree stands, show the
+ * error. But the core also accepts wire vocabulary this decode-only projection does not model — a
+ * newer node kind, a widened enum — and a write that lands one makes the re-projection throw a
+ * [FuaranDecodeException] instead. From a reader's point of view the two events are identical (the
+ * tree on screen is the last-good one; something is wrong with what arrived after it), so catching
+ * one and not the other is not a policy — it is the difference between an error banner and a
+ * crashed app, decided by which of two indistinguishable causes happened to occur.
+ *
+ * Naming the set HERE, once, is what keeps the interaction host and the server-driven driver
+ * agreeing about it. The mapping is lossless: a decode failure already carries the code and the
+ * `$`-rooted path a [FuaranException] does, and the reader's own lexer failures — which carry no
+ * path, a malformed token having no place in the tree — are reported at the document root.
+ *
+ * **Not in the set, deliberately:** [FuaranSessionClosedException]. A call on a freed handle is a
+ * caller lifecycle defect, not a property of the data, and surfacing it as a survivable reject
+ * would leave a host showing an error banner over a session that can never work again.
+ */
+fun asProjectionFailure(t: Throwable): FuaranException? =
+    when (t) {
+        is FuaranException -> t
+        is FuaranDecodeException -> FuaranException(t.code, t.path, "decode", t.detail)
+        is JsonSyntaxException ->
+            FuaranException(
+                FuaranDecodeException.INVALID_JSON,
+                "$",
+                "decode",
+                t.message ?: "the session returned text that is not valid JSON",
+            )
+        is JsonLimitException ->
+            FuaranException(
+                FuaranDecodeException.LIMIT_EXCEEDED,
+                "$",
+                "decode",
+                t.message ?: "the session returned a document past a wire limit",
+            )
+        // The reader's number grammar is total, so nothing on the decode path should reach a
+        // `NumberFormatException` any more — this arm is the floor under that claim. A lexeme the
+        // grammar admitted but the JDK would not convert is a defect in the DATA path, and a host
+        // that met one would rather show the banner than unwind its main thread over a number.
+        is NumberFormatException ->
+            FuaranException(
+                FuaranDecodeException.INVALID_JSON,
+                "$",
+                "decode",
+                "a number in the session's document could not be read: ${t.message}",
+            )
+        else -> null
+    }

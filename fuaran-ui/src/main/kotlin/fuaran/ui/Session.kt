@@ -8,6 +8,8 @@ import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * The confined session wrapper over the Rust reference core (Phase 543).
@@ -19,9 +21,13 @@ import java.util.concurrent.Executors
  * concurrently even if the wrapper is shared. `fuaran_last_error` is per-thread, so the
  * failing `new` and its error read run on that same executor thread.
  *
- * Lifetime is leak-safe: [close] frees the handle exactly once (idempotent) and a
- * [Cleaner] backstop reclaims a session that is dropped without a close. Both routes run
- * the free on the confinement executor, honouring single-owner even at reclamation.
+ * Lifetime is leak-safe AND close-safe: [close] frees the handle exactly once (idempotent) and a
+ * [Cleaner] backstop reclaims a session that is dropped without a close. Both routes QUEUE the
+ * free on the confinement executor, so it runs behind every call already submitted — an in-flight
+ * read completes against a live handle, and a call submitted after the free is refused with
+ * [FuaranSessionClosedException] rather than reaching a freed one. Closing from another thread
+ * while a call is in flight is therefore safe, which is what the "safe even if the wrapper is
+ * shared" claim above means in full.
  *
  * The native surface is reached through the [FuaranNativeBridge] seam — `fuaran-ui`
  * takes no dependency on the JNI module; the binding module supplies a concrete bridge.
@@ -31,9 +37,33 @@ class FuaranSession private constructor(
     private val executor: ExecutorService,
     private val handle: Long,
 ) : AutoCloseable, TreeSession {
+    /**
+     * Set by the FREE TASK, on the executor thread, immediately before it hands the handle back to
+     * the core — and read by every other submitted task, on that same thread.
+     *
+     * This flag, and not [closeRequested], is what makes close safe against a concurrent call, and
+     * the distinction is the whole fix. The executor is single-threaded and FIFO, so at the moment
+     * a task RUNS, the free has either already run (this is set — the handle is gone, refuse) or is
+     * queued behind it (this is clear — the handle is live, proceed). A flag set by [close] on the
+     * CALLER's thread cannot tell those two apart: it is true in both, so it would either refuse a
+     * call that was legitimately in flight or admit one that is about to touch freed memory.
+     *
+     * Shared with [ReleaseState] as an object of its own rather than reached through the session,
+     * because a [Cleaner] action must never hold a reference to the object it is registered for —
+     * one would keep the session reachable forever and the backstop would never fire at all.
+     */
+    private val freed = AtomicBoolean(false)
+
+    /**
+     * Set by [close] on the calling thread: a fast, BEST-EFFORT refusal of the ordinary
+     * use-after-close mistake, so a caller sees a typed error at their own call site rather than
+     * one executor round trip later. Deliberately not the safety mechanism — see [freed].
+     */
     @Volatile
-    private var closed = false
-    private val cleanable: Cleaner.Cleanable = CLEANER.register(this, ReleaseState(bridge, executor, handle))
+    private var closeRequested = false
+
+    private val cleanable: Cleaner.Cleanable =
+        CLEANER.register(this, ReleaseState(bridge, executor, handle, freed))
 
     /** The current tree, re-encoded to canonical wire JSON — the round-trip exit point. */
     override fun treeJson(): String = onExecutor { bridge.sessionTreeJson(handle).toString(UTF_8) }
@@ -82,10 +112,23 @@ class FuaranSession private constructor(
         return parseResolvedRows(json)
     }
 
+    /**
+     * Free the session's handle. Idempotent, and safe to call while another thread has a call in
+     * flight: the free is QUEUED on the confinement executor behind every call already submitted,
+     * so an in-flight read completes against a live handle and only a call submitted after it is
+     * refused (with [FuaranSessionClosedException]).
+     *
+     * It BLOCKS until that queued free has run — behind every call ahead of it — so a close from
+     * a UI thread waits on whatever native work is in flight. Never call it FROM the confinement
+     * executor (a session's own callback), which would wait on itself.
+     *
+     * The `if (closed) return` guard this replaced was not the idempotence it looked like: two
+     * threads could both read `false` and both proceed. [Cleaner.Cleanable.clean] already
+     * guarantees the release action runs at most once whichever thread reaches it and whether it
+     * arrives by this call or by garbage collection, so the guard added a race and no protection.
+     */
     override fun close() {
-        if (closed) return
-        closed = true
-        // Cleaner guarantees the release action runs at most once, whether via clean() or GC.
+        closeRequested = true
         cleanable.clean()
     }
 
@@ -94,26 +137,74 @@ class FuaranSession private constructor(
         throwIfError(result)
     }
 
+    /**
+     * Run one native call on the confinement executor.
+     *
+     * The closed check is INSIDE the submitted block, and that placement is the fix for the
+     * use-after-free this wrapper used to carry. It was `check(!closed)` here, on the CALLING
+     * thread, followed by a submit — so a thread could pass the check, be descheduled, and submit
+     * after another thread's [close] had already queued (or run) `sessionFree`, sending
+     * `sessionTreeJson` at a handle the core no longer owns. That window is not narrow in the way
+     * it looks: on Android the closing thread is usually the main thread tearing a screen down
+     * while a background read is mid-flight, which is the common case rather than the exotic one.
+     *
+     * Reading [freed] from inside the task closes it because the executor is single-threaded and
+     * FIFO: the flag is written by the free task on that same thread, so "is the handle still
+     * mine" is answered in the free's own order rather than against a clock. See [freed].
+     */
     private fun <T> onExecutor(block: () -> T): T {
-        check(!closed) { "FuaranSession has been closed" }
+        // Best-effort, for a caller's own benefit: an unambiguous use-after-close reported at the
+        // call site instead of one round trip later. Not the guard — that is inside the task.
+        if (closeRequested) throw FuaranSessionClosedException()
+        val future =
+            try {
+                executor.submit(
+                    Callable {
+                        if (freed.get()) throw FuaranSessionClosedException()
+                        block()
+                    },
+                )
+            } catch (_: RejectedExecutionException) {
+                // The executor is already shut down — the session was closed between the check
+                // above and this submit. A typed refusal, not the raw platform exception.
+                throw FuaranSessionClosedException()
+            }
         return try {
-            executor.submit(Callable { block() }).get()
+            future.get()
         } catch (e: ExecutionException) {
             throw e.cause ?: e
         }
     }
 
-    /** The Cleaner action — holds only the handle + bridge + executor, never the session. */
+    /**
+     * The Cleaner action — holds the handle, bridge, executor and the shared [freed] flag, never
+     * the session itself (a reference to it would keep the session reachable forever and this
+     * backstop would never run).
+     */
     private class ReleaseState(
         private val bridge: FuaranNativeBridge,
         private val executor: ExecutorService,
         private val handle: Long,
+        private val freed: AtomicBoolean,
     ) : Runnable {
         override fun run() {
             try {
-                executor.submit { bridge.sessionFree(handle) }.get()
+                executor
+                    .submit {
+                        // Set on the EXECUTOR thread, immediately before the free, so every task
+                        // that runs after this one observes it and every task queued before it has
+                        // already run. That ordering — not a lock, and not a volatile read on the
+                        // closing thread — is what makes a concurrent call safe.
+                        freed.set(true)
+                        bridge.sessionFree(handle)
+                    }
+                    .get()
             } catch (_: Throwable) {
                 // Reclamation is best-effort; never let a free failure escape the Cleaner thread.
+                // This action runs at most once (Cleanable's contract) and nothing else shuts the
+                // executor down, so a throw here is the native free itself failing — the handle
+                // is then leaked deliberately rather than freed twice or reached again: `freed`
+                // is already set, so every later call is refused.
             } finally {
                 executor.shutdown()
             }
@@ -210,6 +301,22 @@ interface FuaranNativeBridge {
 
     fun sessionSetQuery(handle: Long, key: ByteArray, value: ByteArray): ByteArray
 }
+
+/**
+ * A call was made on a [FuaranSession] whose handle has been (or is about to be) freed.
+ *
+ * Deliberately **not** a [FuaranException]. That type means "the Rust core rejected this" — a
+ * validator refusal a host is meant to survive and show — and the interaction host and the
+ * server-driven driver both catch it and carry on. Using it here would report a caller lifecycle
+ * defect as an ordinary data reject, which is exactly how a use-after-close would go unnoticed.
+ *
+ * It extends [IllegalStateException] because that is what the wrapper raised before it was typed
+ * (`check(!closed)`), so a caller already handling that keeps working, and a lifecycle mistake
+ * remains a lifecycle mistake to anyone who did not care about the distinction.
+ */
+class FuaranSessionClosedException(
+    message: String = "FuaranSession has been closed; its native handle is no longer valid",
+) : IllegalStateException(message)
 
 /**
  * A structured session failure surfaced from the C-ABI error envelope

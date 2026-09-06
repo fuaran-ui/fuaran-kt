@@ -24,7 +24,13 @@
 param(
     [Parameter(Mandatory)] [string] $Repo,
     [Parameter(Mandatory)] [string] $ClassesDir,   # runtime-free main .class tree (jarred as the AAR classes.jar)
-    [int] $ApiLevel = 21
+    # 24, matching `minSdk = 24` in every Gradle module that declares one (`:fuaran-renderer`,
+    # `:samples`). It was 21, which is not a conservative floor but a DISAGREEMENT: the .so legs
+    # were compiled against the API-21 NDK sysroot and the manifest written below advertised
+    # minSdkVersion 21, while no module in this repo can be installed below 24. The manifest is
+    # the half that bites — a consumer merging this AAR inherits a uses-sdk claim the library's
+    # own Kotlin cannot honour, and the merge either lowers their floor or fails outright.
+    [int] $ApiLevel = 24
 )
 
 $ErrorActionPreference = "Stop"

@@ -20,6 +20,7 @@ import fuaran.ui.JsonValue
 import fuaran.ui.Node
 import fuaran.ui.StateBinding
 import fuaran.ui.TreeSession
+import fuaran.ui.asProjectionFailure
 import fuaran.ui.decodeNode
 
 /**
@@ -43,16 +44,31 @@ import fuaran.ui.decodeNode
  * "measured before optimising" per the phase). A finer diff is a later optimisation behind the same
  * `tree`-as-state surface.
  */
-class FuaranHost(private val session: TreeSession) {
+class FuaranHost(private val session: TreeSession, initialTree: Node) {
     /**
      * The current re-projected tree, as Compose state. Reading it in a composable subscribes to it.
      * The render tree is the **resolved projection** (Phase 650), so a scalar `Transform` renders
      * its evaluated value — the core resolves it, the decode-only surface renders what it decodes.
+     *
+     * The seed is a CONSTRUCTOR ARGUMENT rather than a decode performed here. It used to be
+     * `decodeNode(session.projectResolved())` in the initialiser, which made construction itself
+     * fallible: the Rust core accepts vocabulary this projection does not model, so a tree carrying
+     * one made `FuaranHost(session)` throw — and on the Compose path that is a throw during
+     * COMPOSITION, unwinding the main thread with no host yet in existence to record the error on.
+     * The decode moved to [start], where a caller can handle it, mirroring the Swift twin's
+     * throwing `start(session:)` factory.
      */
-    var tree by mutableStateOf(decodeNode(session.projectResolved()))
+    var tree by mutableStateOf(initialTree)
         private set
 
-    /** The last validator reject, or `null` when the last write succeeded. Also Compose state. */
+    /**
+     * The last failure the host survived, or `null` when the last write succeeded. Also Compose
+     * state.
+     *
+     * "Failure" is wider than "validator reject" — see [guarded]. A decode gap in the projection
+     * lands here too, because from the reader's point of view both are the same event: the tree
+     * on screen is the last-good one and something is wrong with what arrived after it.
+     */
     var lastError by mutableStateOf<FuaranException?>(null)
         private set
 
@@ -97,12 +113,28 @@ class FuaranHost(private val session: TreeSession) {
      */
     fun writeBack(stateKey: String, number: Double) = writeBack(stateKey, JsonNumber(number.toString()))
 
+    /**
+     * Run one interaction, keeping the host alive whatever it does.
+     *
+     * It caught `FuaranException` only — the Rust core's validator rejects — which left the OTHER
+     * failure the loop can meet uncaught: the core accepts wire vocabulary this decode-only
+     * projection does not model, so a write that lands such a node makes [reproject] throw a
+     * `FuaranDecodeException`, and that escaped straight onto the Compose main thread. The Swift
+     * twin caught every `Error` and kept its last-good tree; this one crashed the app. Same
+     * session, same op, two different outcomes depending only on which surface was rendering it.
+     *
+     * [asProjectionFailure] decides the boundary rather than a `catch (Throwable)` here, so the
+     * set is named in one place and both hosts read from it. Anything outside it — a
+     * `FuaranSessionClosedException`, an `OutOfMemoryError`, a defect in a caller's own handler —
+     * propagates, because a lifecycle mistake is not a data condition and surfacing it as one
+     * would hide it behind an error banner forever.
+     */
     private inline fun guarded(block: () -> Unit) {
         try {
             block()
             lastError = null
-        } catch (e: FuaranException) {
-            lastError = e
+        } catch (t: Throwable) {
+            lastError = asProjectionFailure(t) ?: throw t
         }
     }
 
@@ -110,6 +142,19 @@ class FuaranHost(private val session: TreeSession) {
         // Re-read the RESOLVED projection so a state / filter / selection write that feeds a
         // scalar `Transform` param re-evaluates it (Phase 650).
         tree = decodeNode(session.projectResolved())
+    }
+
+    companion object {
+        /**
+         * Seed a host from a live session by reading and projecting its current tree — the
+         * fallible half of construction, named and kept OUT of the constructor so no composition
+         * can be unwound by it. Throws whatever the projection throws: a [FuaranException] from
+         * the session, or a decode failure for a tree the projection does not model.
+         *
+         * The Swift twin's `start(session:)` is the same factory for the same reason.
+         */
+        fun start(session: TreeSession): FuaranHost =
+            FuaranHost(session, decodeNode(session.projectResolved()))
     }
 }
 
@@ -121,9 +166,17 @@ class FuaranHost(private val session: TreeSession) {
  */
 val LocalActionSink = staticCompositionLocalOf<FuaranHost?> { null }
 
-/** Remember a [FuaranHost] over [session] across recompositions. */
+/**
+ * Remember a [FuaranHost] over [session] across recompositions.
+ *
+ * [initialTree] is supplied by the caller rather than decoded here, and that is the point: a decode
+ * inside `remember` runs DURING composition, where a failure has nowhere to go but up through the
+ * main thread. Seed it with [FuaranHost.start] (or your own projection) outside composition, where
+ * a failing tree is an ordinary error you can show.
+ */
 @Composable
-fun rememberFuaranHost(session: TreeSession): FuaranHost = remember(session) { FuaranHost(session) }
+fun rememberFuaranHost(session: TreeSession, initialTree: Node): FuaranHost =
+    remember(session) { FuaranHost(session, initialTree) }
 
 /**
  * Render a live [host]'s tree with interaction wired: the host's [FuaranHost.tree] Compose state is

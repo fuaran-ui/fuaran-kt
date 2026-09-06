@@ -99,6 +99,48 @@ $Kotlinc = Resolve-Tool "kotlinc" @(
     "/opt/homebrew/bin/kotlinc"
 )
 
+# --- C-ABI header drift (the reference-stylesheet shape) ---------------------------- #
+# `fuaran-core/src/main/jni/include/fuaran.h` is a COPY. The reference lives in the Rust core, the
+# JNI shim `#include`s the copy rather than re-declaring the ABI, and this leg is what keeps the
+# copy honest: byte-compare it against the reference when the sibling checkout is present.
+#
+# AHEAD of the toolchain skip below, deliberately. This is a text comparison — it needs no JDK, no
+# Kotlin and no Rust — so a box with none of them still answers the one question it CAN answer,
+# rather than exiting 0 having checked nothing at all.
+#
+# NOT CHECKED rather than a silent pass when the sibling is absent, and that distinction is why
+# this prints anything: a single-repo CI checkout has no sibling, and a green line saying nothing
+# about the header would read to every future log reader as "the copy is current". It is
+# deliberately not a hard failure either — a contributor with only this repo cloned is not doing
+# anything wrong.
+$HeaderCopy = Join-Path $Repo "fuaran-core\src\main\jni\include\fuaran.h"
+$HeaderRef = Join-Path $Repo "..\fuaran-rs\include\fuaran.h"
+Write-Host "`n== C-ABI header (fuaran.h) drift ==" -ForegroundColor Cyan
+if (-not (Test-Path $HeaderCopy)) {
+    throw "fuaran.h copy missing at $HeaderCopy — the JNI shim includes it and cannot compile without it."
+}
+elseif (-not (Test-Path $HeaderRef)) {
+    Write-Host "NOT CHECKED: no sibling core checkout at $HeaderRef — the copy was not compared." -ForegroundColor Yellow
+}
+elseif ((Get-FileHash -Algorithm SHA256 $HeaderCopy).Hash -ne (Get-FileHash -Algorithm SHA256 $HeaderRef).Hash) {
+    throw @"
+fuaran.h has drifted from the reference.
+
+  copy:      $HeaderCopy
+  reference: $HeaderRef
+
+The copy is GENERATED — regenerate it rather than hand-editing either side:
+  Copy-Item '$HeaderRef' '$HeaderCopy'
+
+Then read the diff before committing. A change to the C-ABI is a change to what the JNI shim
+compiles against, and the whole point of the copy is that you meet it here rather than at run time
+on a device.
+"@
+}
+else {
+    Write-Host "fuaran.h byte-identical to the reference." -ForegroundColor Green
+}
+
 if (-not $Java -or -not $Kotlinc) {
     $missing = @()
     if (-not $Java) { $missing += 'a JDK (java; JAVA_HOME or PATH)' }
@@ -141,6 +183,12 @@ $RendererNeutralKt = @(
 # run by Gradle — they are absent from this no-Gradle-binary classpath by design.
 $TestKt = @(
     Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\test\kotlin") -Filter "CorpusDecodeTest.kt" -ErrorAction SilentlyContinue |
+        ForEach-Object FullName
+    # The decoder-robustness fuzz leg (Phase 1023's family, extended here by Phase 1540 H-30). Named
+    # explicitly rather than picked up by a recursive glob, because this list deliberately compiles
+    # only the `main()`-driven harnesses and not every file under `src/test/kotlin` — see the note
+    # above. A new harness that is not listed here compiles nowhere and runs nowhere.
+    Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\test\kotlin") -Filter "DecoderFuzzTest.kt" -ErrorAction SilentlyContinue |
         ForEach-Object FullName
     Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-core\src\test\kotlin") -Filter "SessionTest.kt" -ErrorAction SilentlyContinue |
         ForEach-Object FullName
@@ -245,6 +293,16 @@ if ($LASTEXITCODE -ne 0) { throw "render-obligation conformance gate failed" }
 Write-Host "`n== Phase 542 :: corpus render-coverage ==" -ForegroundColor Cyan
 & $Java -cp $Classpath "fuaran.ui.CorpusDecodeTestKt"
 if ($LASTEXITCODE -ne 0) { throw "Phase 542 corpus harness failed" }
+
+# --- Phase 1540 (H-30): decoder robustness fuzz ------------------------------------- #
+# The corpus leg above asserts the malformed inputs somebody thought of; this one asserts the
+# PROPERTY they are evidence for - that no input escapes as anything but the typed error. It runs
+# AFTER the corpus leg deliberately, the opposite of the placement argument the legs above record:
+# those establish nothing the decode harness needs, whereas a fuzz counterexample is far harder to
+# read when a named corpus vector is already failing for a reason the fuzz will rediscover as noise.
+Write-Host "`n== Phase 1540 :: decoder robustness fuzz ==" -ForegroundColor Cyan
+& $Java -cp $Classpath "fuaran.ui.DecoderFuzzTestKt"
+if ($LASTEXITCODE -ne 0) { throw "Phase 1540 decoder fuzz failed" }
 
 # --- Phase 543: desktop JNI live-session round-trip --------------------------------- #
 $SessionTestClass = "fuaran.core.SessionTestKt"

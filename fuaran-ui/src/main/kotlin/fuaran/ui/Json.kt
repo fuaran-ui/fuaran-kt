@@ -27,9 +27,34 @@ data class JsonString(val value: String) : JsonValue
 
 /** A JSON number, keeping the source lexeme so no precision is lost before a typed slot reads it. */
 data class JsonNumber(val raw: String) : JsonValue {
+    /**
+     * The lexeme as a `Double`. Total for any value the reader produced: [Json]'s number scanner
+     * admits exactly the RFC 8259 grammar, and `String.toDouble` accepts every lexeme in it —
+     * rounding to the nearest representable value, and to an infinity for an exponent past the
+     * `Double` range, which is what a JSON reader is meant to do rather than an error.
+     */
     fun toDouble(): Double = raw.toDouble()
-    fun toInt(): Int = toDouble().toInt()
-    fun toLong(): Long = toDouble().toLong()
+
+    /**
+     * The lexeme as an `Int`, or `null` when it does not denote one **exactly**.
+     *
+     * The `toDouble().toInt()` pair this replaced had to go because the JVM's `Double`-to-`Int`
+     * narrowing SATURATES: `3000000000` came back as `Int.MAX_VALUE` and `1.5` came back as `1`.
+     * Both silently — an integer slot received a number that is not the one the document carried,
+     * and nothing downstream could tell. The conformance corpus pins an integer slot as having no
+     * non-numeric form at all (`reject-binding-int-*`); quietly reshaping one that IS numeric but
+     * out of range is the same defect one step further in.
+     *
+     * `BigDecimal` rather than a hand-rolled parse, because the question "does this lexeme denote
+     * an exact integer" must be answered for `1.0` and `1e3` (which do) as well as for `1.5` and
+     * `3e9` (which do not — the second only because it leaves `Int`), and a decimal type answers it
+     * with no rounding step in the middle. It is `java.math`, so `fuaran-ui` stays dependency-free.
+     */
+    fun toIntOrNull(): Int? = runCatching { java.math.BigDecimal(raw).intValueExact() }.getOrNull()
+
+    /** The lexeme as a `Long`, or `null` when it does not denote one exactly. See [toIntOrNull]. */
+    fun toLongOrNull(): Long? =
+        runCatching { java.math.BigDecimal(raw).longValueExact() }.getOrNull()
 }
 
 data class JsonBool(val value: Boolean) : JsonValue
@@ -304,22 +329,55 @@ object Json {
             }
         }
 
+        /**
+         * The RFC 8259 number grammar, exactly:
+         *
+         * ```text
+         * number = '-'? int frac? exp?
+         * int    = '0' | [1-9] [0-9]*
+         * frac   = '.' [0-9]+
+         * exp    = ('e' | 'E') ('+' | '-')? [0-9]+
+         * ```
+         *
+         * Each of the three parts REQUIRES its digits. The scanner this replaced looped
+         * `while (digit) pos++` at every part, which accepts a part with no digits at all: `1e`
+         * and `1e+` were read as numbers, and the lexeme was carried to a typed slot that threw
+         * `NumberFormatException` — an untyped, unpathed failure escaping a decoder whose whole
+         * contract is that it refuses in one shape. `.5`, `1.` and `01` slipped through the same
+         * way. A malformed number is refused HERE, as [JsonSyntaxException], which the decoder
+         * already maps to the canonical `INVALID_JSON` code.
+         *
+         * Refusing the leading zero costs nothing extra: after `0` the integer part simply ends,
+         * so `01` leaves `1` unread and the enclosing value's own expectation (a comma, a brace,
+         * end of input) fails on it.
+         */
         private fun readNumber(): JsonNumber {
             val start = pos
             if (peek() == '-') pos++
-            while (!atEnd() && src[pos] in '0'..'9') pos++
+            if (atEnd() || src[pos] !in '0'..'9') {
+                throw JsonSyntaxException("a number needs at least one integer digit at offset $start")
+            }
+            if (src[pos] == '0') {
+                pos++
+            } else {
+                while (!atEnd() && src[pos] in '0'..'9') pos++
+            }
             if (!atEnd() && src[pos] == '.') {
                 pos++
+                if (atEnd() || src[pos] !in '0'..'9') {
+                    throw JsonSyntaxException("a fraction needs at least one digit at offset $pos")
+                }
                 while (!atEnd() && src[pos] in '0'..'9') pos++
             }
             if (!atEnd() && (src[pos] == 'e' || src[pos] == 'E')) {
                 pos++
                 if (!atEnd() && (src[pos] == '+' || src[pos] == '-')) pos++
+                if (atEnd() || src[pos] !in '0'..'9') {
+                    throw JsonSyntaxException("an exponent needs at least one digit at offset $pos")
+                }
                 while (!atEnd() && src[pos] in '0'..'9') pos++
             }
-            val lexeme = src.substring(start, pos)
-            if (lexeme.isEmpty() || lexeme == "-") throw JsonSyntaxException("malformed number at offset $start")
-            return JsonNumber(lexeme)
+            return JsonNumber(src.substring(start, pos))
         }
 
         private fun readBool(): JsonBool =

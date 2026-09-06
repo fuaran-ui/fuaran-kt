@@ -23,13 +23,30 @@ import fuaran.ui.encode
  * *driver loop* — fetch, apply, re-project, survive-a-reject, post-back — is provable with zero native
  * surface, always green on any box.
  */
-class FakeSession(initialTreeJson: String) : TreeSession {
+class FakeSession(
+    initialTreeJson: String,
+    /**
+     * The tree this fake hands back from [projectResolved] — the stand-in for the Rust core's
+     * resolved projection, in which every scalar `Binding.Transform` has been folded to the value
+     * it evaluates to.
+     *
+     * A SEPARATE seed on purpose, and that is what makes the driver's choice of channel observable
+     * at all: a fake whose two reads returned the same bytes would pass whether the driver called
+     * `treeJson()` or `projectResolved()` — which is precisely how the driver came to be reading
+     * the wrong one for as long as it did. `null` means "this fake has no evaluator and no
+     * Transform to resolve", the honest answer for the loop tests and one that is now stated
+     * rather than inherited from an interface default.
+     */
+    private val resolvedTreeJson: String? = null,
+) : TreeSession {
     private var current: String = initialTreeJson
     val stateWrites: MutableList<Pair<String, String>> = mutableListOf()
     var closed = false
         private set
 
     override fun treeJson(): String = current
+
+    override fun projectResolved(): String = resolvedTreeJson ?: current
 
     override fun applyOp(opJson: String) {
         val op = Json.parse(opJson) as? JsonObject ?: throw FuaranException("INVALID_JSON", null, null, "op not an object")
