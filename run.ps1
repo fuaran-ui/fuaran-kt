@@ -67,14 +67,43 @@ function Resolve-Tool([string] $Name, [string[]] $Fallbacks) {
     return $null
 }
 
-$JavaHome = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine')
-if (-not $JavaHome) { $JavaHome = $env:JAVA_HOME }
-$Java = if ($JavaHome) { Join-Path $JavaHome "bin\java.exe" } else { $null }
-$Javac = if ($JavaHome) { Join-Path $JavaHome "bin\javac.exe" } else { $null }
-$Kotlinc = Resolve-Tool "kotlinc" @("C:\Program Files\kotlinc\bin\kotlinc.bat")
+# Tool resolution is PLATFORM-NEUTRAL, not Windows-shaped.
+#
+# This script is a `pwsh` script and PowerShell 7 runs on macOS and Linux, where
+# the JDK's launchers are `bin/java` (no extension), the Kotlin compiler is
+# `kotlinc` (no `.bat`), and the Gradle wrapper is `./gradlew`. Hard-coding the
+# Windows spellings did not make those platforms fail — it made them SKIP, with
+# "no JDK ... nothing to build", on a box that had a perfectly good JDK. A gate
+# that reports "nothing to build" on a machine that can build everything is the
+# same lie as one that reports green having run nothing.
+$IsWin = $IsWindows -or ($null -eq $IsWindows)  # $IsWindows is undefined on Windows PowerShell 5.1
+$ExeSuffix = if ($IsWin) { '.exe' } else { '' }
 
-if (-not ($Java -and (Test-Path $Java)) -or -not $Kotlinc) {
-    Write-Host "SKIP: no JDK ($Java) or kotlinc found — nothing to build. (A JDK 21 + Kotlin 2.x are required.)" -ForegroundColor Yellow
+function Resolve-JavaTool([string] $JavaHome, [string] $Name) {
+    # Prefer JAVA_HOME, fall back to PATH — a JDK installed by a package manager
+    # is often on PATH with no JAVA_HOME set at all.
+    if ($JavaHome) {
+        $candidate = Join-Path (Join-Path $JavaHome 'bin') ($Name + $ExeSuffix)
+        if (Test-Path $candidate) { return $candidate }
+    }
+    return (Resolve-Tool $Name @())
+}
+
+$JavaHome = if ($IsWin) { [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine') } else { $null }
+if (-not $JavaHome) { $JavaHome = $env:JAVA_HOME }
+$Java = Resolve-JavaTool $JavaHome 'java'
+$Javac = Resolve-JavaTool $JavaHome 'javac'
+$Kotlinc = Resolve-Tool "kotlinc" @(
+    "C:\Program Files\kotlinc\bin\kotlinc.bat",
+    "/usr/local/bin/kotlinc",
+    "/opt/homebrew/bin/kotlinc"
+)
+
+if (-not $Java -or -not $Kotlinc) {
+    $missing = @()
+    if (-not $Java) { $missing += 'a JDK (java; JAVA_HOME or PATH)' }
+    if (-not $Kotlinc) { $missing += 'kotlinc' }
+    Write-Host ("SKIP: {0} not found — nothing to build. (A JDK 21 + Kotlin 2.x are required.)" -f ($missing -join ' and ')) -ForegroundColor Yellow
     exit 0
 }
 
@@ -168,7 +197,10 @@ if (-not $SkipBuild) {
 
 if ($SkipTests) { Write-Host "Tests skipped."; exit 0 }
 
-$Classpath = if ($JavaSrc) { "$Jar;$ClassesDir" } else { $Jar }
+# `;` is the classpath separator on Windows and `:` everywhere else. Hard-coding
+# `;` did not fail loudly off Windows — the JVM read the whole string as ONE path
+# entry, so the JNI bridge classes silently were not on the classpath.
+$Classpath = if ($JavaSrc) { $Jar + [IO.Path]::PathSeparator + $ClassesDir } else { $Jar }
 
 if ($Corpus) { $env:FUARAN_CORPUS = $Corpus.Path }
 
@@ -219,7 +251,13 @@ $SessionTestClass = "fuaran.core.SessionTestKt"
 $HasSessionTest = Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-core\src\test\kotlin") -Filter "SessionTest.kt" -ErrorAction SilentlyContinue
 if ($HasSessionTest) {
     Write-Host "`n== Phase 543 :: desktop JNI session round-trip ==" -ForegroundColor Cyan
-    $nativeDll = & (Join-Path $Repo "dev-scripts\build-native-desktop.ps1") -Repo $Repo -ClassesDir $ClassesDir -JniGenDir $JniGenDir
+    # SEED $LASTEXITCODE before the child script. PowerShell does not reset it
+    # between commands: a `.ps1` that runs no native command leaves whatever the
+    # LAST native command set, so this test read a stale code from an unrelated
+    # step. On the first run of a fresh session it is $null, and `$null -ne 0` is
+    # TRUE — so a perfectly good native build was discarded as a failure.
+    $LASTEXITCODE = 0
+    $nativeDll = & (Join-Path $Repo "dev-scripts/build-native-desktop.ps1") -Repo $Repo -ClassesDir $ClassesDir -JniGenDir $JniGenDir
     if ($LASTEXITCODE -ne 0 -or -not $nativeDll) {
         Write-Host "SKIP: desktop JNI leg — Rust toolchain / C compiler unavailable (see message above)." -ForegroundColor Yellow
     } else {
@@ -251,7 +289,12 @@ function Find-AndroidSdk {
 
 if (-not $SkipTests -and -not $SkipRenderer) {
     Write-Host "`n== Phase 544 :: Jetpack Compose render-coverage (Gradle + Robolectric) ==" -ForegroundColor Cyan
-    $Gradlew = Join-Path $Repo "gradlew.bat"
+    # `gradlew.bat` on Windows, `./gradlew` everywhere else. With only the `.bat`
+    # spelling every non-Windows box reported "no Gradle wrapper" and skipped the
+    # renderer gate — the one leg that exists because it cannot be run locally on
+    # the reference Windows box.
+    $GradlewName = if ($IsWin) { "gradlew.bat" } else { "gradlew" }
+    $Gradlew = Join-Path $Repo $GradlewName
     $Sdk = Find-AndroidSdk
     if (-not (Test-Path $Gradlew)) {
         Write-Host "SKIP: no Gradle wrapper (gradlew.bat) — renderer leg needs the Gradle build." -ForegroundColor Yellow
@@ -261,7 +304,13 @@ if (-not $SkipTests -and -not $SkipRenderer) {
     }
     else {
         Write-Host "Android SDK :: $Sdk"
-        & $Gradlew ":fuaran-renderer:testDebugUnitTest" "--console=plain"
+        # Forward the corpus EXPLICITLY, as the plain-JVM legs above get it via
+        # $env:FUARAN_CORPUS. A Gradle test worker is a separate JVM and the
+        # renderer harnesses' own fallback is a relative-path walk from whatever
+        # directory that worker happens to run in — which is how the render
+        # gate came to `return` green on a machine that plainly had the corpus.
+        $corpusArgs = if ($Corpus) { @("-Dfuaran.corpus=$($Corpus.Path)") } else { @() }
+        & $Gradlew ":fuaran-renderer:testDebugUnitTest" "--console=plain" @corpusArgs
         if ($LASTEXITCODE -ne 0) { throw "Phase 544 render-coverage gate failed" }
         Write-Host "Phase 544 render-coverage gate green." -ForegroundColor Green
 
@@ -308,7 +357,9 @@ if ($Package) {
     & $Kotlinc @MainKt @mainCp "-d" $AarClasses
     if ($LASTEXITCODE -ne 0) { throw "kotlinc (aar classes) failed" }
 
-    $aar = & (Join-Path $Repo "dev-scripts\build-android-aar.ps1") -Repo $Repo -ClassesDir $AarClasses
+    # Seeded for the same reason as the desktop leg above.
+    $LASTEXITCODE = 0
+    $aar = & (Join-Path $Repo "dev-scripts/build-android-aar.ps1") -Repo $Repo -ClassesDir $AarClasses
     if ($LASTEXITCODE -ne 0) { throw "Android AAR packaging failed" }
     if (-not $aar) {
         Write-Host "Android packaging skipped (NDK/cargo-ndk absent) — see message above." -ForegroundColor Yellow

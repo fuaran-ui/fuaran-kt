@@ -1,0 +1,40 @@
+# Conformance residue — the named set of things this surface is KNOWN not to answer.
+#
+# WHAT THIS IS. A committed list of the failures that stand on a clean tree against
+# the current shared corpus. The gates read it and go red in BOTH directions:
+#
+#   * a failure NOT on this list is a REGRESSION      -> red, named;
+#   * a line on this list that now PASSES is STALE    -> red, named, delete it.
+#
+# WHY IT EXISTS. This surface's gates were red BY DESIGN: the render-obligation gate
+# fails because two declared claims are owed and unanswered, which is the correct
+# answer and is also indistinguishable, in a CI run, from a new regression landing
+# beside them. A red run that is expected to be red is a run nobody reads, so a new
+# failure lands inside it and is never seen. Naming the residue makes the expected
+# red into a green with a stated cap, and gives a NEW failure somewhere to show up.
+#
+# WHAT IT IS NOT. It is not an exemption, and the distinction is the whole point.
+# A DECLARED EXEMPTION (see DECLARED_EXEMPTIONS in RenderObligationHarness.kt) says
+# this surface STRUCTURALLY cannot answer a claim — no playback engine, no browsing
+# context — and is a permanent, reasoned answer. A residue entry says the surface
+# does not model the slots the claim is about YET. That is unadopted work, and it
+# shrinks to empty through adoption, never by being reclassified as an exemption.
+# Turning a residue line into an exemption would make the gate green over a
+# capability nobody has adopted, which is the one thing this mechanism exists to
+# prevent.
+#
+# HOW TO SHRINK IT. Adopt the vocabulary, register the checker, delete the line.
+# There is no way to make this file grow that does not show up in a diff.
+
+# ── Render obligations owed and unanswered (WIRE_FORMAT.md §13) ──────────────
+#
+# Both follow from vocabulary this surface does not model: `FileUpload` carries
+# neither the capture nor the destination slot, and `Modal` carries neither
+# `modality` nor `anchor`. Each is reported by the gate as "unchecked, no checker
+# registered", which is the honest answer — not checked is not passed.
+#
+# Verified against wire-format-fixtures/render-fidelity.json (19 declared
+# obligations), PLAIN_JVM_CHECKERS (1) + COMPOSE_CHECKER_KEYS (8) and
+# DECLARED_EXEMPTIONS (9): 19 - 8 distinct asserted - 9 exempt = these two.
+[obligation] FileUpload/picker-always-present
+[obligation] Modal/aria-modal-only-when-blocking

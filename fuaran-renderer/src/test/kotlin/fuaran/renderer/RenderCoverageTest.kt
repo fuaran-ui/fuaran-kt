@@ -38,6 +38,28 @@ class RenderCoverageTest {
     fun everyCorpusNodeFixtureRendersThroughTheFloorWithZeroFallbacks() {
         val corpus = locateCorpus()
         if (corpus == null) {
+            // A missing corpus has two very different meanings and collapsing them into one clean
+            // `return` is a VACUOUS GREEN. On a standalone clone the skip is honest. In CI it means
+            // this gate certified NOTHING while the job reported success — and that is not
+            // hypothetical here: the Gradle test JVM is a separate process that does not inherit
+            // FUARAN_CORPUS, and the derived `fuaran.corpus` default points at
+            // <repo>/../wire-format-fixtures, which is not where CI puts it. So the gate that
+            // exists precisely because it cannot be run on the reference dev box was returning
+            // green in the one environment that can run it.
+            //
+            // FUARAN_REQUIRE_CORPUS is how a caller says "a corpus is present here, so its absence
+            // is a defect, not a platform fact". CI sets it. `return` stays the answer everywhere
+            // else, so a standalone clone is unaffected.
+            val required = System.getenv("FUARAN_REQUIRE_CORPUS")
+            if (!required.isNullOrBlank() && required != "0") {
+                throw AssertionError(
+                    "FUARAN_REQUIRE_CORPUS is set, so a corpus is expected here — but none was found, " +
+                        "and this gate therefore certified NOTHING. " +
+                        "FUARAN_CORPUS=${System.getenv("FUARAN_CORPUS") ?: "<unset>"}; " +
+                        "-Dfuaran.corpus=${System.getProperty("fuaran.corpus") ?: "<unset>"}. " +
+                        "Correct the locator or the caller rather than letting the harness skip.",
+                )
+            }
             println("SKIP: wire-format-fixtures corpus not found (set -Dfuaran.corpus). Nothing to certify.")
             return
         }

@@ -285,15 +285,75 @@ fun renderObligationFailures(
                     "reading the wrong file (${artifact.absolutePath}), and either way it is asserting nothing",
             )
         }
-        val undeclared =
+        // The claims this surface neither asserts nor declares exempt: owed, unanswered, and
+        // therefore RED — unless they are the named residue in the committed
+        // `conformance-residue.txt`, in which case the gate is red for a CHANGE to that set
+        // instead, in either direction.
+        //
+        // Why the residue is a third category and not a tenth exemption: an exemption says this
+        // surface STRUCTURALLY cannot answer a claim (no playback engine, no browsing context) and
+        // is a permanent reasoned answer. These two are unanswered because the surface does not
+        // model the SLOTS the claims are about — `FileUpload` carries neither capture nor
+        // destination, `Modal` carries neither `modality` nor `anchor` — which is unadopted work.
+        // Exempting them would turn the gate green over a capability nobody has adopted, which is
+        // the one thing this whole mechanism exists to prevent.
+        //
+        // What the residue buys is the second direction. Before it, this gate was RED BY DESIGN,
+        // and a run everyone expects to be red is a run nobody reads: a NEW unanswered claim landed
+        // inside an already-failing gate with nothing to distinguish it. Now an unnamed one is a
+        // regression and a named one that gains a checker is a stale cap, and both are red.
+        val residue = loadResidue("obligation")
+        val owed =
             unassertedObligations(report)
                 .filter { "${it.kind}/${it.claimId}" !in DECLARED_EXEMPTIONS }
-                .map { "${it.kind}/${it.claimId} [${it.section}]" }
-        if (undeclared.isNotEmpty()) {
+                .associateBy { "${it.kind}/${it.claimId}" }
+
+        val regressions = (owed.keys - residue).sorted().map { "$it [${owed.getValue(it).section}]" }
+        val stale = (residue - owed.keys).sorted()
+
+        if (regressions.isNotEmpty()) {
             error(
-                "a render obligation this surface owes has no checker: assert it, or add a declared " +
-                    "exemption saying why this surface cannot — $undeclared",
+                "a render obligation this surface owes has no checker and is not named in " +
+                    "$RESIDUE_FILE: assert it, add a declared exemption saying why this surface " +
+                    "cannot, or — if it is genuinely unadopted work — record it there. " +
+                    "$regressions",
             )
+        }
+        if (stale.isNotEmpty()) {
+            error(
+                "$RESIDUE_FILE names ${stale.size} obligation(s) as unanswered that this surface now " +
+                    "answers: delete those lines. A cap that no longer caps anything reads as measured and " +
+                    "is a blindfold. $stale",
+            )
+        }
+    }
+
+    // ── The residue's own go-red proof ────────────────────────────────────────
+    c.check("theResidueComparisonGoesRedInBothDirections") {
+        // Without this, a bug that made `owed` come back empty would leave the gate above green
+        // forever with an unread residue file beside it — the completeness check that cannot fail,
+        // which is the defect this whole file is about.
+        val residue = loadResidue("obligation")
+        val owed =
+            unassertedObligations(report)
+                .filter { "${it.kind}/${it.claimId}" !in DECLARED_EXEMPTIONS }
+                .map { "${it.kind}/${it.claimId}" }
+                .toSet()
+
+        if (owed.isEmpty() && residue.isEmpty()) {
+            // Legitimate once adoption completes; say so rather than passing silently.
+            println("  residue: EMPTY on both sides — every declared obligation is asserted or exempt.")
+        } else {
+            if (owed.isNotEmpty()) {
+                val withheld = owed.first()
+                if ((owed - (residue - withheld)).isEmpty()) {
+                    error("withholding \"$withheld\" from the residue set did not read as a regression")
+                }
+            }
+            val impossible = "ZZNoSuchKind/no-such-claim"
+            if (((residue + impossible) - owed).isEmpty()) {
+                error("a residue entry that cannot possibly be owed did not read as stale")
+            }
         }
     }
 

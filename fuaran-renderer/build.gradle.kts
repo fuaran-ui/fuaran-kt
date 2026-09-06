@@ -38,11 +38,27 @@ android {
             isReturnDefaultValues = true
             all { test ->
                 // Point the render-coverage gate at the shared wire-format corpus by absolute path
-                // (working-dir-independent): <fuaran-kt>/../wire-format-fixtures.
-                test.systemProperty(
-                    "fuaran.corpus",
-                    rootProject.projectDir.parentFile.resolve("wire-format-fixtures").absolutePath,
-                )
+                // (working-dir-independent). FUARAN_CORPUS wins when the caller sets it: the
+                // derived default below assumes the sibling layout <fuaran-kt>/../wire-format-fixtures,
+                // and CI does NOT use that layout — it checks the corpus out to _corpus and announces
+                // it in the environment. Gradle hands a test JVM no ambient environment, so before
+                // this forwarding the derived path pointed at nothing in CI, the harnesses' relative
+                // fall-backs missed from a test worker's working directory, and the render gate
+                // returned green having certified nothing.
+                val declaredCorpus = System.getenv("FUARAN_CORPUS")
+                val corpusPath =
+                    declaredCorpus?.takeIf { it.isNotBlank() }
+                        ?: rootProject.projectDir.parentFile.resolve("wire-format-fixtures").absolutePath
+                test.systemProperty("fuaran.corpus", corpusPath)
+                declaredCorpus?.let { test.environment("FUARAN_CORPUS", it) }
+                // "a corpus is present here, so its absence is a defect" — see RenderCoverageTest.
+                System.getenv("FUARAN_REQUIRE_CORPUS")?.let {
+                    test.environment("FUARAN_REQUIRE_CORPUS", it)
+                }
+                // The committed residue set's location override, forwarded for the same reason as
+                // the artefact override below: so the gate's go-red property can be proven against
+                // a perturbed scratch copy without editing the committed file.
+                System.getenv("FUARAN_RESIDUE")?.let { test.environment("FUARAN_RESIDUE", it) }
                 // Gradle does not hand the ambient environment to a test JVM, so the
                 // render-obligation gate's artefact override has to be forwarded explicitly.
                 // It exists so the gate's go-red property can be PROVEN against a perturbed
