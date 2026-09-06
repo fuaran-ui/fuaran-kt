@@ -1326,6 +1326,149 @@ fun main() {
         if ((node.kind as Sparkline).source !is StateBinding) error("a State-bound series must survive untyped")
     }
 
+    // ----------------------------------------------------------------------- //
+    // WIRE_FORMAT.md §20 decode determinism, and §7.1's integer-slot accept set
+    // ----------------------------------------------------------------------- //
+    //
+    // The corpus pins each row with a reject fixture and the leg above runs them. These
+    // are the assertions the corpus cannot carry: the CORRECTED TWIN beside each refusal
+    // — a refusal-only suite passes on a decoder that refuses everything — and the
+    // TOTALITY property, which is about what this host THROWS rather than about what the
+    // format admits.
+    //
+    // Two of the three defects were platform exceptions escaping a decoder that promises
+    // a typed refusal. `"1e".toDouble()` threw a NumberFormatException from inside a slot
+    // reader, nowhere near the malformed token. `toDouble().toInt()` did not throw at all
+    // — it saturates — so 3000000000 became 2147483647 with no error anywhere.
+
+    fun markdown(text: String): String =
+        "{\"id\":\"markdown-1\",\"kind\":{\"\$type\":\"Markdown\",\"text\":\"$text\"}}"
+
+    fun skeleton(rows: String): String = "{\"id\":\"skel-1\",\"kind\":{\"\$type\":\"Skeleton\",\"rows\":$rows}}"
+
+    fun refusalCode(json: String): String =
+        try {
+            decodeNode(json)
+            "ACCEPTED"
+        } catch (e: FuaranDecodeException) {
+            e.code
+        } catch (e: JsonSyntaxException) {
+            "INVALID_JSON"
+        } catch (e: JsonLimitException) {
+            "LIMIT_EXCEEDED"
+        }
+
+    runner.check("determinism/number-lexemes-outside-the-rfc-8259-grammar-are-syntax-errors") {
+        // Each of these reached a slot reader before: `1e` and `1e+` as a
+        // NumberFormatException — a platform exception outside the declared contract —
+        // and `01` / `3.` not at all, because `Double.parseDouble` accepts both.
+        for (lit in listOf("1e", "1e+", "01", "3.")) {
+            val got = refusalCode(skeleton(lit))
+            if (got != "INVALID_JSON") error("'$lit' must be INVALID_JSON, got $got")
+        }
+    }
+    runner.check("determinism/every-well-formed-number-still-parses") {
+        // The corrected twins. A grammar written one clause too tight refuses these, and
+        // no reject fixture would notice.
+        for (lit in listOf("0", "3", "-3", "2147483647", "-2147483648")) {
+            val got = refusalCode(skeleton(lit))
+            if (got != "ACCEPTED") error("'$lit' must decode, got $got")
+        }
+    }
+    runner.check("determinism/an-integral-float-spelling-decodes-at-an-integer-slot") {
+        // §7.1 — `3.0` and `3` denote the same integer, so refusing the first refuses a
+        // document whose intent is unambiguous, for its spelling.
+        val got = refusalCode(skeleton("3.0"))
+        if (got != "ACCEPTED") error("3.0 must decode at an integer slot, got $got")
+    }
+    runner.check("determinism/an-integer-slot-refuses-a-fraction-and-an-out-of-range-value") {
+        // Not truncated, not saturated: both used to produce a value the author never
+        // wrote, silently, which is the defect §20 closes one layer down in the syntax.
+        for (lit in listOf("2.5", "1e10", "3000000000", "-3000000000", "1e400")) {
+            val got = refusalCode(skeleton(lit))
+            if (got != FuaranDecodeException.WRONG_TYPE) error("'$lit' must be WRONG_TYPE, got $got")
+        }
+    }
+    runner.check("determinism/an-integer-slot-refuses-a-sentinel-string") {
+        // §7 widens FLOAT slots to the three sentinels and nothing else. An integer has no
+        // non-finite form, which is the case that makes the two accept sets
+        // distinguishable rather than merely stated.
+        val got = refusalCode(skeleton("\"NaN\""))
+        if (got != FuaranDecodeException.WRONG_TYPE) {
+            error("a sentinel at an integer slot must be WRONG_TYPE, got $got")
+        }
+    }
+    runner.check("determinism/unpaired-surrogate-escapes-are-refused") {
+        // §20.2 row 6. A Kotlin String is UTF-16, so this host could HOLD a lone half and
+        // did — which is why the check sits on the escape TEXT, where a pair is still
+        // distinguishable from two halves that happen to co-occur.
+        for (text in listOf("\\ud83d", "\\ude00", "\\ud83d x \\ude00", "\\ud83dA")) {
+            val got = refusalCode(markdown(text))
+            if (got != "INVALID_JSON") error("'$text' must be INVALID_JSON, got $got")
+        }
+    }
+    runner.check("determinism/a-well-formed-surrogate-pair-still-decodes") {
+        // The corrected twin, and the one that matters most here: refusing every escape
+        // would otherwise look like a fix.
+        val got = refusalCode(markdown("Updated \\ud83d\\ude00 hourly."))
+        if (got != "ACCEPTED") error("a well-formed pair must decode, got $got")
+    }
+    runner.check("determinism/a-signed-hex-quad-is-refused") {
+        // `String.toIntOrNull(16)` accepts a LEADING SIGN, so a source `\u-abc` parsed as
+        // −2748 and reached `code.toChar()`, where the JVM's narrowing conversion produced
+        // an arbitrary code unit with no error anywhere.
+        val got = refusalCode(markdown("\\u-abc"))
+        if (got != "INVALID_JSON") error("a signed hex quad must be INVALID_JSON, got $got")
+    }
+    runner.check("determinism/a-repeated-member-is-refused") {
+        // §20.2 row 1 — the row that changes what a document MEANS rather than whether it
+        // is accepted. A LinkedHashMap put kept the LAST occurrence here; the reference
+        // host kept the FIRST; neither raised anything.
+        val got =
+            refusalCode(
+                "{\"id\":\"markdown-1\",\"id\":\"smuggled\",\"kind\":{\"\$type\":\"Markdown\",\"text\":\"x\"}}",
+            )
+        if (got != "INVALID_JSON") error("a repeated member must be INVALID_JSON, got $got")
+    }
+    runner.check("determinism/the-same-key-in-sibling-objects-is-not-a-repeat") {
+        // Non-vacuity: two objects each carrying "id" is the ordinary shape of every tree.
+        val got =
+            refusalCode(
+                "{\"id\":\"n\",\"kind\":{\"\$type\":\"Box\",\"role\":\"Group\"," +
+                    "\"layout\":{\"\$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false}," +
+                    "\"children\":[{\"id\":\"a\",\"kind\":{\"\$type\":\"Markdown\",\"text\":\"x\"}}," +
+                    "{\"id\":\"b\",\"kind\":{\"\$type\":\"Markdown\",\"text\":\"y\"}}]}}",
+            )
+        if (got != "ACCEPTED") error("sibling objects sharing a key must decode, got $got")
+    }
+    runner.check("determinism/decoding-hostile-input-never-throws-an-untyped-exception") {
+        // The cross-host decoder-fuzz totality assertion, extended to this surface. Every
+        // input below is malformed; what is asserted is the CLASS of the failure and not
+        // which one — an untyped platform exception escaping the decoder is the defect,
+        // and it is the one this host actually had.
+        val hostile =
+            listOf(
+                "", "   ", "{", "[", "{\"id\":", "\"unterminated", "1e", "01", "-", "+1", ".5",
+                "{\"id\":\"x\",\"kind\":{\"\$type\":\"Markdown\",\"text\":\"\\ud83d\"}}",
+                "{\"a\":1,\"a\":2}", "{} {}", "null", "true", "[[[[[[[[[[",
+                "{\"id\":\"x\",\"kind\":{\"\$type\":\"Skeleton\",\"rows\":1e400}}",
+                "{\"id\":\"x\",\"kind\":{\"\$type\":\"Skeleton\",\"rows\":\"NaN\"}}",
+            ) + List(40) { "[".repeat(it * 20) + "]".repeat(it * 20) }
+        for (input in hostile) {
+            try {
+                decodeNode(input)
+            } catch (e: FuaranDecodeException) {
+                // typed
+            } catch (e: JsonSyntaxException) {
+                // typed
+            } catch (e: JsonLimitException) {
+                // typed
+            } catch (e: Throwable) {
+                error("decodeNode threw an untyped ${e::class.simpleName} on '${input.take(40)}': ${e.message}")
+            }
+        }
+    }
+
     val decoded = nodeFixtures.size + lenientFixtures.size
     println()
     println("Per-NodeKind coverage (${coverage.size} distinct kinds across $decoded decoded fixtures):")

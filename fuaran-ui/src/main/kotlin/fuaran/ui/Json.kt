@@ -28,7 +28,28 @@ data class JsonString(val value: String) : JsonValue
 /** A JSON number, keeping the source lexeme so no precision is lost before a typed slot reads it. */
 data class JsonNumber(val raw: String) : JsonValue {
     fun toDouble(): Double = raw.toDouble()
-    fun toInt(): Int = toDouble().toInt()
+
+    /**
+     * The value as an `Int`, or `null` when this number is not one an integer slot can hold.
+     *
+     * §7.1: an integer slot admits a finite number with no fractional part inside the signed
+     * 32-bit range, and nothing else. `3.0` is `3`; `2.5`, `1e10` and `1e400` are refusals.
+     *
+     * `null` rather than a saturating cast, and that is the whole point of the change.
+     * `toDouble().toInt()` is TOTAL on the JVM — it saturates at `Int.MAX_VALUE` and rounds
+     * toward zero — so `3000000000` silently became `2147483647` and `2.5` silently became
+     * `2`. Both are a value the author did not write, produced with no error anywhere, which
+     * is exactly the class §20 exists to close one layer down in the syntax. The caller turns
+     * the `null` into a typed `WRONG_TYPE`; a cast cannot be turned into anything.
+     */
+    fun toIntOrNull(): Int? {
+        val d = toDouble()
+        if (!d.isFinite()) return null
+        if (d != kotlin.math.truncate(d)) return null
+        if (d < Int.MIN_VALUE.toDouble() || d > Int.MAX_VALUE.toDouble()) return null
+        return d.toInt()
+    }
+
     fun toLong(): Long = toDouble().toLong()
 }
 
@@ -115,6 +136,12 @@ private fun encodeJsonString(s: String, sb: StringBuilder) {
     sb.append('"')
 }
 
+private const val HIGH_MUST_PAIR =
+    "a \\uD800-\\uDBFF escape must be followed immediately by a \\uDC00-\\uDFFF escape"
+
+private const val LOW_MUST_PAIR =
+    "a \\uDC00-\\uDFFF escape must be preceded immediately by a \\uD800-\\uDBFF escape"
+
 /** A single-pass recursive-descent JSON reader (RFC 8259). */
 object Json {
     fun parse(text: String): JsonValue {
@@ -198,6 +225,19 @@ object Json {
                     skipWhitespace()
                     expect(':')
                     skipWhitespace()
+                    // §20.2 row 1 — a repeated member is INVALID_JSON, not a last-wins
+                    // overwrite. This is one of the two rows that change what a document
+                    // MEANS rather than whether it is accepted: a `LinkedHashMap` put
+                    // silently kept the LAST occurrence here where the reference host kept
+                    // the FIRST, so a vetting host and a rendering host read different trees
+                    // from identical bytes with no error raised anywhere.
+                    if (members.containsKey(key)) {
+                        throw JsonSyntaxException(
+                            "the object member '$key' appears more than once at offset $pos " +
+                                "(WIRE_FORMAT.md §20.2 row 1): hosts disagreed on which " +
+                                "occurrence wins, so the same bytes meant different trees",
+                        )
+                    }
                     members[key] = readValue()
                     if (members.size > WireLimits.MAX_ARRAY_LENGTH) {
                         throw JsonLimitException(
@@ -289,12 +329,33 @@ object Json {
                             'r' -> sb.append('\r')
                             't' -> sb.append('\t')
                             'u' -> {
-                                if (pos + 4 > src.length) throw JsonSyntaxException("truncated \\u escape")
-                                val hex = src.substring(pos, pos + 4)
-                                val code = hex.toIntOrNull(16)
-                                    ?: throw JsonSyntaxException("bad \\u escape '$hex'")
-                                sb.append(code.toChar())
-                                pos += 4
+                                val code = readHexQuad()
+                                if (code in 0xD800..0xDBFF) {
+                                    // §20.2 row 6 — a HIGH half must be followed IMMEDIATELY
+                                    // by a low half. "Immediately" is the whole content of the
+                                    // rule: a host that merely counts surrogates reassembles a
+                                    // scalar the author never wrote out of two halves that
+                                    // happened to co-occur. And it must be checked here rather
+                                    // than over the finished string, because a Kotlin String is
+                                    // UTF-16 — once assembled, a well-formed pair and two lone
+                                    // halves are the same two code units.
+                                    if (pos + 1 >= src.length || src[pos] != '\\' || src[pos + 1] != 'u') {
+                                        throw unpairedSurrogate("HIGH", code, HIGH_MUST_PAIR)
+                                    }
+                                    pos += 2
+                                    val low = readHexQuad()
+                                    if (low !in 0xDC00..0xDFFF) {
+                                        throw unpairedSurrogate("HIGH", code, HIGH_MUST_PAIR)
+                                    }
+                                    sb.append(code.toChar())
+                                    sb.append(low.toChar())
+                                } else if (code in 0xDC00..0xDFFF) {
+                                    // A low half is only ever consumed above, as the second
+                                    // element of a pair, so reaching it here means it is alone.
+                                    throw unpairedSurrogate("LOW", code, LOW_MUST_PAIR)
+                                } else {
+                                    sb.append(code.toChar())
+                                }
                             }
                             else -> throw JsonSyntaxException("bad escape '\\$e'")
                         }
@@ -304,22 +365,59 @@ object Json {
             }
         }
 
+        /**
+         * Read one number token, enforcing the RFC 8259 grammar in the LEXER (§20.2 row 3):
+         *
+         * ```text
+         * number = [ "-" ] int [ frac ] [ exp ]
+         * int    = "0" / ( digit1-9 *DIGIT )
+         * frac   = "." 1*DIGIT
+         * exp    = ("e" / "E") [ "+" / "-" ] 1*DIGIT
+         * ```
+         *
+         * The reason this is the lexer's job and not the slot reader's is TOTALITY, not
+         * pedantry. This scanner used to accept `1e`, `1e+`, `01` and `3.` as lexemes and
+         * hand them on: `"1e".toDouble()` then threw a `NumberFormatException` from deep
+         * inside a typed slot reader, which is a platform exception escaping a decoder that
+         * promises a typed refusal, at a call site nowhere near the malformed token. `01`
+         * and `3.` did not even throw — `Double.parseDouble` accepts both — so this host
+         * silently admitted two documents no conformant encoder can produce and every other
+         * host refuses.
+         */
         private fun readNumber(): JsonNumber {
             val start = pos
-            if (peek() == '-') pos++
-            while (!atEnd() && src[pos] in '0'..'9') pos++
-            if (!atEnd() && src[pos] == '.') {
+
+            fun malformed(): Nothing =
+                throw JsonSyntaxException(
+                    "malformed number at offset $start: a JSON number is " +
+                        "[-] (0 | [1-9]digits) [.digits] [(e|E)[+|-]digits] (RFC 8259)",
+                )
+
+            if (!atEnd() && src[pos] == '-') pos++
+            // int: a lone zero, or a non-zero digit followed by digits. `01` is refused here,
+            // and refusing it is the point — the platform parser reads it as 1.
+            if (atEnd() || src[pos] !in '0'..'9') malformed()
+            if (src[pos] == '0') {
                 pos++
+            } else {
                 while (!atEnd() && src[pos] in '0'..'9') pos++
             }
+            // frac: the point must be followed by at least one digit.
+            if (!atEnd() && src[pos] == '.') {
+                pos++
+                val fracStart = pos
+                while (!atEnd() && src[pos] in '0'..'9') pos++
+                if (pos == fracStart) malformed()
+            }
+            // exp: the marker (and its optional sign) must be followed by at least one digit.
             if (!atEnd() && (src[pos] == 'e' || src[pos] == 'E')) {
                 pos++
                 if (!atEnd() && (src[pos] == '+' || src[pos] == '-')) pos++
+                val expStart = pos
                 while (!atEnd() && src[pos] in '0'..'9') pos++
+                if (pos == expStart) malformed()
             }
-            val lexeme = src.substring(start, pos)
-            if (lexeme.isEmpty() || lexeme == "-") throw JsonSyntaxException("malformed number at offset $start")
-            return JsonNumber(lexeme)
+            return JsonNumber(src.substring(start, pos))
         }
 
         private fun readBool(): JsonBool =
@@ -342,6 +440,42 @@ object Json {
             } else {
                 throw JsonSyntaxException("invalid literal at offset $pos")
             }
+
+        /**
+         * Read the four hex digits of a `\uXXXX` escape, advancing past them.
+         *
+         * Each digit is validated individually rather than through
+         * `String.toIntOrNull(16)`, which accepts a LEADING SIGN: a source `\u-abc` parsed
+         * as −2748 and reached `code.toChar()`, where the JVM's narrowing conversion turned
+         * it into some arbitrary code unit with no error anywhere. A four-digit hex quad
+         * has no sign in RFC 8259 and never had one here.
+         */
+        private fun readHexQuad(): Int {
+            if (pos + 4 > src.length) throw JsonSyntaxException("truncated \\u escape at offset $pos")
+            var value = 0
+            for (i in pos until pos + 4) {
+                val digit =
+                    when (val d = src[i]) {
+                        in '0'..'9' -> d - '0'
+                        in 'a'..'f' -> d - 'a' + 10
+                        in 'A'..'F' -> d - 'A' + 10
+                        else ->
+                            throw JsonSyntaxException(
+                                "bad \\u escape '${src.substring(pos, pos + 4)}' at offset $pos",
+                            )
+                    }
+                value = value * 16 + digit
+            }
+            pos += 4
+            return value
+        }
+
+        private fun unpairedSurrogate(half: String, code: Int, rule: String): JsonSyntaxException =
+            JsonSyntaxException(
+                "an unpaired $half surrogate escape \\u" +
+                    code.toString(16).uppercase().padStart(4, '0') +
+                    " (WIRE_FORMAT.md §20.2 row 6): $rule",
+            )
 
         private fun peek(): Char {
             if (atEnd()) throw JsonSyntaxException("unexpected end of input")

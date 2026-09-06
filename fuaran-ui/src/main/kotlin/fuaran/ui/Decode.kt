@@ -86,20 +86,28 @@ private val FLOAT_SENTINELS: Map<String, Double> =
     )
 
 /**
- * An INTEGER slot: a JSON number, truncated by an integer cast. Deliberately narrower than
- * [double] — see [FLOAT_SENTINELS].
+ * An INTEGER slot (§7.1): a finite JSON number with no fractional part, inside the signed
+ * 32-bit range. Deliberately narrower than [double] — see [FLOAT_SENTINELS].
+ *
+ * `3.0` decodes as `3` — the two denote the same integer, and refusing the first refuses a
+ * document whose intent is unambiguous, for its spelling. `2.5` and `3000000000` are typed
+ * refusals rather than the saturating cast this host used to apply; that cast produced a value
+ * the author never wrote, silently, which is the same defect §20 closes one layer down in the
+ * syntax.
  *
  * The discrimination is on the JSON AST's own case, never on a widening numeric conversion, so
  * a `true` cannot reach a numeric slot by way of a boolean-to-number coercion the platform
  * would happily perform.
  */
 private fun JsonValue.int(path: String): Int =
-    (unwrapStaticEnvelope() as? JsonNumber)?.toInt()
+    (unwrapStaticEnvelope() as? JsonNumber)?.toIntOrNull()
         ?: throw FuaranDecodeException(
             FuaranDecodeException.WRONG_TYPE,
             path,
-            "expected a JSON number (an integer slot has no non-finite form, so the 'NaN' / " +
-                "'Infinity' / '-Infinity' sentinels are not accepted here)",
+            "expected a finite integral JSON number within the signed 32-bit range " +
+                "(an integer slot holds no fraction, has no non-finite form — so the 'NaN' / " +
+                "'Infinity' / '-Infinity' sentinels are not accepted here — and cannot hold a " +
+                "value outside its own width)",
         )
 
 /** A FLOAT slot: a JSON number, or one of the three exact sentinel strings ([FLOAT_SENTINELS]). */
