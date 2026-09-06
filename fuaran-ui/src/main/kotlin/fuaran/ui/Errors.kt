@@ -78,5 +78,16 @@ fun asProjectionFailure(t: Throwable): FuaranException? =
                 "decode",
                 t.message ?: "the session returned a document past a wire limit",
             )
+        // The reader's number grammar is total, so nothing on the decode path should reach a
+        // `NumberFormatException` any more — this arm is the floor under that claim. A lexeme the
+        // grammar admitted but the JDK would not convert is a defect in the DATA path, and a host
+        // that met one would rather show the banner than unwind its main thread over a number.
+        is NumberFormatException ->
+            FuaranException(
+                FuaranDecodeException.INVALID_JSON,
+                "$",
+                "decode",
+                "a number in the session's document could not be read: ${t.message}",
+            )
         else -> null
     }

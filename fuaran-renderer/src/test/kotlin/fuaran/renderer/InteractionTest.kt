@@ -71,6 +71,37 @@ class InteractionTest {
             onNodeWithText("Stable").assertIsDisplayed()
         }
 
+    /**
+     * A write that lands a node this projection does not model is survived: [FuaranHost.lastError]
+     * carries the decode failure, the last-good tree stays on screen, and the Compose main thread
+     * is never unwound. The fake swaps its tree on the `\$state` write, which is the shape of the
+     * live core accepting vocabulary this decode-only surface cannot read.
+     */
+    @Test
+    fun aDecoderGapAfterAStateWriteSurfacesAsLastErrorAndKeepsLastGoodTree() =
+        runComposeUiTest {
+            val session = FakeTreeSession(md("Stable"))
+            val host = FuaranHost.start(session)
+            setContent { FuaranTheme(darkTheme = false) { InteractiveFuaranTree(host) } }
+            waitForIdle()
+
+            session.treeAfterNextWrite = """{"id":"root","kind":{"${'$'}type":"NotAKindThisProjectionModels"}}"""
+            host.writeBack("name", "Ada")
+            waitForIdle()
+
+            val err = host.lastError
+            assertNotNull("a decode gap must set a typed lastError", err)
+            assertEquals("WRONG_NODE_KIND", err!!.code)
+            assertEquals("decode", err.errorClass)
+            onNodeWithText("Stable").assertIsDisplayed()
+
+            // And the host is still alive: a good write clears the error and re-projects.
+            host.applyOp(md("Recovered"))
+            waitForIdle()
+            assertNull(host.lastError)
+            onNodeWithText("Recovered").assertIsDisplayed()
+        }
+
     @Test
     fun formControlEditWritesThroughTheStateChannel() =
         runComposeUiTest {
@@ -103,6 +134,9 @@ class FakeTreeSession(initial: String) : TreeSession {
     private var current: String = initial
     val stateWrites: MutableList<Pair<String, String>> = mutableListOf()
 
+    /** When set, the next `\$state` write adopts this tree — a write the core accepts and re-projects. */
+    var treeAfterNextWrite: String? = null
+
     override fun treeJson(): String = current
 
     /**
@@ -122,6 +156,10 @@ class FakeTreeSession(initial: String) : TreeSession {
 
     override fun setState(key: String, valueJson: String) {
         stateWrites.add(key to valueJson)
+        treeAfterNextWrite?.let {
+            current = it
+            treeAfterNextWrite = null
+        }
     }
 
     override fun setFilter(key: String, valueJson: String) {

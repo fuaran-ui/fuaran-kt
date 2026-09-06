@@ -378,30 +378,46 @@ fun main() {
             val pool = Executors.newFixedThreadPool(5)
             val start = CountDownLatch(1)
             val bad = java.util.concurrent.ConcurrentLinkedQueue<String>()
-            repeat(4) {
-                pool.submit {
-                    start.await()
-                    repeat(50) {
-                        try {
-                            val json = session.treeJson()
-                            if (json != expected) {
-                                // The one genuinely wrong outcome: a call that RETURNED, having
-                                // read a handle that was no longer the session's.
-                                bad.add("attempt $attempt: read diverged after close (${json.take(60)})")
+            // Every worker's Future is KEPT and joined below. A `submit` whose Future is dropped
+            // swallows whatever its task threw, so on the old code the two likeliest outcomes —
+            // the untyped `IllegalStateException` from `check(!closed)`, and a
+            // `RejectedExecutionException` from a submit after shutdown — would have vanished,
+            // leaving only a byte divergence or a process crash to fail the leg. Joining makes
+            // "refused by NAME" an assertion rather than a hope.
+            val workers =
+                List(4) {
+                    pool.submit {
+                        start.await()
+                        repeat(50) {
+                            try {
+                                val json = session.treeJson()
+                                if (json != expected) {
+                                    // The one genuinely wrong outcome: a call that RETURNED,
+                                    // having read a handle that was no longer the session's.
+                                    bad.add("attempt $attempt: read diverged after close (${json.take(60)})")
+                                }
+                            } catch (_: FuaranSessionClosedException) {
+                                // Late — correct, and exactly what the typed refusal is for.
                             }
-                        } catch (_: FuaranSessionClosedException) {
-                            // Late — correct, and exactly what the typed refusal is for.
                         }
                     }
                 }
-            }
-            pool.submit {
-                start.await()
-                session.close()
-            }
+            val closer =
+                pool.submit {
+                    start.await()
+                    session.close()
+                }
             start.countDown()
             pool.shutdown()
             require(pool.awaitTermination(30, TimeUnit.SECONDS)) { "close race did not finish in time" }
+            (workers + closer).forEach { future ->
+                try {
+                    future.get()
+                } catch (e: java.util.concurrent.ExecutionException) {
+                    val cause = e.cause ?: e
+                    bad.add("attempt $attempt: escaped as ${cause::class.java.simpleName}: ${cause.message}")
+                }
+            }
             require(bad.isEmpty()) { bad.joinToString("; ") }
         }
     }

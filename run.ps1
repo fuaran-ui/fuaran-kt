@@ -155,6 +155,12 @@ $RendererNeutralKt = @(
 $TestKt = @(
     Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\test\kotlin") -Filter "CorpusDecodeTest.kt" -ErrorAction SilentlyContinue |
         ForEach-Object FullName
+    # The decoder-robustness fuzz leg (Phase 1023's family, extended here by Phase 1540 H-30). Named
+    # explicitly rather than picked up by a recursive glob, because this list deliberately compiles
+    # only the `main()`-driven harnesses and not every file under `src/test/kotlin` — see the note
+    # above. A new harness that is not listed here compiles nowhere and runs nowhere.
+    Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\test\kotlin") -Filter "DecoderFuzzTest.kt" -ErrorAction SilentlyContinue |
+        ForEach-Object FullName
     Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-core\src\test\kotlin") -Filter "SessionTest.kt" -ErrorAction SilentlyContinue |
         ForEach-Object FullName
     # The accessibility projection's two JUnit-free harnesses — the mapping decisions and the
@@ -255,6 +261,16 @@ if ($LASTEXITCODE -ne 0) { throw "render-obligation conformance gate failed" }
 Write-Host "`n== Phase 542 :: corpus render-coverage ==" -ForegroundColor Cyan
 & $Java -cp $Classpath "fuaran.ui.CorpusDecodeTestKt"
 if ($LASTEXITCODE -ne 0) { throw "Phase 542 corpus harness failed" }
+
+# --- Phase 1540 (H-30): decoder robustness fuzz ------------------------------------- #
+# The corpus leg above asserts the malformed inputs somebody thought of; this one asserts the
+# PROPERTY they are evidence for - that no input escapes as anything but the typed error. It runs
+# AFTER the corpus leg deliberately, the opposite of the placement argument the legs above record:
+# those establish nothing the decode harness needs, whereas a fuzz counterexample is far harder to
+# read when a named corpus vector is already failing for a reason the fuzz will rediscover as noise.
+Write-Host "`n== Phase 1540 :: decoder robustness fuzz ==" -ForegroundColor Cyan
+& $Java -cp $Classpath "fuaran.ui.DecoderFuzzTestKt"
+if ($LASTEXITCODE -ne 0) { throw "Phase 1540 decoder fuzz failed" }
 
 # --- Phase 543: desktop JNI live-session round-trip --------------------------------- #
 $SessionTestClass = "fuaran.core.SessionTestKt"

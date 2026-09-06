@@ -118,6 +118,10 @@ class FuaranSession private constructor(
      * so an in-flight read completes against a live handle and only a call submitted after it is
      * refused (with [FuaranSessionClosedException]).
      *
+     * It BLOCKS until that queued free has run — behind every call ahead of it — so a close from
+     * a UI thread waits on whatever native work is in flight. Never call it FROM the confinement
+     * executor (a session's own callback), which would wait on itself.
+     *
      * The `if (closed) return` guard this replaced was not the idempotence it looked like: two
      * threads could both read `false` and both proceed. [Cleaner.Cleanable.clean] already
      * guarantees the release action runs at most once whichever thread reaches it and whether it
@@ -197,8 +201,10 @@ class FuaranSession private constructor(
                     .get()
             } catch (_: Throwable) {
                 // Reclamation is best-effort; never let a free failure escape the Cleaner thread.
-                // A rejection here means the executor was already shut down, so the handle was
-                // freed by an earlier release and there is nothing left to reclaim.
+                // This action runs at most once (Cleanable's contract) and nothing else shuts the
+                // executor down, so a throw here is the native free itself failing — the handle
+                // is then leaked deliberately rather than freed twice or reached again: `freed`
+                // is already set, so every later call is refused.
             } finally {
                 executor.shutdown()
             }
