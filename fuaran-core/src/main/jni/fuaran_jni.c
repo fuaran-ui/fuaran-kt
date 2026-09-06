@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  * Copyright Diametrical Ltd.
  *
- * The hand-written JNI shim over the fuaran-rs C-ABI (../../../../fuaran-rs/include/fuaran.h).
+ * The hand-written JNI shim over the Fuaran core C-ABI (see the include note below).
  * It implements the Java_fuaran_core_FuaranNative_* symbols the JVM binds for the
  * `native` declarations in FuaranNative.java, forwarding to the `fuaran_*` session
  * surface. No JNA/JNR — a thin, dependency-light C layer per the house stance.
@@ -14,37 +14,62 @@
  * fuaran_alloc, filled from the jbyteArray, borrowed for the one call, then freed.
  */
 #include "generated/fuaran_core_FuaranNative.h"
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 
-/* --- fuaran-rs C-ABI (subset used by the session binding) ------------------------- */
-typedef struct FuaranSession FuaranSession;
-typedef struct FuaranBuf {
-    uint8_t *ptr;
-    size_t len;
-} FuaranBuf;
-
-extern uint8_t *fuaran_alloc(size_t len);
-extern void fuaran_dealloc(uint8_t *ptr, size_t len);
-extern FuaranSession *fuaran_session_new(const uint8_t *ptr, size_t len);
-extern void fuaran_session_free(FuaranSession *session);
-extern FuaranBuf fuaran_session_render(FuaranSession *session);
-extern FuaranBuf fuaran_session_tree_json(FuaranSession *session);
-extern FuaranBuf fuaran_session_project_resolved(FuaranSession *session);
-extern FuaranBuf fuaran_session_resolved_rows(FuaranSession *session, const uint8_t *ptr, size_t len);
-extern FuaranBuf fuaran_session_apply_op(FuaranSession *session, const uint8_t *ptr, size_t len);
-extern FuaranBuf fuaran_session_set_state(FuaranSession *session, const uint8_t *k_ptr, size_t k_len,
-                                          const uint8_t *v_ptr, size_t v_len);
-extern FuaranBuf fuaran_session_set_filter(FuaranSession *session, const uint8_t *k_ptr, size_t k_len,
-                                           const uint8_t *v_ptr, size_t v_len);
-extern FuaranBuf fuaran_session_set_query(FuaranSession *session, const uint8_t *k_ptr, size_t k_len,
-                                          const uint8_t *v_ptr, size_t v_len);
-extern FuaranBuf fuaran_last_error(void);
+/*
+ * The C-ABI is INCLUDED, not re-declared.
+ *
+ * `include/fuaran.h` beside this file is a generated, byte-compared copy of the reference header
+ * the Rust core ships - the same discipline the reference stylesheet has: one canonical artefact,
+ * copies regenerated in the producing repo and byte-compared in every consumer's gate, never
+ * hand-edited. The gate compares it against the sibling checkout when one is present and reports
+ * NOT CHECKED when it is not, because a single-repo checkout has no sibling and "nothing to
+ * compare" must never read as "compared".
+ *
+ * This file used to carry its own `FuaranBuf` struct and its own `extern` prototypes, which is the
+ * worst available shape for an FFI shim: a change to the return ABI or to any signature compiled
+ * CLEANLY here against the stale local declarations, and the disagreement surfaced at RUN time as
+ * a corrupted buffer or a wild pointer - on a device, inside an app, with nothing pointing back at
+ * the header change that caused it. Including the real header turns an ABI change into a compile
+ * error in the one place that can still act on it.
+ */
+#include "include/fuaran.h"
 
 /* --- marshalling helpers ----------------------------------------------------------- */
 
-/* Copy a Rust-owned FuaranBuf into a fresh jbyteArray, then free the buffer. */
+/*
+ * Copy a Rust-owned FuaranBuf into a fresh jbyteArray, then free the buffer.
+ *
+ * Two failure modes are answered here rather than left to the JVM, and both used to end with a
+ * NULL returned into a Kotlin declaration typed as a non-null ByteArray:
+ *
+ *   - `b.len` above the maximum jsize. `(jsize)b.len` TRUNCATES, so a payload past 2 GiB became a
+ *     small array and the shim copied only the low bytes — silently handing Kotlin a truncated
+ *     document that decodes as malformed JSON, with nothing to say where it was cut. Refused
+ *     instead: the array cannot exist, so no array is claimed to.
+ *   - `NewByteArray` returning NULL, with an OutOfMemoryError already pending on the thread. That
+ *     is the JNI protocol's own way of reporting a failed allocation, and the JVM raises it on
+ *     return to Java, so the Kotlin side sees the error rather than a null in a non-null slot.
+ *
+ * The first case has no pending exception, so this throws one itself — returning a bare NULL there
+ * would be exactly the null-in-a-non-null-slot the JVM's own path avoids.
+ *
+ * The Rust buffer is freed on EVERY path, refusals included: it is owned by this call the moment
+ * it is returned, and an early return that skipped the free would leak it.
+ */
 static jbyteArray buf_to_jarray(JNIEnv *env, FuaranBuf b) {
+    if (b.len > (size_t)INT_MAX) {
+        if (b.ptr != NULL) {
+            fuaran_dealloc(b.ptr, b.len);
+        }
+        jclass err = (*env)->FindClass(env, "java/lang/OutOfMemoryError");
+        if (err != NULL) {
+            (*env)->ThrowNew(env, err, "fuaran: payload exceeds the maximum Java array length");
+        }
+        return NULL;
+    }
     jbyteArray out = (*env)->NewByteArray(env, (jsize)b.len);
     if (out != NULL && b.len > 0) {
         (*env)->SetByteArrayRegion(env, out, 0, (jsize)b.len, (const jbyte *)b.ptr);

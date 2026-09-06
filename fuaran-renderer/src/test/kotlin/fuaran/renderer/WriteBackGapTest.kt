@@ -40,7 +40,7 @@ class WriteBackGapTest {
 
     private fun host(tree: String): Pair<FuaranHost, FakeTreeSession> {
         val session = FakeTreeSession(tree)
-        return FuaranHost(session) to session
+        return FuaranHost.start(session) to session
     }
 
     // ── The arms the phase named ─────────────────────────────────────────────

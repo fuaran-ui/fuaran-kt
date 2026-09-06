@@ -10,11 +10,12 @@ Apache-2.0 from day one.
 
 ## Get started
 
-```kotlin
-dependencies {
-    implementation("io.fuaran:fuaran-ui:0.1.0")   // Maven Central
-}
-```
+> **Not published yet.** There is no Maven Central release of these modules, and nothing in this
+> repository publishes one. Build from source (`pwsh ./run.ps1`), or include the modules in your own
+> Gradle build with an `includeBuild` / project dependency. A coordinate is printed here on the day
+> it resolves and not before — this section used to carry
+> `implementation("io.fuaran:fuaran-ui:0.1.0")`, which is not a plan, it is a dependency line that
+> fails.
 
 Decode a session's canonical tree JSON into the sealed model and match over it with
 `when` — an unmodelled `$type` throws a structured `FuaranDecodeException`:

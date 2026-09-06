@@ -27,30 +27,37 @@ data class JsonString(val value: String) : JsonValue
 
 /** A JSON number, keeping the source lexeme so no precision is lost before a typed slot reads it. */
 data class JsonNumber(val raw: String) : JsonValue {
+    /**
+     * The lexeme as a `Double`. Total for any value the reader produced: [Json]'s number scanner
+     * admits exactly the RFC 8259 grammar, and `String.toDouble` accepts every lexeme in it —
+     * rounding to the nearest representable value, and to an infinity for an exponent past the
+     * `Double` range, which is what a JSON reader is meant to do rather than an error.
+     */
     fun toDouble(): Double = raw.toDouble()
 
     /**
-     * The value as an `Int`, or `null` when this number is not one an integer slot can hold.
+     * The lexeme as an `Int`, or `null` when it does not denote one **exactly**.
      *
      * §7.1: an integer slot admits a finite number with no fractional part inside the signed
      * 32-bit range, and nothing else. `3.0` is `3`; `2.5`, `1e10` and `1e400` are refusals.
      *
-     * `null` rather than a saturating cast, and that is the whole point of the change.
-     * `toDouble().toInt()` is TOTAL on the JVM — it saturates at `Int.MAX_VALUE` and rounds
-     * toward zero — so `3000000000` silently became `2147483647` and `2.5` silently became
-     * `2`. Both are a value the author did not write, produced with no error anywhere, which
-     * is exactly the class §20 exists to close one layer down in the syntax. The caller turns
-     * the `null` into a typed `WRONG_TYPE`; a cast cannot be turned into anything.
+     * The `toDouble().toInt()` pair this replaced had to go because the JVM's `Double`-to-`Int`
+     * narrowing SATURATES: `3000000000` came back as `Int.MAX_VALUE` and `1.5` came back as `1`.
+     * Both silently — an integer slot received a number that is not the one the document carried,
+     * and nothing downstream could tell. The conformance corpus pins an integer slot as having no
+     * non-numeric form at all (`reject-binding-int-*`); quietly reshaping one that IS numeric but
+     * out of range is the same defect one step further in.
+     *
+     * `BigDecimal` rather than a hand-rolled parse, because the question "does this lexeme denote
+     * an exact integer" must be answered for `1.0` and `1e3` (which do) as well as for `1.5` and
+     * `3e9` (which do not — the second only because it leaves `Int`), and a decimal type answers it
+     * with no rounding step in the middle. It is `java.math`, so `fuaran-ui` stays dependency-free.
      */
-    fun toIntOrNull(): Int? {
-        val d = toDouble()
-        if (!d.isFinite()) return null
-        if (d != kotlin.math.truncate(d)) return null
-        if (d < Int.MIN_VALUE.toDouble() || d > Int.MAX_VALUE.toDouble()) return null
-        return d.toInt()
-    }
+    fun toIntOrNull(): Int? = runCatching { java.math.BigDecimal(raw).intValueExact() }.getOrNull()
 
-    fun toLong(): Long = toDouble().toLong()
+    /** The lexeme as a `Long`, or `null` when it does not denote one exactly. See [toIntOrNull]. */
+    fun toLongOrNull(): Long? =
+        runCatching { java.math.BigDecimal(raw).longValueExact() }.getOrNull()
 }
 
 data class JsonBool(val value: Boolean) : JsonValue

@@ -115,6 +115,90 @@ class ServerDrivenDriverTest {
         assertTrue(postedEvents[0].contains("click"))
     }
 
+    /**
+     * The driver renders the RESOLVED projection, not the round-trip tree.
+     *
+     * This is the leg that was missing for as long as the defect existed, and the fixture is built
+     * so it can only pass for the right reason: the session's two reads return DIFFERENT trees.
+     * `treeJson()` carries the tree as authored — a `Bound(Transform)` label, which a decode-only
+     * surface cannot evaluate and renders as the empty string. `projectResolved()` carries what the
+     * Rust core's resolved projection hands back: the same tree with that scalar `Transform` folded
+     * to the literal it evaluates to.
+     *
+     * A driver reading `treeJson()` therefore sees `""` here and one reading `projectResolved()`
+     * sees `"2"`. Before the fix this assertion fails on the empty string — which is exactly what
+     * the server-driven path showed users for every computed value, while the interactive host
+     * path, already reading the resolved projection, showed them correctly.
+     */
+    @Test
+    fun theDriverRendersTheResolvedProjectionNotTheRoundTripTree() {
+        val unresolved =
+            """{"id":"root","kind":{"${'$'}type":"Markdown","text":{"${'$'}type":"Bound","binding":""" +
+                """{"${'$'}type":"Transform","pipeline":[],"source":{"columns":{"id":{"values":["A","B"]}},""" +
+                """"schema":[{"name":"id","type":"string"}]}}}}}"""
+        val resolved = md("root", "2")
+
+        val states = mutableListOf<DriverState>()
+        ServerDrivenDriver(HttpUrlTransport(baseUrl)) { FakeSession(unresolved, resolvedTreeJson = resolved) }
+            .run { states.add(it) }
+
+        val first = states.first()
+        assertTrue(first is Rendered, "the seed must project, was ${first::class.simpleName}")
+        assertEquals(
+            "2",
+            text((first as Rendered).tree),
+            "the driver must project from projectResolved(): reading treeJson() renders the " +
+                "unevaluated Transform as an empty string",
+        )
+    }
+
+    /**
+     * A streamed op that lands a node this projection does not model is SURVIVED, as [Rejected]
+     * with the last-good tree, and the loop keeps going.
+     *
+     * The Rust core accepts wire vocabulary ahead of what a decode-only surface renders, so the
+     * session applies such an op happily and `project` is what throws — a decode failure, not a
+     * validator reject. Before the fix only `FuaranException` was caught, so that throw ended the
+     * driver on an op the session itself had accepted. The fake adopts the node verbatim (it does
+     * not decode), which is exactly the shape of the live core handing back a tree the projection
+     * cannot read.
+     */
+    @Test
+    fun aDecoderGapInAStreamedOpIsSurvivedWithTheLastGoodTree() {
+        val unmodelled = """{"id":"root","kind":{"${'$'}type":"NotAKindThisProjectionModels","weight":3}}"""
+        val ops =
+            listOf(
+                """{"cmd":"replace","node":${md("root", "One")}}""",
+                """{"cmd":"replace","node":$unmodelled}""",
+                """{"cmd":"replace","node":${md("root", "Three")}}""",
+            ).joinToString("\n")
+        val gapServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        gapServer.createContext("/tree") { ex -> respond(ex, md("root", "Hello")) }
+        gapServer.createContext("/ops") { ex -> respond(ex, ops) }
+        gapServer.start()
+        try {
+            val states = mutableListOf<DriverState>()
+            val finalState =
+                ServerDrivenDriver(HttpUrlTransport("http://127.0.0.1:${gapServer.address.port}")) { FakeSession(it) }
+                    .run { states.add(it) }
+
+            assertEquals(4, states.size, "seed + three ops, the gap included")
+            val gap = states[2]
+            assertTrue(gap is Rejected, "a decode gap must surface as Rejected, was ${gap::class.simpleName}")
+            gap as Rejected
+            assertEquals("WRONG_NODE_KIND", gap.error.code)
+            assertTrue(gap.error.path?.startsWith("$") == true, "a \$-rooted path, was ${gap.error.path}")
+            assertEquals("One", text(gap.tree), "the last-good tree is retained across the gap")
+
+            val after = states[3]
+            assertTrue(after is Rendered, "the loop continues past the gap")
+            assertEquals("Three", text((after as Rendered).tree))
+            assertTrue(finalState is Rendered)
+        } finally {
+            gapServer.stop(0)
+        }
+    }
+
     @Test
     fun referenceTransportDrivesAllThreeEndpoints() {
         val transport = HttpUrlTransport(baseUrl)

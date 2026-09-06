@@ -82,14 +82,35 @@ private fun SampleScreen() {
     }
 }
 
-/** Load the JNI shim and open a confined session over the seed, or `null` when native is absent. */
-private fun tryCreateLiveHost(): FuaranHost? =
+/**
+ * Load the JNI shim and open a confined session over the seed, or `null` when the native library is
+ * not packaged for this device.
+ *
+ * The catch is narrowed to [UnsatisfiedLinkError] on purpose. `catch (_: Throwable)` swallowed
+ * everything — a malformed seed tree, a validator reject, a decode gap, an OOM — and reported all of
+ * them as "native is absent", so the sample fell back to a static render and the actual defect was
+ * invisible. The only condition this fallback is *for* is the library genuinely not being there,
+ * which is exactly what `System.loadLibrary` raises.
+ *
+ * And the session is CLOSED when the host cannot be built. `FuaranSession.create` may succeed and the
+ * host construction still fail (the seed decodes core-side but not through this projection), which
+ * used to leave a live native handle owned by nobody: reclaimed only by the `Cleaner`, at some later
+ * garbage collection, or never.
+ */
+private fun tryCreateLiveHost(): FuaranHost? {
     try {
         NativeBridge.loadLibrary("fuaran_jni")
-        FuaranHost(FuaranSession.create(NativeBridge, SEED_TREE))
-    } catch (_: Throwable) {
-        null
+    } catch (_: UnsatisfiedLinkError) {
+        return null
     }
+    val session = FuaranSession.create(NativeBridge, SEED_TREE)
+    return try {
+        FuaranHost.start(session)
+    } catch (t: Throwable) {
+        session.close()
+        throw t
+    }
+}
 
 /**
  * Drive the sample from a server-driven (SDUI) fixture: fetch the initial tree, apply the streamed op

@@ -98,17 +98,33 @@ private val FLOAT_SENTINELS: Map<String, Double> =
  * The discrimination is on the JSON AST's own case, never on a widening numeric conversion, so
  * a `true` cannot reach a numeric slot by way of a boolean-to-number coercion the platform
  * would happily perform.
+ *
+ * Two refusals, one code and one `$`-rooted path, because an author repairs both the same way —
+ * by writing a different number. The second used to be no refusal at all: `toDouble().toInt()`
+ * SATURATED `3000000000` to `Int.MAX_VALUE` and truncated `1.5` to `1`, so the slot received a
+ * value the document never carried and every host downstream believed it. The corpus already
+ * pins an integer slot as having no non-numeric form (`reject-binding-int-*`); silently reshaping
+ * one that IS numeric but out of range is the same defect one step further in.
  */
-private fun JsonValue.int(path: String): Int =
-    (unwrapStaticEnvelope() as? JsonNumber)?.toIntOrNull()
+private fun JsonValue.int(path: String): Int {
+    val number =
+        unwrapStaticEnvelope() as? JsonNumber
+            ?: throw FuaranDecodeException(
+                FuaranDecodeException.WRONG_TYPE,
+                path,
+                "expected a JSON number (an integer slot has no non-finite form, so the 'NaN' / " +
+                    "'Infinity' / '-Infinity' sentinels are not accepted here)",
+            )
+    // The lexeme is named in the message: the author's repair is to change the NUMBER, and the
+    // number they wrote is the one thing this refusal knows and they do not.
+    return number.toIntOrNull()
         ?: throw FuaranDecodeException(
             FuaranDecodeException.WRONG_TYPE,
             path,
-            "expected a finite integral JSON number within the signed 32-bit range " +
-                "(an integer slot holds no fraction, has no non-finite form — so the 'NaN' / " +
-                "'Infinity' / '-Infinity' sentinels are not accepted here — and cannot hold a " +
-                "value outside its own width)",
+            "expected a JSON integer this platform can hold, got '${number.raw}' — an integer " +
+                "slot carries neither a fractional value nor one outside the signed 32-bit range",
         )
+}
 
 /** A FLOAT slot: a JSON number, or one of the three exact sentinel strings ([FLOAT_SENTINELS]). */
 private fun JsonValue.double(path: String): Double =
