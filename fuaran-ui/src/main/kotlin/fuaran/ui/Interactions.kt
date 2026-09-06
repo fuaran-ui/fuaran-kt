@@ -19,14 +19,17 @@ interface TreeSession : AutoCloseable {
 
     /**
      * The current tree as a **resolved projection** — [treeJson] with every scalar-slot
-     * `Binding.Transform` folded to the value it evaluates to (Phase 650). The *render* path
-     * decodes this, so a decode-only surface renders resolved compute values. Defaults to
-     * [treeJson] for a conformer with no evaluator (an in-memory fake / a Transform-free tree);
-     * the live [FuaranSession] overrides it with the core's resolved projection. A Kotlin
-     * interface default is overridden by the class member unambiguously, so no evaluator leaks
-     * into the pure surface.
+     * `Binding.Transform` folded to the value it evaluates to (Phase 650). This is the read the
+     * RENDER path decodes, so a decode-only surface renders already-resolved compute values.
+     *
+     * **Abstract, deliberately.** It was `= treeJson()`, and that default was not the harmless
+     * convenience it read as: a conformer that simply never mentioned `projectResolved` silently
+     * became one that resolves nothing, and every scalar `Transform` in its trees rendered as the
+     * empty string with no failure anywhere to say so. An implementor with no evaluator now says
+     * so — `override fun projectResolved(): String = treeJson()` is one line, and it is a CLAIM
+     * rather than an omission. The live [FuaranSession] answers with the core's own projection.
      */
-    fun projectResolved(): String = treeJson()
+    fun projectResolved(): String
 
     /** Apply a canonical `TreeOp` JSON; throws [FuaranException] on a validator reject. */
     fun applyOp(opJson: String)

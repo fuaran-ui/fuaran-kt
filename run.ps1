@@ -73,6 +73,48 @@ $Java = if ($JavaHome) { Join-Path $JavaHome "bin\java.exe" } else { $null }
 $Javac = if ($JavaHome) { Join-Path $JavaHome "bin\javac.exe" } else { $null }
 $Kotlinc = Resolve-Tool "kotlinc" @("C:\Program Files\kotlinc\bin\kotlinc.bat")
 
+# --- C-ABI header drift (the reference-stylesheet shape) ---------------------------- #
+# `fuaran-core/src/main/jni/include/fuaran.h` is a COPY. The reference lives in the Rust core, the
+# JNI shim `#include`s the copy rather than re-declaring the ABI, and this leg is what keeps the
+# copy honest: byte-compare it against the reference when the sibling checkout is present.
+#
+# AHEAD of the toolchain skip below, deliberately. This is a text comparison — it needs no JDK, no
+# Kotlin and no Rust — so a box with none of them still answers the one question it CAN answer,
+# rather than exiting 0 having checked nothing at all.
+#
+# NOT CHECKED rather than a silent pass when the sibling is absent, and that distinction is why
+# this prints anything: a single-repo CI checkout has no sibling, and a green line saying nothing
+# about the header would read to every future log reader as "the copy is current". It is
+# deliberately not a hard failure either — a contributor with only this repo cloned is not doing
+# anything wrong.
+$HeaderCopy = Join-Path $Repo "fuaran-core\src\main\jni\include\fuaran.h"
+$HeaderRef = Join-Path $Repo "..\fuaran-rs\include\fuaran.h"
+Write-Host "`n== C-ABI header (fuaran.h) drift ==" -ForegroundColor Cyan
+if (-not (Test-Path $HeaderCopy)) {
+    throw "fuaran.h copy missing at $HeaderCopy — the JNI shim includes it and cannot compile without it."
+}
+elseif (-not (Test-Path $HeaderRef)) {
+    Write-Host "NOT CHECKED: no sibling core checkout at $HeaderRef — the copy was not compared." -ForegroundColor Yellow
+}
+elseif ((Get-FileHash -Algorithm SHA256 $HeaderCopy).Hash -ne (Get-FileHash -Algorithm SHA256 $HeaderRef).Hash) {
+    throw @"
+fuaran.h has drifted from the reference.
+
+  copy:      $HeaderCopy
+  reference: $HeaderRef
+
+The copy is GENERATED — regenerate it rather than hand-editing either side:
+  Copy-Item '$HeaderRef' '$HeaderCopy'
+
+Then read the diff before committing. A change to the C-ABI is a change to what the JNI shim
+compiles against, and the whole point of the copy is that you meet it here rather than at run time
+on a device.
+"@
+}
+else {
+    Write-Host "fuaran.h byte-identical to the reference." -ForegroundColor Green
+}
+
 if (-not ($Java -and (Test-Path $Java)) -or -not $Kotlinc) {
     Write-Host "SKIP: no JDK ($Java) or kotlinc found — nothing to build. (A JDK 21 + Kotlin 2.x are required.)" -ForegroundColor Yellow
     exit 0

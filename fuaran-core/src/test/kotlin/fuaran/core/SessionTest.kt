@@ -9,6 +9,7 @@ import fuaran.ui.Callout
 import fuaran.ui.Fact
 import fuaran.ui.FuaranException
 import fuaran.ui.FuaranSession
+import fuaran.ui.FuaranSessionClosedException
 import fuaran.ui.JsonObject
 import fuaran.ui.JsonString
 import fuaran.ui.LiteralText
@@ -337,6 +338,112 @@ fun main() {
                 true
             }
         require(threw) { "expected IllegalStateException calling treeJson() after close()" }
+    }
+
+    // --- Lifetime: a use-after-close is TYPED, not merely an IllegalStateException ---
+    runner.check("lifetime/use-after-close-is-FuaranSessionClosedException") {
+        val session = FuaranSession.create(NativeBridge, SEED_METRIC)
+        session.close()
+        val threw =
+            try {
+                session.projectResolved()
+                false
+            } catch (_: FuaranSessionClosedException) {
+                true
+            }
+        require(threw) { "expected FuaranSessionClosedException, not a bare IllegalStateException" }
+    }
+
+    // --- Lifetime: close RACING a call must not free the handle under it ---
+    //
+    // The failure this covers is a native use-after-free, and the shape of the test is worth
+    // explaining. `onExecutor` used to read `closed` on the CALLING thread and then submit: a
+    // reader could pass that check, be descheduled, and submit after the closer had already queued
+    // `sessionFree`, so `sessionTreeJson` ran against a handle the core no longer owned. That
+    // returns garbage, or crashes under a hardened allocator; either way the JVM cannot report it
+    // as anything.
+    //
+    // So the assertion is NOT "no exception happened". A refusal is a correct outcome — the reader
+    // may genuinely be late — and demanding otherwise would only re-test the scheduler. What is
+    // asserted is that every call either returns THE RIGHT BYTES or is refused by name, and that
+    // the process survives to say so. A run in which the free won every race passes; a run in
+    // which it lost and read freed memory does not.
+    //
+    // The legs are not serialised to make them pass: both threads run unsynchronised against the
+    // same session from a shared barrier, with the closer interleaved mid-stream.
+    runner.check("lifetime/close-does-not-race-an-in-flight-call") {
+        val expected = FuaranSession.create(NativeBridge, SEED_METRIC).use { it.treeJson() }
+        repeat(40) { attempt ->
+            val session = FuaranSession.create(NativeBridge, SEED_METRIC)
+            val pool = Executors.newFixedThreadPool(5)
+            val start = CountDownLatch(1)
+            val bad = java.util.concurrent.ConcurrentLinkedQueue<String>()
+            repeat(4) {
+                pool.submit {
+                    start.await()
+                    repeat(50) {
+                        try {
+                            val json = session.treeJson()
+                            if (json != expected) {
+                                // The one genuinely wrong outcome: a call that RETURNED, having
+                                // read a handle that was no longer the session's.
+                                bad.add("attempt $attempt: read diverged after close (${json.take(60)})")
+                            }
+                        } catch (_: FuaranSessionClosedException) {
+                            // Late — correct, and exactly what the typed refusal is for.
+                        }
+                    }
+                }
+            }
+            pool.submit {
+                start.await()
+                session.close()
+            }
+            start.countDown()
+            pool.shutdown()
+            require(pool.awaitTermination(30, TimeUnit.SECONDS)) { "close race did not finish in time" }
+            require(bad.isEmpty()) { bad.joinToString("; ") }
+        }
+    }
+
+    // --- Lifetime: concurrent double-close frees exactly once ---
+    //
+    // `close()` was `if (closed) return; closed = true; clean()`, which is not the idempotence it
+    // reads as: two threads could both observe `false` and both proceed. What actually saved it is
+    // `Cleanable.clean()`, which is atomic — so the guard added a race and no protection, and the
+    // sequential double-close leg above could never have shown that.
+    runner.check("lifetime/concurrent-double-close-frees-once") {
+        repeat(40) {
+            val session = FuaranSession.create(NativeBridge, SEED_METRIC)
+            val closers = 6
+            val pool = Executors.newFixedThreadPool(closers)
+            val start = CountDownLatch(1)
+            val failures = java.util.concurrent.ConcurrentLinkedQueue<String>()
+            repeat(closers) {
+                pool.submit {
+                    start.await()
+                    try {
+                        session.close()
+                    } catch (t: Throwable) {
+                        failures.add("close() threw ${t::class.java.simpleName}: ${t.message}")
+                    }
+                }
+            }
+            start.countDown()
+            pool.shutdown()
+            require(pool.awaitTermination(30, TimeUnit.SECONDS)) { "double-close race did not finish in time" }
+            require(failures.isEmpty()) { failures.joinToString("; ") }
+            // A second free would have aborted the process long before this line; reaching it, and
+            // getting the typed refusal, is the evidence the handle was released exactly once.
+            val threw =
+                try {
+                    session.treeJson()
+                    false
+                } catch (_: FuaranSessionClosedException) {
+                    true
+                }
+            require(threw) { "expected FuaranSessionClosedException after a concurrent double close" }
+        }
     }
 
     // --- Confinement: concurrent callers are serialised through the single-owner executor ---

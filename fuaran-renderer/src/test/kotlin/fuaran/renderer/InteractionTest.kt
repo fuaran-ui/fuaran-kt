@@ -39,7 +39,7 @@ class InteractionTest {
     fun applyingAnOpReprojectsAndRecomposes() =
         runComposeUiTest {
             val session = FakeTreeSession(md("Hello"))
-            val host = FuaranHost(session)
+            val host = FuaranHost.start(session)
             setContent { FuaranTheme(darkTheme = false) { InteractiveFuaranTree(host) } }
             waitForIdle()
 
@@ -57,7 +57,7 @@ class InteractionTest {
     fun aValidatorRejectSurfacesAsTypedErrorAndKeepsLastGoodTree() =
         runComposeUiTest {
             val session = FakeTreeSession(md("Stable"))
-            val host = FuaranHost(session)
+            val host = FuaranHost.start(session)
             setContent { FuaranTheme(darkTheme = false) { InteractiveFuaranTree(host) } }
             waitForIdle()
 
@@ -81,7 +81,7 @@ class InteractionTest {
                     """"label":{"${'$'}type":"Literal","text":"Name"},"kind":{"${'$'}type":"Text",""" +
                     """"value":{"${'$'}type":"State","key":"name","defaultValue":""}}}]}}"""
             val session = FakeTreeSession(form)
-            val host = FuaranHost(session)
+            val host = FuaranHost.start(session)
             setContent { FuaranTheme(darkTheme = false) { InteractiveFuaranTree(host) } }
             waitForIdle()
 
@@ -104,6 +104,14 @@ class FakeTreeSession(initial: String) : TreeSession {
     val stateWrites: MutableList<Pair<String, String>> = mutableListOf()
 
     override fun treeJson(): String = current
+
+    /**
+     * This fake carries no evaluator, so its resolved projection IS its tree — stated explicitly
+     * because `projectResolved` is abstract now. It used to default to `treeJson()` on the
+     * interface, which made a conformer that resolves nothing indistinguishable from one that was
+     * never asked to.
+     */
+    override fun projectResolved(): String = current
 
     override fun applyOp(opJson: String) {
         if (opJson.contains("__reject__")) {

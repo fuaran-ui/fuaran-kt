@@ -1,0 +1,363 @@
+/*
+ * fuaran.h — the C-ABI surface of fuaran-rs (the Rust host of the Fuaran UI wire
+ * format). Hand-written (Phase 537); the stdlib-only mandate forbids a cbindgen
+ * build dependency, though cbindgen MAY run as a dev-tooling *check* that this
+ * header still matches the exported `#[no_mangle]` surface in `src/ffi/`.
+ *
+ * This header declares the target-neutral session surface a native binding
+ * (the Swift XCFramework, the Kotlin cargo-ndk `.so`) links against. The same
+ * symbols are emitted into the `wasm32` browser module, where the thin JS loader
+ * (`js/fuaran-loader.js`) drives them — see the RETURN ABI note below for the one
+ * representational difference between the two worlds.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright Diametrical Ltd.
+ */
+
+#ifndef FUARAN_H
+#define FUARAN_H
+
+#include <stddef.h> /* size_t */
+#include <stdint.h> /* uint8_t, uint64_t */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ------------------------------------------------------------------------- *
+ * Opaque session handle
+ *
+ * A live client session over one decoded wire tree: it holds the current tree
+ * plus its binding sources, renders to HTML, applies tree-ops, and writes the
+ * reactive stores. Created by fuaran_session_new, destroyed by
+ * fuaran_session_free. The layout is private to Rust — only ever hold a pointer.
+ * ------------------------------------------------------------------------- */
+typedef struct FuaranSession FuaranSession;
+
+/* ------------------------------------------------------------------------- *
+ * Output buffer — the (ptr, len) RETURN ABI
+ *
+ * Every function that returns text to the caller returns a Rust-OWNED buffer as
+ * a (ptr, len) pair. The caller reads `len` UTF-8 bytes at `ptr`, then MUST free
+ * the buffer with fuaran_dealloc(ptr, len). The buffer is exact-length: there is
+ * NO trailing NUL — always honour `len`, never strlen().
+ *
+ * The pair's REPRESENTATION is pointer-width dependent, because a full pointer
+ * only shares a 64-bit word with a length losslessly when pointers are 32-bit:
+ *
+ *   - Native targets (64-bit — this header's audience): the pair is this
+ *     two-word struct, returned by value.
+ *   - wasm32 (32-bit pointers): the same pair is a packed uint64_t — `ptr` in
+ *     the high 32 bits, `len` in the low 32 — so the JS loader stays byte-for-
+ *     byte unchanged. Native code never sees the packed form; it is documented
+ *     here only so the two ABIs are on the record together.
+ * ------------------------------------------------------------------------- */
+typedef struct FuaranBuf {
+  uint8_t *ptr; /* Rust-owned; free with fuaran_dealloc(ptr, len). */
+  size_t len;   /* exact byte length; NOT NUL-terminated. */
+} FuaranBuf;
+
+/* ------------------------------------------------------------------------- *
+ * Buffer lifecycle
+ * ------------------------------------------------------------------------- */
+
+/*
+ * Allocate a zeroed INPUT buffer of `len` bytes. The caller writes UTF-8 into it,
+ * passes (ptr, len) to a consuming call, then frees it with fuaran_dealloc AFTER
+ * that call returns. Rust only borrows an input buffer for the call's duration.
+ * Returns NULL only if the allocation of `len` bytes fails — CHECK IT. `len`
+ * usually arrives as a document's byte length, so an unsatisfiable request is an
+ * ordinary condition on this surface rather than an emergency; the allocation is
+ * fallible and this call never aborts the host on it. fuaran_alloc(0) returns a
+ * non-NULL, suitably aligned pointer owning no bytes; free it like any other.
+ */
+uint8_t *fuaran_alloc(size_t len);
+
+/*
+ * Free a buffer — either an INPUT buffer from fuaran_alloc, or the OUTPUT buffer
+ * inside a returned FuaranBuf. (ptr, len) must be a pair this library produced,
+ * freed EXACTLY ONCE. A NULL `ptr` is a no-op.
+ */
+void fuaran_dealloc(uint8_t *ptr, size_t len);
+
+/* ------------------------------------------------------------------------- *
+ * Session lifecycle
+ * ------------------------------------------------------------------------- */
+
+/*
+ * Decode a canonical wire `Node` JSON (UTF-8 at ptr/len) into a new session.
+ * Returns an owned handle, or NULL on a decode failure — in which case
+ * fuaran_last_error() returns the failure's JSON envelope (read it on THIS
+ * thread; see the threading contract). Free a non-NULL handle with
+ * fuaran_session_free.
+ */
+FuaranSession *fuaran_session_new(const uint8_t *ptr, size_t len);
+
+/* Free a session handle from fuaran_session_new. NULL is a no-op. */
+void fuaran_session_free(FuaranSession *session);
+
+/* ------------------------------------------------------------------------- *
+ * Session operations — all return an owned FuaranBuf (free with fuaran_dealloc)
+ * ------------------------------------------------------------------------- */
+
+/*
+ * Render the session's current tree to a body-fragment HTML string. Byte-
+ * identical to the server renderer for the same tree + sources (the hydration-
+ * parity contract). A NULL session returns an empty buffer.
+ */
+FuaranBuf fuaran_session_render(FuaranSession *session);
+
+/*
+ * The session's current tree, re-encoded to canonical wire JSON — the round-trip
+ * exit point (persist / diff / hand back to a headless peer). NULL → empty.
+ */
+FuaranBuf fuaran_session_tree_json(FuaranSession *session);
+
+/*
+ * The session's current tree as a RESOLVED PROJECTION, re-encoded to canonical
+ * wire JSON (Phase 650). Identical to fuaran_session_tree_json EXCEPT that every
+ * scalar-slot `Binding.Transform` is folded to the concrete value it evaluates to
+ * against the live sources: a TextSource `Bound(Transform)` becomes a literal, and
+ * the numeric scalar slots (Metric value/trend, LabelValueRow value) become a
+ * `Static` number (the slot's format still applies downstream). Row-context
+ * Transforms (DataGrid/Chart/Map/Sparkline sources) and every non-Transform
+ * binding are byte-identical to fuaran_session_tree_json.
+ *
+ * This is ADDITIVE: fuaran_session_tree_json is unchanged. Call this instead when
+ * the consumer is a decode-only render surface that cannot itself evaluate
+ * `Transform` — it then renders already-resolved compute values without carrying
+ * an evaluator. NULL session → empty buffer.
+ */
+FuaranBuf fuaran_session_project_resolved(FuaranSession *session);
+
+/*
+ * The RESOLVED ROWS of one row-bearing node (DataGrid / Chart / Map / Sparkline),
+ * addressed by node id (UTF-8 at ptr/len) and evaluated against the live sources.
+ *
+ * The out-of-band companion to fuaran_session_project_resolved, and it exists
+ * because that projection CANNOT carry this. A row-context Transform resolves to
+ * a COLLECTION, and the wire's `Static` slot erases a collection to "<opaque>"
+ * (WIRE_FORMAT.md 2 rule 11) — so resolved rows cannot ride the tree at all. A
+ * decode-only consumer therefore cannot obtain them from tree_json however much
+ * of the tree it understands, and renders every data-bound grid empty. This hands
+ * them over directly, keeping the division the tiers rest on: the core evaluates,
+ * the native surface renders.
+ *
+ * Addressed by NODE ID, not by kind, so the same call serves a chart or a map
+ * without a second entry point.
+ *
+ * Three results, and a consumer MUST tell them apart:
+ *
+ *   {"resolved":true,"rows":[ ... ]}
+ *       Resolved. A zero-length `rows` is an EMPTY STATE — render it as one.
+ *
+ *   {"resolved":false}
+ *       The source did not resolve: a Transform that errored, or a store the host
+ *       has not fed yet. Render the LOADING surface, NOT an empty table.
+ *       Flattening this case to zero rows shows "no data" for "not yet".
+ *
+ *   {"error":{"class":"lookup","code":"NO_ROW_SOURCE","message":"..."}}
+ *       No node with that id, or a kind with no row source. A caller mistake —
+ *       a consumer asks this of a node it has just decoded and is rendering.
+ *
+ * Rows are the source's own JSON objects, canonical-rendered. NULL session →
+ * empty buffer.
+ */
+FuaranBuf fuaran_session_resolved_rows(FuaranSession *session, const uint8_t *ptr, size_t len);
+
+/*
+ * Apply a canonical wire `TreeOp` JSON (UTF-8 at ptr/len). Returns {"ok":true}
+ * on success (the session adopts the new tree) or a structured error envelope
+ * on failure (the held tree is UNTOUCHED — the apply engine never partially
+ * mutates):
+ *   {"error":{"class":"decode"|"apply","code":"...","message":"..."[,"path":"..."][,"batchIndex":N]}}
+ * NULL session → empty buffer.
+ */
+FuaranBuf fuaran_session_apply_op(FuaranSession *session, const uint8_t *ptr,
+                                  size_t len);
+
+/* ------------------------------------------------------------------------- *
+ * Placement verbs (Phase 833) — place / nudge / duplicate / paste
+ *
+ * The op vocabulary is positionless: InsertChild and MoveNode APPEND, and an
+ * explicit order is stated only by a ReorderChildren naming every sibling id.
+ * These four entry points compute the op a placement becomes, apply it, and hand
+ * it back — so a binding that renders a session (which is every native binding,
+ * the tree being owned by this core) does not have to reimplement the algebra to
+ * author a placed insert.
+ *
+ * Each takes ONE canonical-JSON request document as a UTF-8 (ptr, len) buffer,
+ * one document shape across all four verbs:
+ *
+ *   place      {"parentId":"...","placement":"Last"|"First"|"Before"|"After",
+ *               "anchor":"..."?, "child":{ ...node... }}
+ *   paste      { ...target..., "subtree":{ ...node... }, "idPrefix":"..."? }
+ *   duplicate  { ...target..., "source":"...", "idPrefix":"..."? }
+ *   nudge      {"target":"...","delta":<whole number of sibling positions>}
+ *
+ * "anchor" is REQUIRED for Before / After and REFUSED for Last / First: a caller
+ * that supplied an anchor a verb would silently drop has stated an intent that is
+ * not being honoured.
+ *
+ * "idPrefix" (clone verbs only) selects the DETERMINISTIC fresh-id strategy —
+ * minted ids are <prefix>-1, -2, ... in traversal order. Omit it for the default
+ * derived strategy (<oldId>-copy, then -copy-2, ...). Either way every id in the
+ * clone that collides with one already in the tree is remapped, and ids that do
+ * not collide are preserved.
+ *
+ * RESULT. On success the session adopts the new tree and the call returns
+ *   {"ok":true,"op":{ ...the emitted canonical TreeOp... }}
+ * The op rides back because it is the artefact the verb computed: a host that
+ * journals, replays, or diffs its op-stream needs the op and cannot re-derive it
+ * from the resulting tree. On failure the held tree is UNTOUCHED and the call
+ * returns the surface's usual error envelope, with one of two classes:
+ *   {"error":{"class":"placement","code":"ParentNotFound"|"ChildlessKind"|
+ *             "NodeNotFound"|"UnknownAnchor"|"DuplicateId"|"MoveIntoSelf"|
+ *             "MoveIntoDescendant"|"CannotNudgeRoot"|"NudgeOutOfRange",
+ *             "message":"..."}}
+ *   {"error":{"class":"request","code":"INVALID_REQUEST","message":"..."}}
+ * A "placement" refusal pre-states the apply-engine refusal the emitted op would
+ * have met, so a binding can grey out an illegal drop without a dry-run apply.
+ * NULL session -> empty buffer.
+ * ------------------------------------------------------------------------- */
+FuaranBuf fuaran_session_place(FuaranSession *session, const uint8_t *ptr,
+                               size_t len);
+
+FuaranBuf fuaran_session_nudge(FuaranSession *session, const uint8_t *ptr,
+                               size_t len);
+
+FuaranBuf fuaran_session_duplicate(FuaranSession *session, const uint8_t *ptr,
+                                   size_t len);
+
+FuaranBuf fuaran_session_paste(FuaranSession *session, const uint8_t *ptr,
+                               size_t len);
+
+/*
+ * Write a reactive `$state.<key>` slot from a JSON value (the write-back an
+ * omitted-handler control performs). Re-render to observe the change. Returns
+ * {"ok":true} or a decode-error envelope. key/val are UTF-8 (ptr, len) pairs.
+ */
+FuaranBuf fuaran_session_set_state(FuaranSession *session, const uint8_t *key_ptr,
+                                   size_t key_len, const uint8_t *val_ptr,
+                                   size_t val_len);
+
+/* Write a `$filters.<name>` slot. Same shape as fuaran_session_set_state. */
+FuaranBuf fuaran_session_set_filter(FuaranSession *session, const uint8_t *key_ptr,
+                                    size_t key_len, const uint8_t *val_ptr,
+                                    size_t val_len);
+
+/*
+ * Seed a `$queries.<name>` result slot from a JSON value (host-fed data for a
+ * `Binding.Query` consumer — the fetch is a host concern; the tree owns only the
+ * name). Same shape as fuaran_session_set_state.
+ */
+FuaranBuf fuaran_session_set_query(FuaranSession *session, const uint8_t *key_ptr,
+                                   size_t key_len, const uint8_t *val_ptr,
+                                   size_t val_len);
+
+/*
+ * The last fuaran_session_new failure envelope (owned FuaranBuf), or an empty
+ * buffer when the last `new` on this thread succeeded. See the threading
+ * contract: the slot is per-thread.
+ */
+FuaranBuf fuaran_last_error(void);
+
+/*
+ * DEMO ENCODE ENTRY (Phase 656) — additive, stateless.
+ *
+ * fuaran_rosetta_encode() powers the public Rosetta parity demo: it receives the
+ * six scalar "holes" as a small JSON object
+ * ({"labelA":..,"valueA":..,"labelB":..,"valueB":..,"labelC":..,"valueC":..}),
+ * builds the demo's exemplar tree with this crate's own typed model, and returns
+ * the canonical wire bytes (owned FuaranBuf), or an empty buffer on malformed
+ * input. It touches neither the session surface nor the codec; it is a demo
+ * helper over the public model, compiled into every target. Not part of the v0
+ * native binding surface — the mobile tiers drive rendering through a session.
+ */
+FuaranBuf fuaran_rosetta_encode(const uint8_t *ptr, size_t len);
+
+/* ------------------------------------------------------------------------- *
+ * OWNERSHIP CONTRACT (summary)
+ *
+ *   - INPUT buffers  (fuaran_alloc):  caller-owned. Rust borrows for one call;
+ *                                     caller frees with fuaran_dealloc after.
+ *   - OUTPUT buffers (inside FuaranBuf): Rust-owned. Caller reads `len` bytes,
+ *                                     then frees with fuaran_dealloc(ptr, len).
+ *   - SESSION handle (fuaran_session_new): caller-owned; free ONCE with
+ *                                     fuaran_session_free.
+ *   Every buffer is freed exactly once through fuaran_dealloc; a session exactly
+ *   once through fuaran_session_free. Output buffers carry NO trailing NUL.
+ *
+ * INPUT-BUFFER CONTRACT
+ *
+ *   Every (ptr, len) INPUT pair must be one of:
+ *     - a live buffer of `len` initialised bytes (from fuaran_alloc, or any
+ *       buffer the caller owns for the duration of the call), or
+ *     - (NULL, 0), which spells "no bytes" and is accepted as the empty string.
+ *   (NULL, len > 0) is REFUSED with the surface's ordinary decode envelope
+ *   ({"error":{"class":"decode","code":"INVALID_JSON",...}}) naming the mistake.
+ *   It is never read: doing so would be undefined behaviour whatever the length,
+ *   and it is the one input shape on this surface that could corrupt the host
+ *   rather than merely upset it.
+ *
+ * FAILURE CONTRACT — a panic does not cross this boundary
+ *
+ *   Every entry point declared here runs its body inside a panic boundary. An
+ *   internal defect that would otherwise unwind out of an extern "C" frame is
+ *   caught and returned as this surface's ordinary error envelope:
+ *
+ *     {"error":{"class":"internal","code":"PANIC","message":"...","path":"$"}}
+ *
+ *   ("internal" and "PANIC" are deliberately distinct from the decode / apply /
+ *   placement / lookup classes: a panic is a statement about THIS LIBRARY, not
+ *   about your input. Report one. It is always a defect here.) The session is
+ *   left as it was — the apply engine never partially mutates, it builds a whole
+ *   new tree and adopts it — so a caught panic does not end the session, and the
+ *   caller may keep using the handle. fuaran_session_new reports a caught panic
+ *   through its own channel: NULL, with the envelope in fuaran_last_error().
+ *
+ *   THE ONE EXCEPTION IS wasm32. That target's specification fixes the panic
+ *   strategy at "abort", so there is no unwind to catch and a panic traps the
+ *   module instance; the guard is present but inert. Native targets — the
+ *   audience for this header — unwind, so the guard is live there.
+ *
+ * THREADING CONTRACT
+ *
+ *   A FuaranSession is SINGLE-OWNER: confine it (and all calls that take it) to
+ *   ONE thread / executor for its whole lifetime. No Send/Sync guarantee crosses
+ *   this boundary — a Swift `actor` wrapper or a Kotlin single-threaded
+ *   dispatcher is the intended confinement. fuaran_last_error() reads a
+ *   PER-THREAD slot, so read it on the same thread that made the failing
+ *   fuaran_session_new call. (On the single-threaded wasm32 host the per-thread
+ *   slot degenerates to a single global.)
+ *
+ * v0 NATIVE SURFACE (Phase 537 decision)
+ *
+ *   v0 is exactly the session surface declared above. The adopted native-surface
+ *   architecture keeps the Rust core as the owner of truth and mutation while a
+ *   native tier holds a render-only projection, so ALL native rendering is driven
+ *   through a session (session_apply_op -> read back session_tree_json, or
+ *   session_project_resolved for a decode-only surface — Phase 650, an additive
+ *   projection of the same tree). No stateless entry points are needed for the
+ *   native binding tiers.
+ *
+ *   The Phase 833 placement verbs extend that surface without changing its
+ *   shape: they are session-level, they mutate through the same apply engine
+ *   session_apply_op reaches, and they exist because the alternative — a binding
+ *   authoring a placed insert itself — is a second implementation of an algebra
+ *   this core is the reference for. They are STATEFUL, and so are not candidates
+ *   for the reserved stateless list below.
+ *
+ *   RESERVED (not in v0; names held for a future stateless surface if demand
+ *   appears — do not bind yet):
+ *       FuaranBuf fuaran_validate(const uint8_t *ptr, size_t len);
+ *       FuaranBuf fuaran_encode_canonical(const uint8_t *ptr, size_t len);
+ *       FuaranBuf fuaran_apply(const uint8_t *tree_ptr, size_t tree_len,
+ *                              const uint8_t *op_ptr, size_t op_len);
+ * ------------------------------------------------------------------------- */
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
+
+#endif /* FUARAN_H */

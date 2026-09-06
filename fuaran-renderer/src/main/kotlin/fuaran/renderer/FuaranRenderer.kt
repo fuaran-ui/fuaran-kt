@@ -223,6 +223,16 @@ private fun RenderNodeKind(node: Node, ctx: BindingContext) {
         is MapNode -> InfoCard("Map", "lat ${k.centreLatitude}, lng ${k.centreLongitude} · z${k.zoom}")
         // Structural
         is Custom -> InfoCard("Custom", k.moduleId + "/" + k.componentId)
+        // The `fallback` subtree is decoded and carried, and NOTHING ON ANY HOST RENDERS IT — the
+        // reference renderer takes the child too. Worth stating rather than leaving as an
+        // apparently arbitrary arm, because the obvious repair is wrong in two ways. It cannot be a
+        // DECODE fallback: decoding is total, so a malformed child fails the whole document long
+        // before this arm is reached, and swallowing that here would make this surface accept a
+        // tree the conformant hosts refuse. And it cannot be a RENDER fallback invented locally —
+        // what an error boundary catches is a normative decision, the wire specification does not
+        // make it, and a native surface that guessed would disagree with the reference host about a
+        // tree they both accept. Reaching this arm needs a specification change first; until then
+        // the child is the whole of the behaviour, on every host, deliberately.
         is ErrorBoundary -> FuaranNode(k.child, ctx)
         is FragmentDecl -> FuaranNode(k.body, ctx)
         is FragmentRef -> InfoCard("Fragment", k.name)

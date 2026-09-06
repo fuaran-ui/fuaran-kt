@@ -115,6 +115,43 @@ class ServerDrivenDriverTest {
         assertTrue(postedEvents[0].contains("click"))
     }
 
+    /**
+     * The driver renders the RESOLVED projection, not the round-trip tree.
+     *
+     * This is the leg that was missing for as long as the defect existed, and the fixture is built
+     * so it can only pass for the right reason: the session's two reads return DIFFERENT trees.
+     * `treeJson()` carries the tree as authored — a `Bound(Transform)` label, which a decode-only
+     * surface cannot evaluate and renders as the empty string. `projectResolved()` carries what the
+     * Rust core's resolved projection hands back: the same tree with that scalar `Transform` folded
+     * to the literal it evaluates to.
+     *
+     * A driver reading `treeJson()` therefore sees `""` here and one reading `projectResolved()`
+     * sees `"2"`. Before the fix this assertion fails on the empty string — which is exactly what
+     * the server-driven path showed users for every computed value, while the interactive host
+     * path, already reading the resolved projection, showed them correctly.
+     */
+    @Test
+    fun theDriverRendersTheResolvedProjectionNotTheRoundTripTree() {
+        val unresolved =
+            """{"id":"root","kind":{"${'$'}type":"Markdown","text":{"${'$'}type":"Bound","binding":""" +
+                """{"${'$'}type":"Transform","pipeline":[],"source":{"columns":{"id":{"values":["A","B"]}},""" +
+                """"schema":[{"name":"id","type":"string"}]}}}}}"""
+        val resolved = md("root", "2")
+
+        val states = mutableListOf<DriverState>()
+        ServerDrivenDriver(HttpUrlTransport(baseUrl)) { FakeSession(unresolved, resolvedTreeJson = resolved) }
+            .run { states.add(it) }
+
+        val first = states.first()
+        assertTrue(first is Rendered, "the seed must project, was ${first::class.simpleName}")
+        assertEquals(
+            "2",
+            text((first as Rendered).tree),
+            "the driver must project from projectResolved(): reading treeJson() renders the " +
+                "unevaluated Transform as an empty string",
+        )
+    }
+
     @Test
     fun referenceTransportDrivesAllThreeEndpoints() {
         val transport = HttpUrlTransport(baseUrl)
