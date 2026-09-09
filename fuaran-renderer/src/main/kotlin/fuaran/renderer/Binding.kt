@@ -43,6 +43,7 @@ import fuaran.ui.TextSource
 import fuaran.ui.ToneVariant
 import fuaran.ui.TransformBinding
 import fuaran.ui.ValueFormat
+import java.util.Locale
 
 /**
  * The render-side [Binding] resolver — the "BindingContext mirror sufficient for rendering" the
@@ -129,7 +130,30 @@ class BindingContext(
 
     fun resolveInt(binding: Binding, default: Int): Int = resolve(binding).trim().toIntOrNull() ?: default
 
-    fun resolveFloat(binding: Binding, default: Float): Float = resolve(binding).trim().toFloatOrNull() ?: default
+    /**
+     * Resolve a binding to a number.
+     *
+     * **`Double`, not `Float`** (Phase 1541). The wire carries numbers as their source text and a
+     * control writes them straight back through the `$state` channel, so a value that went through
+     * `Float` on the way out does not come back as the number the author wrote: `3.7` parses to
+     * `3.7f`, widens to `3.700000047683716`, and that lexeme is what the session stores and every
+     * reader of that slot then sees. The renderer narrows to `Float` at the Compose boundary, where
+     * the platform demands it and where the loss is confined to a pixel position rather than to the
+     * datum.
+     *
+     * `toDoubleOrNull` is locale-INVARIANT (it is `java.lang.Double.parseDouble`), which is the other
+     * half of this phase's number handling: the wire's decimal point is a full stop wherever the host
+     * runs.
+     */
+    fun resolveDouble(binding: Binding, default: Double): Double = resolve(binding).trim().toDoubleOrNull() ?: default
+
+    @Deprecated(
+        "Resolving through Float loses the author's lexeme on the way back to the session; " +
+            "use resolveDouble and narrow at the platform boundary.",
+        ReplaceWith("resolveDouble(binding, default.toDouble()).toFloat()"),
+    )
+    fun resolveFloat(binding: Binding, default: Float): Float =
+        resolveDouble(binding, default.toDouble()).toFloat()
 
     fun resolveBool(binding: Binding?): Boolean = binding?.let { resolve(it).trim().equals("true", ignoreCase = true) } ?: false
 }
@@ -185,7 +209,7 @@ fun formatDuration(raw: Double, unit: DurationUnit, style: DurationStyle): Strin
     val m = (total % 3600) / 60
     val s = total % 60
     return when (style) {
-        DurationStyle.Clock -> String.format("%02d:%02d:%02d", h, m, s)
+        DurationStyle.Clock -> String.format(Locale.ROOT, "%02d:%02d:%02d", h, m, s)
         DurationStyle.Compact -> {
             val parts = mutableListOf<String>()
             if (h > 0) parts.add("${h}h")
@@ -208,15 +232,28 @@ fun formatDuration(raw: Double, unit: DurationUnit, style: DurationStyle): Strin
  * Apply a column's [ValueFormat] to a projected value, for the cell kinds that display a
  * formatted datum. Non-numeric text and structural formats fall through unchanged rather than
  * inventing a rendering.
+ *
+ * **Every numeric rendering here passes [Locale.ROOT] (Phase 1541), and on this platform that is a
+ * FIX rather than a restatement.** `String.format` with no locale uses the JVM's DEFAULT locale, so
+ * on a machine set to a decimal-comma locale — most of continental Europe, and any Android device
+ * configured that way — `GBP 1234.50` rendered as `GBP 1234,50` and `12.5%` as `12,5%`. That is not
+ * a presentation preference here: a formatted datum crosses the wire as TEXT and is compared, keyed
+ * and re-parsed downstream — a grid column's tone map is keyed on the author's raw value — so a
+ * decimal comma is a different string that silently stops matching, on the reader's device and
+ * nowhere near the author. The bug is invisible to every gate run under a POSIX locale, which is why
+ * the golden asserts under `Locale.GERMANY` rather than under whatever the box happens to be set to.
+ * Localisation of a DISPLAYED number belongs to the wire's own `Format` binding with its declared
+ * locale, not to this floor. The sibling Swift surface states the same intent as an explicit
+ * `locale: nil`, where the platform default already runs the safe way.
  */
 fun formatCellValue(text: String, format: ValueFormat): String {
     val n = text.toDoubleOrNull() ?: return text
     return when (format) {
         NoValueFormat, CustomValueFormat, is DateValueFormat -> text
-        is NumberValueFormat -> String.format("%.${format.decimals ?: 0}f", n)
-        is CurrencyValueFormat -> "${format.code} " + String.format("%.2f", n)
-        is PercentValueFormat -> String.format("%.${format.decimals ?: 0}f%%", n * 100)
-        is SignificantDigitsValueFormat -> String.format("%.${format.digits}g", n)
+        is NumberValueFormat -> String.format(Locale.ROOT, "%.${format.decimals ?: 0}f", n)
+        is CurrencyValueFormat -> "${format.code} " + String.format(Locale.ROOT, "%.2f", n)
+        is PercentValueFormat -> String.format(Locale.ROOT, "%.${format.decimals ?: 0}f%%", n * 100)
+        is SignificantDigitsValueFormat -> String.format(Locale.ROOT, "%.${format.digits}g", n)
         is DurationValueFormat -> formatDuration(n, format.unit, format.style)
         // Relative time needs a REFERENCE instant to be relative to, which is host state
         // (`NowBinding`), not something this pure formatter holds. Rendering the raw count

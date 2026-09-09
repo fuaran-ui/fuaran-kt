@@ -522,7 +522,10 @@ private fun RenderProgress(k: Progress, ctx: BindingContext) {
             LinearProgressIndicator(Modifier.fillMaxWidth(), color = accent)
         } else {
             LinearProgressIndicator(
-                progress = { ctx.resolveFloat(k.fraction, 0f).coerceIn(0f, 1f) },
+                // Resolved as `Double` and narrowed HERE, at the platform boundary: Compose demands a
+                // Float, and this is the one place where losing precision costs a pixel rather than
+                // the author's own lexeme (Phase 1541).
+                progress = { ctx.resolveDouble(k.fraction, 0.0).toFloat().coerceIn(0f, 1f) },
                 modifier = Modifier.fillMaxWidth(),
                 color = accent,
             )
@@ -910,6 +913,14 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
     val label = ctx.resolveText(field.label) + if (field.required) " *" else ""
     // Write-back (Phase 545): a state-backed field edit writes through the session's $state channel
     // when a live host is present; the session (Rust validator) is the authority on acceptance.
+    //
+    // **Every text-bearing arm below keeps its own `remember { mutableStateOf(...) }` buffer, and the
+    // sink call is fire-and-forget (Phase 1541).** Both halves are needed for typing not to stall.
+    // The local buffer means a keystroke is shown from the buffer rather than from a tree that has
+    // been round-tripped; and since 1541 `FuaranHost.writeBack` returns immediately, so the session
+    // call and the re-decode no longer run inside `onValueChange` on the main thread. An arm that
+    // rendered `ctx.resolve(kind.value)` directly instead of a remembered buffer would put a
+    // round trip between the key press and the character — do not "simplify" one into that shape.
     val sink = LocalActionSink.current
     when (val kind = field.kind) {
         is TextField -> {
@@ -1021,7 +1032,8 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
             }
         }
         is RangedNumberField -> {
-            var v by remember { mutableStateOf(ctx.resolveFloat(kind.value, (kind.min ?: 0.0).toFloat())) }
+            // `resolveDouble`, narrowed at the Compose boundary — see the note on the progress arm.
+            var v by remember { mutableStateOf(ctx.resolveDouble(kind.value, kind.min ?: 0.0).toFloat()) }
             val key = stateKeyOf(kind.value)
             Column {
                 Text("$label: $v", fontSize = 12.sp)

@@ -2,6 +2,8 @@
 // Copyright Diametrical Ltd.
 package fuaran.renderer
 
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -22,6 +24,8 @@ import fuaran.ui.StateBinding
 import fuaran.ui.TreeSession
 import fuaran.ui.asProjectionFailure
 import fuaran.ui.decodeNode
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 
 /**
  * The interaction round-trip state-holder (Phase 545) — the Kotlin twin of the Swift interaction
@@ -44,7 +48,26 @@ import fuaran.ui.decodeNode
  * "measured before optimising" per the phase). A finer diff is a later optimisation behind the same
  * `tree`-as-state surface.
  */
-class FuaranHost(private val session: TreeSession, initialTree: Node) {
+class FuaranHost(
+    private val session: TreeSession,
+    initialTree: Node,
+    /**
+     * Where the session round trip runs. **Single-threaded by default, and that is load-bearing
+     * twice over**: it keeps writes in the order they were made (a second edit to one slot cannot
+     * overtake the first), and it means the coalescer below only ever has to reason about one
+     * in-flight write.
+     *
+     * Injectable so a test can pass a DIRECT executor and keep its assertions synchronous — the
+     * alternative being every existing write-back test learning to poll, which trades a real
+     * assertion for a timeout.
+     */
+    private val worker: Executor = defaultWorker(),
+    /**
+     * Where the decoded tree is published. Defaults to the Android main looper; a test passes a
+     * direct executor.
+     */
+    private val main: Executor = mainThreadExecutor(),
+) {
     /**
      * The current re-projected tree, as Compose state. Reading it in a composable subscribes to it.
      * The render tree is the **resolved projection** (Phase 650), so a scalar `Transform` renders
@@ -92,11 +115,62 @@ class FuaranHost(private val session: TreeSession, initialTree: Node) {
         reproject()
     }
 
-    /** Write a form-control edit through the `$state.<key>` channel per the wire write-back rules. */
-    fun writeBack(stateKey: String, value: JsonValue) = guarded {
-        ActionDispatch.writeBack(session, stateKey, value)
-        reproject()
-    }
+    /**
+     * True while a write is queued or in flight. Compose state, so a host can show progress and a
+     * test can wait on settlement rather than on a sleep.
+     */
+    var writesPending by mutableStateOf(false)
+        private set
+
+    /**
+     * The coalescing queue. Its decisions live in `WriteBackQueue.kt`, which carries no Compose and
+     * no `android.os` import so they are asserted in the plain-JVM gate rather than only under
+     * Robolectric.
+     *
+     * The decode happens inside `perform`, off the main thread, and not only the session call:
+     * `decodeNode` walks the whole tree, so moving the cheap half of the round trip while leaving the
+     * expensive half on the main thread would have been a change that measured well and fixed
+     * nothing.
+     */
+    private val writes =
+        WriteBackQueue(
+            worker = worker,
+            perform = { key, value ->
+                val outcome =
+                    runCatching {
+                        ActionDispatch.writeBack(session, key, value)
+                        decodeNode(session.projectResolved())
+                    }
+                main.execute { publish(outcome) }
+            },
+            onPendingChanged = { p -> main.execute { writesPending = p } },
+        )
+
+    /**
+     * Write a form-control edit through the `$state.<key>` channel per the wire write-back rules.
+     *
+     * **It returns immediately; the round trip runs on [worker] and the decoded tree is published
+     * back on [main].** It used to do the whole of it inline: the session call, `projectResolved()`
+     * and `decodeNode` all ran on whatever thread the control's `onValueChange` was called from,
+     * which on Compose is the main thread. So every keystroke in a bound text field paid a session
+     * round trip plus a full re-decode of the tree before the next frame could be composed — the
+     * Compose buffer had already updated, so the character appeared, and then the UI stuttered. On a
+     * live JNI session, whose calls hop to the core's own confining executor and BLOCK waiting for
+     * it, that is main-thread work waiting on another thread by construction.
+     *
+     * **Writes to one key COALESCE, latest wins.** While a write is in flight, a further edit to the
+     * same key replaces the queued value rather than adding a second round trip — typing ten
+     * characters produces the writes the session can keep up with and one final write carrying what
+     * the reader actually typed, instead of ten queued round trips finishing long after they stopped.
+     * A superseded value is never sent, which is safe precisely because it was superseded: no reader
+     * of that slot can observe a value the author replaced before it was ever written.
+     *
+     * Coalescing is per KEY and never across keys — two different slots are two different facts, and
+     * dropping one because the other was edited later would lose an edit rather than an intermediate.
+     * There is no timer: a single edit starts immediately, so this debounces under load and adds no
+     * latency when there is none.
+     */
+    fun writeBack(stateKey: String, value: JsonValue) = writes.submit(stateKey, value)
 
     /** Convenience for a string-valued control edit. */
     fun writeBack(stateKey: String, text: String) = writeBack(stateKey, JsonString(text))
@@ -144,7 +218,45 @@ class FuaranHost(private val session: TreeSession, initialTree: Node) {
         tree = decodeNode(session.projectResolved())
     }
 
+    private fun publish(outcome: Result<Node>) {
+        outcome.fold(
+            onSuccess = {
+                tree = it
+                lastError = null
+            },
+            onFailure = { t ->
+                // The same survivable set `guarded` uses — named in one place so the synchronous and
+                // the off-main paths cannot come to disagree about what a host survives. Anything
+                // outside it is a lifecycle defect or a caller's own, and is rethrown on the main
+                // thread rather than swallowed into a banner.
+                lastError = asProjectionFailure(t) ?: throw t
+            },
+        )
+    }
+
     companion object {
+        /**
+         * A daemon single-thread executor. Daemon so a host that is garbage without being closed
+         * cannot keep a JVM alive; single so writes stay ordered.
+         */
+        private fun defaultWorker(): Executor =
+            Executors.newSingleThreadExecutor { r ->
+                Thread(r, "fuaran-writeback").apply { isDaemon = true }
+            }
+
+        /**
+         * Publish on the Android main looper.
+         *
+         * Compose state is snapshot-based and safe to write from any thread, so this is not about
+         * safety — it is about ORDER: a host reading `tree` and `lastError` in one composition must
+         * not see a tree from one write beside an error from another, and posting both to one looper
+         * is what makes each publication atomic with respect to composition.
+         */
+        private fun mainThreadExecutor(): Executor {
+            val handler = Handler(Looper.getMainLooper())
+            return Executor { r -> handler.post(r) }
+        }
+
         /**
          * Seed a host from a live session by reading and projecting its current tree — the
          * fallible half of construction, named and kept OUT of the constructor so no composition
@@ -153,8 +265,23 @@ class FuaranHost(private val session: TreeSession, initialTree: Node) {
          *
          * The Swift twin's `start(session:)` is the same factory for the same reason.
          */
-        fun start(session: TreeSession): FuaranHost =
-            FuaranHost(session, decodeNode(session.projectResolved()))
+        fun start(
+            session: TreeSession,
+            worker: Executor = defaultWorker(),
+            main: Executor = mainThreadExecutor(),
+        ): FuaranHost = FuaranHost(session, decodeNode(session.projectResolved()), worker, main)
+
+        /**
+         * An executor that runs its work on the calling thread.
+         *
+         * Public because a TEST needs it, and hiding it would push every write-back test into
+         * polling with a timeout — which turns a definite assertion ("the store received this") into
+         * an indefinite one ("the store received this within two seconds"), and makes a genuine
+         * regression present as a flake. A host that passes it is choosing the pre-1541 synchronous
+         * behaviour deliberately, which is a legitimate thing to want on a surface with no main
+         * thread to protect.
+         */
+        val DirectExecutor: Executor = Executor { it.run() }
     }
 }
 

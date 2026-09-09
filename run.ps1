@@ -175,7 +175,12 @@ $MainKt = @(Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\main\ko
 $RendererNeutralKt = @(
     (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\Binding.kt"),
     (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\AccessibilityProjection.kt"),
-    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\TrendSentiment.kt")
+    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\TrendSentiment.kt"),
+    # Phase 1541 — the interaction host's coalescing write queue. Same split and the same reason: what
+    # coalesces, what does not and what "settled" means are ordinary logic over a queue, and typed in
+    # Compose vocabulary they would be provable only on a box carrying the Android SDK. The host's thin
+    # wiring (executors, publishing Compose state) stays behind the Robolectric leg.
+    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\WriteBackQueue.kt")
 ) | Where-Object { Test-Path $_ }
 # The direct kotlinc build runs the two `main()`-driven harnesses (`CorpusDecodeTest`, `SessionTest`)
 # via `java`; it deliberately compiles ONLY those, not every test file. The Gradle-only JUnit gates
@@ -205,6 +210,17 @@ $TestKt = @(
     # carries no Compose import precisely so its decisions are re-checkable on the machine they are
     # changed from, rather than only on the box holding the Android SDK.
     Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "TrendSentimentHarness.kt" -ErrorAction SilentlyContinue |
+        ForEach-Object FullName
+    # The number-formatting goldens (Phase 1541). Same split and the same reason as the three above:
+    # `formatCellValue` and `resolveDouble` are ordinary logic over the decoded model, and the defect
+    # they close is INVISIBLE under a POSIX default locale — `String.format` with no locale follows the
+    # JVM default, so a decimal-comma machine rendered `GBP 1234,50`. The harness sets
+    # `Locale.GERMANY` for its own run, so the assertion is meaningful on this box rather than only on
+    # a European one.
+    Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "NumberFormatHarness.kt" -ErrorAction SilentlyContinue |
+        ForEach-Object FullName
+    # The write-back queue's coalescing + settlement decisions (Phase 1541).
+    Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "WriteBackQueueHarness.kt" -ErrorAction SilentlyContinue |
         ForEach-Object FullName
     # The render-obligation gate (WIRE_FORMAT.md 13) — the reader, the reporting surface, the
     # checker/exemption registries and every gate check over them. Same split and same reason as the
@@ -276,6 +292,23 @@ Write-Host "`n== trend sentiment projection (platform-neutral) ==" -ForegroundCo
 & $Java -cp $Classpath "fuaran.renderer.TrendSentimentHarnessKt"
 if ($LASTEXITCODE -ne 0) { throw "trend sentiment projection harness failed" }
 
+# --- Phase 1541: number formatting under a non-POSIX locale -------------------------- #
+# Same placement argument as the legs above. The harness sets `Locale.GERMANY` itself and restores
+# the default afterwards, so the goldens are asserted against the locale that USED to break them
+# rather than against whatever this box happens to be configured for — a gate that only ever runs
+# under a decimal-point locale cannot see the defect this closes.
+Write-Host "`n== number formatting :: locale invariance (platform-neutral) ==" -ForegroundColor Cyan
+& $Java -cp $Classpath "fuaran.renderer.NumberFormatHarnessKt"
+if ($LASTEXITCODE -ne 0) { throw "number-format locale-invariance harness failed" }
+
+# --- Phase 1541: the interaction host's write-back queue ----------------------------- #
+# Coalescing per state key, latest-wins, and what "settled" means. Platform-neutral for the reason the
+# legs above record; the Robolectric leg keeps only the claim that needs a host — that the round trip
+# leaves the caller's thread.
+Write-Host "`n== write-back queue :: coalescing + settlement (platform-neutral) ==" -ForegroundColor Cyan
+& $Java -cp $Classpath "fuaran.renderer.WriteBackQueueHarnessKt"
+if ($LASTEXITCODE -ne 0) { throw "write-back queue harness failed" }
+
 # --- Render-obligation conformance (WIRE_FORMAT.md 13) ------------------------------ #
 # The checkable remainder of the render contract, enumerated from the corpus's generated
 # `render-fidelity.json` rather than from a list beside the checkers — so a newly declared
@@ -345,14 +378,40 @@ function Find-AndroidSdk {
     return $null
 }
 
+# `gradlew.bat` on Windows, `./gradlew` everywhere else. With only the `.bat`
+# spelling every non-Windows box reported "no Gradle wrapper" and skipped the
+# renderer gate — the one leg that exists because it cannot be run locally on
+# the reference Windows box.
+$GradlewName = if ($IsWin) { "gradlew.bat" } else { "gradlew" }
+$Gradlew = Join-Path $Repo $GradlewName
+
+# --- Phase 545/1541: server-driven driver gate (Gradle, PURE JVM) -------------------- #
+# HOISTED OUT of the Android-SDK branch below (Phase 1541). `:fuaran-driver` is a plain-JVM module —
+# `HttpURLConnection`, an in-JVM fixture server, a fake session, no Compose and no android.jar — and
+# it configures and runs perfectly on a box with no Android SDK. Nested inside the SDK branch it did
+# not run on the reference dev box at all, so the driver's transport bounds, its idle policy and its
+# reply channel were provable only in CI while the file sat open in front of whoever was changing it.
+# The Android SDK is a prerequisite of the COMPOSE leg; making it a prerequisite of this one made a
+# runnable gate unrunnable.
+#
+# It stays behind $SkipRenderer's sibling switch NOWHERE: this is not the renderer leg. It skips only
+# when the Gradle wrapper is absent, which is the one thing it genuinely needs.
+if (-not $SkipTests) {
+    Write-Host "`n== Phase 545/1541 :: server-driven driver gate (Gradle, pure JVM) ==" -ForegroundColor Cyan
+    if (-not (Test-Path $Gradlew)) {
+        Write-Host "SKIP: no Gradle wrapper ($GradlewName) — the driver gate needs the Gradle build." -ForegroundColor Yellow
+    }
+    else {
+        # One leg here takes ~35 s on purpose: it proves an idle op stream survives past the socket
+        # read timeout, which only a genuinely quiet socket can show.
+        & $Gradlew ":fuaran-driver:test" "--console=plain"
+        if ($LASTEXITCODE -ne 0) { throw "Phase 545/1541 driver gate failed" }
+        Write-Host "Driver gate green." -ForegroundColor Green
+    }
+}
+
 if (-not $SkipTests -and -not $SkipRenderer) {
     Write-Host "`n== Phase 544 :: Jetpack Compose render-coverage (Gradle + Robolectric) ==" -ForegroundColor Cyan
-    # `gradlew.bat` on Windows, `./gradlew` everywhere else. With only the `.bat`
-    # spelling every non-Windows box reported "no Gradle wrapper" and skipped the
-    # renderer gate — the one leg that exists because it cannot be run locally on
-    # the reference Windows box.
-    $GradlewName = if ($IsWin) { "gradlew.bat" } else { "gradlew" }
-    $Gradlew = Join-Path $Repo $GradlewName
     $Sdk = Find-AndroidSdk
     if (-not (Test-Path $Gradlew)) {
         Write-Host "SKIP: no Gradle wrapper (gradlew.bat) — renderer leg needs the Gradle build." -ForegroundColor Yellow
@@ -372,15 +431,12 @@ if (-not $SkipTests -and -not $SkipRenderer) {
         if ($LASTEXITCODE -ne 0) { throw "Phase 544 render-coverage gate failed" }
         Write-Host "Phase 544 render-coverage gate green." -ForegroundColor Green
 
-        # --- Phase 545: interaction round-trip + server-driven driver + Material tone bridge ------ #
+        # --- Phase 545: interaction round-trip + Material tone bridge ---------------------------- #
         # The renderer gate above already covers the Phase 545 Theme + Interaction Robolectric tests
-        # (they are in the `:fuaran-renderer` unit-test source set). Here we add the pure-JVM driver
-        # gate and the live-native interaction round-trip. The interaction leg reuses the desktop shim
-        # `$nativeDll` the Phase 543 leg built; when it is absent the Gradle test cleanly skips.
-        Write-Host "`n== Phase 545 :: server-driven driver gate (Gradle) ==" -ForegroundColor Cyan
-        & $Gradlew ":fuaran-driver:test" "--console=plain"
-        if ($LASTEXITCODE -ne 0) { throw "Phase 545 driver gate failed" }
-
+        # (they are in the `:fuaran-renderer` unit-test source set). Here we add the live-native
+        # interaction round-trip. It reuses the desktop shim `$nativeDll` the Phase 543 leg built;
+        # when it is absent the Gradle test cleanly skips. (The driver gate ran ABOVE, outside this
+        # branch — it needs no Android SDK.)
         Write-Host "`n== Phase 545 :: live interaction round-trip (Gradle + JNI) ==" -ForegroundColor Cyan
         if ($nativeDll) {
             & $Gradlew ":fuaran-core:test" "-Pfuaran.lib=$nativeDll" "--console=plain"

@@ -229,6 +229,47 @@ Android); `load(absolutePath)` is the desktop and test route.
 without carrying an evaluator: the core folds the scalar `Transform` slots and
 hands back a tree that is byte-identical to `treeJson()` everywhere else.
 
+### The server-driven transport — bounded, survivable, typed
+
+`fuaran-driver`'s reference `HttpUrlTransport` reads the NDJSON op stream under
+explicit `OpStreamBounds`: 1 MiB per op line, 64 MiB per body, and an idle budget.
+A server-driven client applies whatever the server sends, so this is the one place
+it reads an unbounded amount of attacker-influenced input — and the previous
+reader used `BufferedReader.readLine()`, which has no length limit at all, so one
+line with no newline in it was an `OutOfMemoryError` with no diagnosis. A breach
+is refused by name: a typed `TransportFailure.LINE_CAP_EXCEEDED` /
+`BODY_CAP_EXCEEDED` whose message carries the limit.
+
+**A quiet stream is the ordinary case, not a failure.** The socket read timeout is
+now a POLL INTERVAL (`streamPollMillis`, 5 s) that the reader absorbs and retries;
+the real limit on silence is `OpStreamBounds.idleBudgetMillis` (2 minutes), and
+only exhausting it is fatal — as `IDLE_BUDGET_EXCEEDED`, which names what actually
+ran out. Before this, a 30 s read timeout killed a perfectly healthy session
+whenever the server had nothing to say for half a minute. The gate proves it
+against a fixture that genuinely goes quiet for 35 s, which is why that leg takes
+at least that long.
+
+A non-`https` base URL is refused with a typed `INSECURE_SCHEME` unless
+`allowInsecure = true` is passed — never a silent downgrade and never a silent
+upgrade. Loopback (`localhost`, `127.0.0.1`, `::1`) is exempt without the flag,
+because requiring a certificate for a development fixture server is how an opt-in
+becomes a permanent default.
+
+A transport failure reaching the loop is now `Fatal` rather than an exception
+thrown out of `run`. The stream is opened lazily inside the sequence, so even a
+failure to connect surfaced from inside the iteration and unwound whatever thread
+the loop was on. It is terminal wherever it happened: a validator reject is
+survivable because the next op is still coming, and a dead transport has no next
+op.
+
+`postEventApplyingReply` applies the server's REPLY OPS through the same
+apply-then-project path a streamed op takes, surviving a reject with the last-good
+tree. Without it an interaction was a one-way message: a request/response server
+could decide a click had changed the tree and had no way to say so. `postEventOps`
+defaults to the EMPTY sequence rather than to the response body — a server
+answering `{"ok":true}` has not implemented a reply channel, and applying that
+acknowledgement as a `TreeOp` would turn every successful event into a reject.
+
 `resolvedRows` answers in **three** cases, and the middle one is why:
 
 ```kotlin
@@ -332,6 +373,56 @@ acted on**, precisely so the destination decision stays yours.
 
 `InteractiveFuaranTree(host, ctx)` renders the host's current tree; a rejected op
 leaves the last good tree in place and surfaces the failure on `lastError`.
+
+### `writeBack` runs OFF the main thread, and coalesces per key
+
+`FuaranHost.writeBack` returns immediately: the session call, `projectResolved()`
+and `decodeNode` run on a worker and the decoded tree is published back on the
+main thread. It used to do all of it inline, on whatever thread the control's
+`onValueChange` was called from — which on Compose is the main thread — so every
+keystroke in a bound text field paid a full round trip plus a whole-tree re-decode
+before the next frame could compose. On a live JNI session that is worse than it
+sounds: those calls hop to the core's own confining executor and BLOCK waiting for
+it, so the main thread waits on another thread by construction.
+
+Writes to one key **coalesce, latest wins**: while a write is in flight, a further
+edit to that key replaces the queued value rather than adding a round trip. A
+superseded value is never sent, which is safe precisely because it was superseded
+— no reader of that slot could have observed it. Coalescing is per key and never
+across keys: two slots are two facts, and dropping one because the other was
+edited later would lose an edit rather than an intermediate. There is no timer, so
+a single considered edit is written at once and only a burst collapses.
+
+`writesPending` is Compose state, so a host can show progress and a test can wait
+on settlement rather than on a sleep. Both executors are constructor parameters —
+`FuaranHost.DirectExecutor` restores the synchronous behaviour, which is what the
+write-back tests use so their assertions stay definite rather than becoming
+two-second timeouts.
+
+The queue's decisions live in `WriteBackQueue.kt`, which carries no Compose and no
+`android.os` import so they are asserted in the plain-JVM gate — the same split,
+and the same reason, as the accessibility and trend-sentiment projections.
+`dispatch` and `applyOp` remain synchronous: their contracts return values
+(`dispatch` hands back the host-routed actions), and this phase changed only the
+path a keystroke takes.
+
+### Number formatting is locale-invariant
+
+`formatCellValue` and `formatDuration` pass `Locale.ROOT` at every site. Without
+it `String.format` follows the JVM's DEFAULT locale, so on a decimal-comma device
+`GBP 1234.50` rendered as `GBP 1234,50` and `12.5%` as `12,5%`. That is not a
+presentation preference: a formatted datum crosses the wire as text and is
+compared, keyed and re-parsed downstream — a grid column's tone map is keyed on
+the author's raw value — so a decimal comma is a different string that silently
+stops matching, on the reader's device and nowhere near the author. The goldens
+assert under `Locale.GERMANY` rather than under whatever the gate box is set to,
+because a POSIX-locale gate cannot see the defect at all. Localising a displayed
+number belongs to the wire's own `Format` binding with its declared locale.
+
+`BindingContext.resolveFloat` is deprecated in favour of `resolveDouble`: a value
+resolved through `Float` does not come back as the number the author wrote (`3.7`
+becomes `3.700000047683716` in the slot every other reader then sees), and the
+renderer narrows at the Compose boundary instead, where the loss costs a pixel.
 
 ## What is pending — stated plainly
 

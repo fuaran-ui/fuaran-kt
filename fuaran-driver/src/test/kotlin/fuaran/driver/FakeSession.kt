@@ -55,6 +55,19 @@ class FakeSession(
                 val node = op["node"] ?: throw FuaranException("MISSING_FIELD", "node", null, "replace op missing node")
                 current = node.encode()
             }
+            // The fixture's stand-in for the core's `SetState`: the slot's value becomes the tree's
+            // visible text, so an applied `SetState` is observable in the PROJECTION rather than only
+            // in a list the fake keeps. That is what makes the reply-channel test prove the thing it
+            // claims — that an event's consequences reach the screen — instead of proving only that a
+            // string was handed to a session.
+            "setState" -> {
+                val key = (op["key"] as? JsonString)?.value
+                    ?: throw FuaranException("MISSING_FIELD", "key", null, "setState op missing key")
+                val value = (op["value"] as? JsonString)?.value.orEmpty()
+                stateWrites.add(key to value)
+                current =
+                    """{"id":"root","kind":{"${'$'}type":"Markdown","text":{"${'$'}type":"Literal","text":"$value"}}}"""
+            }
             "reject" -> {
                 val code = (op["code"] as? JsonString)?.value ?: "VALIDATION_REJECT"
                 val path = (op["path"] as? JsonString)?.value

@@ -39,7 +39,7 @@ class InteractionTest {
     fun applyingAnOpReprojectsAndRecomposes() =
         runComposeUiTest {
             val session = FakeTreeSession(md("Hello"))
-            val host = FuaranHost.start(session)
+            val host = FuaranHost.start(session, FuaranHost.DirectExecutor, FuaranHost.DirectExecutor)
             setContent { FuaranTheme(darkTheme = false) { InteractiveFuaranTree(host) } }
             waitForIdle()
 
@@ -57,7 +57,7 @@ class InteractionTest {
     fun aValidatorRejectSurfacesAsTypedErrorAndKeepsLastGoodTree() =
         runComposeUiTest {
             val session = FakeTreeSession(md("Stable"))
-            val host = FuaranHost.start(session)
+            val host = FuaranHost.start(session, FuaranHost.DirectExecutor, FuaranHost.DirectExecutor)
             setContent { FuaranTheme(darkTheme = false) { InteractiveFuaranTree(host) } }
             waitForIdle()
 
@@ -81,7 +81,7 @@ class InteractionTest {
     fun aDecoderGapAfterAStateWriteSurfacesAsLastErrorAndKeepsLastGoodTree() =
         runComposeUiTest {
             val session = FakeTreeSession(md("Stable"))
-            val host = FuaranHost.start(session)
+            val host = FuaranHost.start(session, FuaranHost.DirectExecutor, FuaranHost.DirectExecutor)
             setContent { FuaranTheme(darkTheme = false) { InteractiveFuaranTree(host) } }
             waitForIdle()
 
@@ -112,7 +112,7 @@ class InteractionTest {
                     """"label":{"${'$'}type":"Literal","text":"Name"},"kind":{"${'$'}type":"Text",""" +
                     """"value":{"${'$'}type":"State","key":"name","defaultValue":""}}}]}}"""
             val session = FakeTreeSession(form)
-            val host = FuaranHost.start(session)
+            val host = FuaranHost.start(session, FuaranHost.DirectExecutor, FuaranHost.DirectExecutor)
             setContent { FuaranTheme(darkTheme = false) { InteractiveFuaranTree(host) } }
             waitForIdle()
 
