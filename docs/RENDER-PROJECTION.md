@@ -447,6 +447,30 @@ renderer narrows at the Compose boundary instead, where the loss costs a pixel.
 
   `Modal.anchor` remains unmodelled and is a separate, still-open slot — it is
   not what either standing render obligation is about.
+
+  **The RENDER half of that adoption landed separately, and the gap is worth
+  recording.** Phase 1499 widened the model and the decoder in `:fuaran-ui` and
+  did not carry the widening into `:fuaran-renderer`, which needs the Android SDK
+  and so is built only in CI — so the paragraph above was true of the decoder and
+  silently false of the renderer, and the only thing that said so was a red
+  `:fuaran-renderer:testDebugUnitTest` compile. The three form-field arms and the
+  widened `Switch` case selection (a literal `match` against a RESOLVED selector,
+  a `when` predicate taken on a resolved `true` only) are in the floor now. The
+  lesson generalises: a vocabulary claim made from the decoder's side is not a
+  claim about this host until the module that cannot be built on the authoring
+  machine has been run.
+
+  The three new arms are **inert by construction**, and each says so at its arm
+  rather than only here: `Tokens` renders its chips in AUTHORED order with the
+  `allowFreeText` polarity shown and not enforced (§3.6.9 obligation 4), `Rating`
+  fills pips against the resolved score and prints the resolved LEXEME beside
+  them — deliberately not `allowHalf`, which governs entry and not display — and
+  `Color` renders the swatch its `#rrggbb` names beside the hex as authored.
+  None of them wires write-back, because none of them is editable: there is no
+  chip entry, no pressable pip and no picker to return a value from, so a
+  `writeBack` call here would be dead code that merely looked like a fix. Making
+  any of them live is renderer feature work, and it is the same line the
+  `ChoiceField` and `RangeField` arms already stand on.
 - **Two declared render obligations remain owed and unanswered**
   (`FileUpload/picker-always-present`, `Modal/aria-modal-only-when-blocking`).
   Their STATUS is unchanged and their REASON is not: the slots they are about

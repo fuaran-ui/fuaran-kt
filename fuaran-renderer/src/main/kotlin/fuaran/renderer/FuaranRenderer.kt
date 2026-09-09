@@ -63,6 +63,7 @@ import fuaran.ui.CheckboxCell
 import fuaran.ui.CheckboxField
 import fuaran.ui.ChoiceField
 import fuaran.ui.CodeBlock
+import fuaran.ui.ColorField
 import fuaran.ui.ComboboxField
 import fuaran.ui.Custom
 import fuaran.ui.CustomCell
@@ -101,6 +102,7 @@ import fuaran.ui.ListNode
 import fuaran.ui.MapNode
 import fuaran.ui.Markdown
 import fuaran.ui.MasonryLayout
+import fuaran.ui.MatchCondition
 import fuaran.ui.Math
 import fuaran.ui.Media
 import fuaran.ui.Metric
@@ -116,6 +118,7 @@ import fuaran.ui.Progress
 import fuaran.ui.ProgressCell
 import fuaran.ui.RangeField
 import fuaran.ui.RangedNumberField
+import fuaran.ui.RatingField
 import fuaran.ui.ResolvedRows
 import fuaran.ui.ScrollArea
 import fuaran.ui.SegmentedChoiceField
@@ -132,12 +135,14 @@ import fuaran.ui.TextCell
 import fuaran.ui.TextField
 import fuaran.ui.Toast
 import fuaran.ui.ToggleField
+import fuaran.ui.TokensField
 import fuaran.ui.ToneVariant
 import fuaran.ui.TonedPillCell
 import fuaran.ui.TrackKind
 import fuaran.ui.Tree
 import fuaran.ui.TreeItem
 import fuaran.ui.Video
+import fuaran.ui.WhenCondition
 import fuaran.ui.discriminator
 
 // --------------------------------------------------------------------------- //
@@ -410,8 +415,23 @@ private fun RenderSwitch(k: Switch, ctx: BindingContext) {
     // already refused a Switch carrying neither, so the elvis tail is unreachable rather than a
     // silent default-to-empty.
     val selector = k.on ?: k.stateKey?.let { fuaran.ui.StateBinding(it) }
-    val current = selector?.let { ctx.resolve(it) } ?: ""
-    val chosen = k.cases.firstOrNull { it.match == current }?.child ?: k.default
+    val current = selector?.let { ctx.resolve(it) }
+    // Phase 1535 — first-match-wins over BOTH case spellings, in AUTHORED order:
+    // `firstOrNull` evaluates case *n* fully before considering case *n+1*, so the matches are
+    // not batched ahead of the predicates. The two spellings consult different things. A
+    // MatchCondition compares a literal against the selector and is taken only when the selector
+    // RESOLVED — an absent selector is not the empty string, so a switch with no `on` and no
+    // state key must not fall into a `match("")` case. A WhenCondition consults no selector at
+    // all, which is why an all-predicate switch needs none, and is taken on a RESOLVED `true`
+    // only: a resolved `false`, an unresolved binding and an errored one all fall through to the
+    // next case and ultimately to `default`, which is what `resolveBool` already answers.
+    val chosen =
+        k.cases.firstOrNull { case ->
+            when (val cond = case.condition) {
+                is MatchCondition -> current != null && cond.value == current
+                is WhenCondition -> ctx.resolveBool(cond.binding)
+            }
+        }?.child ?: k.default
     FuaranNode(chosen, ctx)
 }
 
@@ -1084,6 +1104,120 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        // 3.6.19 (Phase 1121) — SEVERAL values accumulated as chips. The list is ORDERED and a
+        // host must not sort or de-duplicate it, so the chips render in the order the resolved
+        // value carries them.
+        //
+        // NON-WRITABLE BY CONSTRUCTION (the Phase 667 audit's second group): there is no entry
+        // field and no per-chip removal affordance, so `onValueChange` can never fire from user
+        // input and a write-back here would be dead code that merely looked like a fix. The real
+        // remedy is a genuine chip control, which is renderer feature work.
+        //
+        // `allowFreeText` is SHOWN rather than enforced, on 3.6.9 obligation 4's reasoning — no
+        // static surface can enforce membership and a host MUST NOT claim it can. Note the
+        // polarity: it omits at `true` here, the OPPOSITE of ComboboxField, so the hint appears on
+        // this case's RESTING shape.
+        is TokensField -> {
+            val chips = ctx.resolve(kind.value).split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            Column {
+                Text(label + if (kind.allowFreeText) " (free text)" else "", fontSize = 12.sp, color = Color.Gray)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    chips.ifEmpty { listOf("—") }.forEach { chip ->
+                        Text(
+                            chip,
+                            fontSize = 12.sp,
+                            modifier =
+                                Modifier
+                                    .background(Color(0xFFEEEEEE), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
+        }
+        // 3.6.17 (Phase 1130) — a subjective score on a small ordinal scale. The value is a float
+        // even where nothing can type a fraction, because the commonest rating a reader sees is an
+        // AVERAGE arriving through a query — so the pips are filled against the resolved value and
+        // the number is printed beside them rather than rounded away.
+        //
+        // NON-WRITABLE BY CONSTRUCTION: the pips are drawn, not pressed. `allowHalf` is
+        // deliberately NOT read — it governs ENTRY, never display, and this floor has no entry, so
+        // showing it would be a claim about a control that is not here.
+        is RatingField -> {
+            // The printed score is the RESOLVED LEXEME, not a re-serialised Double: the wire
+            // carries a number as its source text, so a value round-tripped through Double comes
+            // back as a string the author never wrote. `resolveDouble` is used only to decide
+            // which pips are filled, where a lost digit costs a pixel.
+            val shown = ctx.resolve(kind.value)
+            val score = ctx.resolveDouble(kind.value, 0.0)
+            val positions = kind.max.coerceAtLeast(1)
+            Column {
+                Text(label, fontSize = 12.sp, color = Color.Gray)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    (1..positions).forEach { i ->
+                        CBox(
+                            Modifier
+                                .size(8.dp)
+                                .background(
+                                    if (i <= score) Color(0xFF6E6E6E) else Color(0xFFDDDDDD),
+                                    RoundedCornerShape(4.dp),
+                                ),
+                        )
+                    }
+                    Text("${shown.ifEmpty { "—" }} / $positions", fontSize = 12.sp, color = Color.Gray)
+                }
+            }
+        }
+        // 3.6.17 (Phase 1130) — the platform's own colour picker. This floor has no picker to
+        // open, so it renders the one thing it can render faithfully: the swatch the value names,
+        // beside the value itself. The value is `#rrggbb` and case is PRESERVED rather than
+        // normalised, so the hex is printed as authored.
+        //
+        // NON-WRITABLE BY CONSTRUCTION: there is no picker to return a value from.
+        is ColorField -> {
+            val hex = ctx.resolve(kind.value)
+            Column {
+                Text(label, fontSize = 12.sp, color = Color.Gray)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    CBox(
+                        Modifier
+                            .size(14.dp)
+                            .background(swatchColor(hex), RoundedCornerShape(3.dp))
+                            .border(1.dp, Color(0xFFBBBBBB), RoundedCornerShape(3.dp)),
+                    )
+                    Text(hex.ifEmpty { "—" }, fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The colour a `#rgb` / `#rrggbb` value names, or a neutral placeholder where it names no literal
+ * colour. Inventing a colour for a value this surface cannot read would be a claim about the
+ * document rather than a rendering of it — the same honesty rule the drawing surface applies.
+ */
+private fun swatchColor(value: String): Color {
+    val text = value.trim()
+    if (!text.startsWith("#")) return Color(0xFFDDDDDD)
+    val digits = text.drop(1)
+    fun nibble(c: Char): Int? = c.digitToIntOrNull(16)
+    return when (digits.length) {
+        3 -> {
+            val r = nibble(digits[0]) ?: return Color(0xFFDDDDDD)
+            val g = nibble(digits[1]) ?: return Color(0xFFDDDDDD)
+            val b = nibble(digits[2]) ?: return Color(0xFFDDDDDD)
+            Color(r * 17, g * 17, b * 17)
+        }
+        6 -> {
+            val comps = (0 until 6 step 2).map { i ->
+                val hi = nibble(digits[i]) ?: return Color(0xFFDDDDDD)
+                val lo = nibble(digits[i + 1]) ?: return Color(0xFFDDDDDD)
+                hi * 16 + lo
+            }
+            Color(comps[0], comps[1], comps[2])
+        }
+        else -> Color(0xFFDDDDDD)
     }
 }
 
