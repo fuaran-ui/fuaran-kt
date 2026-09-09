@@ -143,6 +143,43 @@ enum class TrendPolarity { HigherIsBetter, LowerIsBetter }
 
 enum class IconSize { Small, Medium, Large }
 
+/**
+ * Phase 1533 — the resolution a `NowBinding` declares for the host-furnished instant. FOUR members
+ * and not `RelativeTimeUnit`'s seven, deliberately: this is a TRUNCATION of a calendar instant, and
+ * a week, a month or a year has no truncation every host agrees on (which weekday starts a week;
+ * which calendar). The four here truncate the canonical ISO-8601 form by prefix.
+ */
+enum class TimeGrain { Second, Minute, Hour, Day }
+
+/**
+ * WIRE_FORMAT.md 3.6.11 — the modality a `Modal` declares. Omitted at `Modal`, which is the
+ * blocking modality every pre-modality document meant.
+ */
+enum class ModalityKind { Modal, Popover }
+
+/**
+ * Phase 1472 — the node-level declared text direction (3.1). Lower-case on the wire, like
+ * `LiveRegionKind` and `SortDirection`, because these are the HTML `dir` tokens themselves. Omitted
+ * at `auto`, which leaves the inherited direction in place — the pre-1472 rendering.
+ */
+@Suppress("EnumEntryName")
+enum class TextDirection { auto, ltr, rtl }
+
+/**
+ * Phase 1536 — `NavigateAction`'s destination window (3.6.21). A CLOSED enum of two, deliberately
+ * not HTML's `target` attribute: that vocabulary also carries `_parent` and `_top`, which are
+ * frame-busting gestures a hosted tree must not be able to ask for, so `_blank` is refused rather
+ * than aliased — accepting any of it would teach an emitter the wrong vocabulary.
+ */
+enum class NavigateTarget { Self, Blank }
+
+/**
+ * Phase 1116 — the recording device a `FileUpload` asks the platform for (3.6.18). There is
+ * deliberately no display-capture case and there will not be one by widening this member: a screen
+ * capture reaches every window the reader has open rather than one device behind the picker.
+ */
+enum class CaptureSource { Camera, Microphone }
+
 enum class DurationUnit { Seconds, Minutes, Hours }
 
 enum class DurationStyle { Compact, Clock, Long }

@@ -596,13 +596,27 @@ fun main() {
         if (link.sanitizedHref.openable != null) error("a dynamic href must not be openable")
     }
     runner.check("url/sanitized-navigate-route") {
-        if ((NavigateAction("/dashboard") as Action).sanitizedNavigateRoute != SanitizedUrl.Allowed("/dashboard")) {
+        if ((NavigateAction(LiteralText("/dashboard")) as Action).sanitizedNavigateRoute !=
+            SanitizedUrl.Allowed("/dashboard")
+        ) {
             error("a relative route must be allowed")
         }
-        if ((NavigateAction("javascript:x") as Action).sanitizedNavigateRoute !is SanitizedUrl.Rejected) {
+        if ((NavigateAction(LiteralText("javascript:x")) as Action).sanitizedNavigateRoute !is SanitizedUrl.Rejected) {
             error("a javascript: route must be rejected")
         }
         if ((DispatchAction as Action).sanitizedNavigateRoute != null) error("only Navigate carries a route")
+    }
+    // Phase 1536 — a BOUND route is Dynamic, not rejected and not allowed. 3.6.21's obligation is
+    // RESOLVE, THEN GATE: classifying the declaration would consult the floor about a template
+    // nobody navigates to while the string the router actually receives went unexamined. This is
+    // the same answer a bound `href` already gets, and the check sits beside that one so the pair
+    // reads as one rule rather than two coincidences.
+    runner.check("url/sanitized-navigate-route-bound-is-dynamic") {
+        val bound = NavigateAction(BoundText(StateBinding("route")), NavigateTarget.Blank) as Action
+        if (bound.sanitizedNavigateRoute != SanitizedUrl.Dynamic) {
+            error("a bound route is not knowable at decode time")
+        }
+        if (bound.sanitizedNavigateRoute?.openable != null) error("a dynamic route must not be openable")
     }
 
     // ----------------------------------------------------------------------- //

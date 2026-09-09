@@ -296,6 +296,9 @@ private fun decodeNode(value: JsonValue, path: String): Node {
             state = state,
             accessibility = accessibility,
             tooltip = tooltip,
+            // Phase 1535 — the conditional-presence TRAIT, an ordinary `Binding<bool>` slot beside
+            // the tooltip. The 3.6 bare-scalar coercion reaches it like any other binding slot.
+            visible = obj["visible"]?.let { decodeBindingBool(it, "$path.visible") },
         )
     } finally {
         // In `finally` because a default-deny decoder leaves by a throw more often than
@@ -410,6 +413,11 @@ private fun decodeStyle(value: JsonValue, path: String): SemanticStyle {
         weight = o.optStr("weight", path)?.let { enumOf<StyleWeight>(it, "$path.weight") } ?: StyleWeight.Standard,
         role = o.optStr("role", path),
         voice = o.optStr("voice", path),
+        // Phase 1472 — omitted at `auto`, the inherited direction. Neither a non-string nor an
+        // unrecognised token falls back to `auto`: a document declaring a direction the host cannot
+        // read must not be rendered in the opposite one in silence.
+        direction = o.optStr("direction", path)?.let { enumOf<TextDirection>(it, "$path.direction") }
+            ?: TextDirection.auto,
     )
 }
 
@@ -510,6 +518,10 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 role = enumOf<BoxRole>(o.req("role", path).str("$path.role"), "$path.role"),
                 // Field alias: title → heading (the universal card/modal prior).
                 heading = o.getAliased("heading", "title")?.let { decodeTextSource(it, "$path.heading") },
+                // Phase 1473 — the print-break pair, omitted at `false` and never
+                // truthiness-coerced.
+                breakBefore = o.optBool("breakBefore", path) ?: false,
+                keepTogether = o.optBool("keepTogether", path) ?: false,
             )
         "SplitPanel" ->
             SplitPanel(
@@ -557,6 +569,12 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 // Field alias: title → heading (the universal card/modal prior).
                 heading = o.getAliased("heading", "title")?.let { decodeTextSource(it, "$path.heading") },
                 onDismiss = o["onDismiss"]?.let { decodeAction(it, "$path.onDismiss") },
+                // 3.6.11 — omitted at `Modal`, the blocking modality every pre-modality document
+                // meant. Neither a non-string nor an unrecognised token falls back: a document
+                // asking for a popover and getting a blocking modal has been answered with a
+                // different affordance.
+                modality = o.optStr("modality", path)?.let { enumOf<ModalityKind>(it, "$path.modality") }
+                    ?: ModalityKind.Modal,
             )
         "ScrollArea" ->
             ScrollArea(
@@ -591,13 +609,55 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 stateKey = stateKey,
                 on = on,
                 cases = o.req("cases", path).array("$path.cases").mapIndexed { i, v ->
-                    val c = v.obj("$path.cases[$i]")
+                    val cp = "$path.cases[$i]"
+                    val c = v.obj(cp)
+                    // Phase 1535 — EXACTLY ONE of `match` and `when`. "Both" is refused rather than
+                    // resolved by precedence (a precedence rule would have to be specified, agreed
+                    // on every host and remembered by every author, for a document nobody meant to
+                    // write); "neither" keeps the pre-1535 MISSING_FIELD at `.match`, which is what
+                    // the corpus pins — a case naming no condition is not one that never matches,
+                    // and skipping it silently is the class of silence the predicate form was added
+                    // to remove.
+                    val whenSlot = c["when"]
+                    val condition: SwitchCondition =
+                        if (c["match"] != null && whenSlot != null) {
+                            throw FuaranDecodeException(
+                                FuaranDecodeException.WRONG_TYPE,
+                                "$cp.when",
+                                "expected exactly one of 'match' and 'when' \u2014 a precedence rule " +
+                                    "between them would have to be agreed on every host for a " +
+                                    "document nobody meant to write",
+                            )
+                        } else if (whenSlot != null) {
+                            WhenCondition(decodeBindingBool(whenSlot, "$cp.when"))
+                        } else {
+                            MatchCondition(c.req("match", cp).str("$cp.match"))
+                        }
                     SwitchCase(
-                        match = c.req("match", "$path.cases[$i]").str("$path.cases[$i].match"),
-                        child = decodeNode(c.req("child", "$path.cases[$i]"), "$path.cases[$i].child"),
+                        condition = condition,
+                        child = decodeNode(c.req("child", cp), "$cp.child"),
                     )
                 },
                 default = decodeNode(o.req("default", path), "$path.default"),
+                // Phase 1122 — a POSITIVE INTEGER count of milliseconds. Non-positive is refused
+                // rather than canonicalised: `0` is what an emitter reaches for to mean "off" and
+                // absence is already that spelling, so rewriting it would make two document shapes
+                // mean one thing and tell the emitter nothing about its misreading. Fractional is
+                // refused separately — the slot is an integer count, and a decoder truncating where
+                // another rounded would leave two hosts disagreeing about a document neither
+                // refused. Both fall out of the strict integer reader plus the bound.
+                autoAdvanceMs = o["autoAdvanceMs"]?.let {
+                    val ms = it.int("$path.autoAdvanceMs")
+                    if (ms < 1) {
+                        throw FuaranDecodeException(
+                            FuaranDecodeException.WRONG_TYPE,
+                            "$path.autoAdvanceMs",
+                            "expected a positive millisecond interval \u2014 an absent key is already " +
+                                "the spelling for off",
+                        )
+                    }
+                    ms
+                },
             )
         }
         // Display
@@ -827,13 +887,37 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
                 icon = o.optStr("icon", path),
             )
-        "FileUpload" ->
+        "FileUpload" -> {
+            // Phase 1117 — the empty string is a name no host registers, so a document carrying it
+            // describes an upload that can never stream. Refused rather than read as absence: that
+            // coercion silently turns an upload the author meant to stream into a client-only one,
+            // while every visible thing about the control still works.
+            val destination = o.optStr("destination", path)
+            if (destination == "") {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    "$path.destination",
+                    "expected a registered destination name \u2014 an absent member is already the " +
+                        "spelling for an upload that streams nowhere",
+                )
+            }
             FileUpload(
                 accept = o.strList("accept", path),
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 multiple = o.req("multiple", path).bool("$path.multiple"),
                 disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
+                // Phase 1115 — read through the STRICT bool reader: each slot decides whether a
+                // whole ingress route exists, and a truthiness read would open a drop target on
+                // `"no"` and `"false"` alike.
+                dropTarget = o.optBool("dropTarget", path) ?: false,
+                acceptPaste = o.optBool("acceptPaste", path) ?: false,
+                // Phase 1116 — OPTIONAL, not omit-at-default: an absent member asks for the ordinary
+                // picker, which is not one of the two devices wearing a default, and an unrecognised
+                // value MUST NOT fall back to either device.
+                capture = o.optStr("capture", path)?.let { enumOf<CaptureSource>(it, "$path.capture") },
+                destination = destination,
             )
+        }
         "Select" ->
             Select(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
@@ -878,6 +962,16 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 // than a degenerate configuration the renderer should try to honour.
                 pageSize = o["pageSize"]?.intAtLeast(1, "$path.pageSize"),
                 defaultSort = o["defaultSort"]?.let { decodeDefaultSort(it, "$path.defaultSort") },
+                // Phase 1473 — the paginated-media pair, on Box's terms.
+                keepRowsTogether = o.optBool("keepRowsTogether", path) ?: false,
+                repeatHeader = o.optBool("repeatHeader", path) ?: false,
+                // Phase 1123 — a bool, omitted at `false`, never truthiness-coerced: the slot
+                // decides whether a whole affordance exists.
+                exportable = o.optBool("exportable", path) ?: false,
+                // Phase 1125 — separate decoder arms, so a wrong type on either is reported at its
+                // own path.
+                transferInKey = o.optStr("transferInKey", path),
+                transferOutKey = o.optStr("transferOutKey", path),
             )
         }
         "Chart" ->
@@ -889,6 +983,10 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 // Round-trips when present; absent (legacy wire) defaults to false.
                 stacked = o.optBool("stacked", path) ?: false,
                 title = o["title"]?.let { decodeTextSource(it, "$path.title") },
+                // Phase 1490 (4l) — omitted when the chart declares none.
+                annotations = o["annotations"]?.array("$path.annotations")?.mapIndexed { i, v ->
+                    decodeChartAnnotation(v, "$path.annotations[$i]")
+                },
             )
         "Map" ->
             MapNode(
@@ -1000,6 +1098,29 @@ private fun decodeBindingBool(value: JsonValue, path: String): Binding =
     decodeBindingScalar(value, path) { v, p -> v.bool(p) }
 
 /**
+ * The `Binding<string list>` slot (Phase 1121's `Tokens.value`, and the multi-select `values` it
+ * shares its type with).
+ *
+ * The LIFT is the tempting coercion and it is exactly wrong: a document saying `"urgent"` where the
+ * wire says a list has a misunderstanding of the slot, and silently agreeing with it would let an
+ * emitter ship a token field that can only ever hold one token while every host round-tripped it
+ * perfectly. So a bare string here is `WRONG_TYPE` at the slot's own path rather than a one-element
+ * list.
+ */
+private fun decodeBindingStringList(value: JsonValue, path: String): Binding =
+    decodeBindingScalar(value, path) { v, p ->
+        val arr = v as? JsonArray
+            ?: throw FuaranDecodeException(
+                FuaranDecodeException.WRONG_TYPE,
+                p,
+                "expected a list of strings \u2014 a bare string is not lifted into a one-element " +
+                    "list, since that would let an emitter ship a token field that can only ever " +
+                    "hold one token",
+            )
+        arr.items.forEachIndexed { i, item -> item.str("$p[$i]") }
+    }
+
+/**
  * The typed NUMERIC `Binding` slots (WIRE_FORMAT 7), on the same machinery as the string/bool
  * pair above and for the same reason: 3.6's bare-scalar coercion is about SHAPE — a bare scalar
  * in a Binding slot can only mean `Static` — while the slot's own type still governs the VALUE.
@@ -1104,13 +1225,55 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
             )
         "Computed" -> ComputedBinding
         // The host-furnished instant - no payload; the host clock supplies the value at resolve time.
-        "Now" -> NowBinding
+        // Phase 1533 — the declared `grain` is the one wire field, optional, absent meaning
+        // `Second`. Present-but-unreadable is a REFUSAL rather than a silent fallback to the
+        // default: a document naming a grain the host cannot honour must not be rendered at a
+        // neighbouring resolution in silence.
+        "Now" -> NowBinding(o.optStr("grain", path)?.let { enumOf<TimeGrain>(it, "$path.grain") })
         "I18n" -> I18nBinding(o.req("key", path).str("$path.key"), o["args"]?.payloadMap("$path.args"))
-        "Local" ->
+        "Local" -> {
+            // 3.3.3 — the buffer's own codec REPLACES the identity on both sides: `format` renders
+            // through it, `parse` inverts it. The admitted set is therefore the NumberFormat cases
+            // with a TOTAL, LOCALE-INDEPENDENT inverse, and today that is `Number` alone. Every
+            // other case is refused with a stated reason rather than by omission — `Currency`
+            // prepends a locale-chosen symbol, `Date`'s styles are locale renditions with no parse,
+            // and `Percent` (the one that looks admissible) needs a x100 scale whose IEEE round trip
+            // is not exact, so admitting it would mean specifying a rounding to the bit on every
+            // host.
+            val codec = o["codec"]?.let { c ->
+                val decoded = decodeNumberFormat(c, "$path.codec")
+                if (decoded !is NumberNumberFormat) {
+                    throw FuaranDecodeException(
+                        FuaranDecodeException.WRONG_TYPE,
+                        "$path.codec",
+                        "expected a Format with a total, locale-independent inverse \u2014 Number " +
+                            "alone, since whatever the buffer renders it must also parse back from " +
+                            "what the reader typed",
+                    )
+                }
+                decoded
+            }
+            val hasOnCommit = o["onCommit"] != null
+            val commitTo = o.optStr("commitTo", path)
+            // Mutually exclusive, and a refusal rather than a precedence rule: the wire cannot carry
+            // the closure — it is `"<closure>"` and nothing more — so a host honouring `onCommit`
+            // and a host honouring `commitTo` would write to different places from identical bytes.
+            if (hasOnCommit && commitTo != null) {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    "$path.commitTo",
+                    "expected exactly one of 'onCommit' and 'commitTo' \u2014 the wire cannot carry " +
+                        "the closure, so two hosts would write to different places from identical bytes",
+                )
+            }
             LocalBinding(
                 flushOn = o["flushOn"]?.let { decodeLocalFlushTrigger(it, "$path.flushOn") } ?: OnBlur,
                 initialFrom = decodeBinding(o.req("initialFrom", path), "$path.initialFrom"),
+                codec = codec,
+                commitTo = commitTo,
+                hasOnCommit = hasOnCommit,
             )
+        }
         "Format" ->
             FormatBinding(
                 format = decodeNumberFormat(o.req("format", path), "$path.format"),
@@ -1123,6 +1286,41 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
                 pipeline = o.req("pipeline", path),
                 params = o["params"]?.let { decodeTransformParams(it, "$path.params") },
             )
+        // Phase 1534 (3.3.2) — ONE scalar expression evaluated to ONE value. The expression itself
+        // is held as raw JSON for the reason a Transform pipeline is: the ColExpr algebra is owned
+        // by the Fuaran.Core codec, and a render projection does not decompose content the host
+        // does not own. The two REFUSALS still apply, because both are decidable by walking the
+        // document — and both hold because an Expr HAS NO ROW. Left admitted, each would decode to
+        // an expression whose evaluation could only ever fail, once per render, on every host.
+        "Expr" -> {
+            val expr = o.req("expr", path)
+            val params = o["params"]?.let { decodeTransformParams(it, "$path.params") }
+            val exprPath = "$path.expr"
+            firstColReference(expr)?.let { offender ->
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    exprPath,
+                    "expected no column reference \u2014 a Binding.Expr evaluates against its params " +
+                        "alone and has no frame for '$offender' to read; the remedy is a different " +
+                        "BINDING, not a different spelling, and Binding.Transform is the case that " +
+                        "supplies the frame",
+                )
+            }
+            val bound = (params ?: emptyList()).map { it.name }.toSet()
+            // Statically decidable HERE where it is not for a Transform, whose unbound filter params
+            // are PRUNED under the deliberate "unset chip => no constraint" leniency: an Expr has no
+            // step to prune and no rows to fall back on, so an unbound reference has no value it
+            // could ever take.
+            firstUnboundParam(expr, bound)?.let { unbound ->
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    exprPath,
+                    "expected every referenced param to be bound by the binding's own params list " +
+                        "\u2014 '$unbound' is not",
+                )
+            }
+            ExprBinding(expr = expr, params = params)
+        }
         "Invoke" -> InvokeBinding(o.req("capabilityId", path).str("$path.capabilityId"), decodeInvokeArgs(o, path))
         // Lenient: the `TextSource.Bound` wrapper transferred to a bare-Binding slot —
         // one payload field, so the unwrap is one-to-one (decode-only).
@@ -1234,11 +1432,19 @@ private fun decodeAction(value: JsonValue, path: String): Action {
                 payload = o.req("payload", path).payload("$path.payload"),
             )
         // Canonical field is `route`; the web-prior spellings decode as aliases.
+        // Phase 1536 — the route is a TextSource, so a tree can name a destination it computes
+        // from what the reader is looking at. The bare JSON string IS `Literal`'s canonical form,
+        // so every document written before the widening decodes exactly as it did — aliases
+        // included, since they resolve before the value is decoded. `target` is omitted at `Self`.
         "Navigate" -> {
             val v =
                 o["route"] ?: o["href"] ?: o["url"] ?: o["to"]
                     ?: throw FuaranDecodeException(FuaranDecodeException.MISSING_FIELD, "$path.route", "required field absent")
-            NavigateAction(route = v.str("$path.route"))
+            NavigateAction(
+                route = decodeTextSource(v, "$path.route"),
+                target = o.optStr("target", path)
+                    ?.let { enumOf<NavigateTarget>(it, "$path.target") } ?: NavigateTarget.Self,
+            )
         }
         "SetState" -> {
             // `oneOf: [required value, required valueFrom]` - a literal payload OR a binding
@@ -1269,7 +1475,49 @@ private fun decodeAction(value: JsonValue, path: String): Action {
                 args = o.req("args", path).payload("$path.args"),
             )
         "CommitLocal" -> CommitLocalAction(nodeId = o.req("nodeId", path).str("$path.nodeId"))
-        "WriteToClipboard" -> WriteToClipboardAction(o.req("text", path).str("$path.text"))
+        // Phase 1126 — the payload is a TextSource; the bare string IS `Literal`'s canonical form,
+        // so the explicit envelope normalises down to it here as at every other text slot (16).
+        // Never coerced from a non-text JSON value: a host reading the widening as "this member is
+        // now open" would put a JSON literal on the reader's clipboard.
+        "WriteToClipboard" -> WriteToClipboardAction(decodeTextSource(o.req("text", path), "$path.text"))
+        // Phase 1124 — the payload-free print, and the ONE action arm strict about unrecognised
+        // members. Everywhere else in this format an unknown member is one the reading host has not
+        // learned yet, and dropping it is the forward-compatible answer; here there is nothing to
+        // learn — page range, size, margins and copies are the host's page setup and the reader's
+        // dialogue — so accepting `{"$type":"Print","pageRange":"1-3"}` would leave the emitter
+        // believing it had constrained a printing it had not. The refusal names the offending
+        // member's own path, taking the FIRST in sorted order so which member is named is
+        // deterministic rather than a function of map iteration order.
+        "Print" -> {
+            val extras = o.members.keys.filter { it != "\u0024type" }.sorted()
+            if (extras.isNotEmpty()) {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    "$path.${extras.first()}",
+                    "expected no member beside \$type \u2014 Print takes no payload",
+                )
+            }
+            PrintAction
+        }
+        // Phase 1537 — ask, then act. The DEPTH-ONE REFUSAL is the substance of this arm: a Confirm
+        // reachable from either continuation is refused, and the check walks the DECODED
+        // continuation rather than its immediate `$type`, so a nested confirm inside a Chain is
+        // caught by the same line that catches a bare one. A dialogue that answers a dialogue is a
+        // modal stack the reader cannot escape, and it says nothing one question does not.
+        "Confirm" -> {
+            val prompt = decodeTextSource(o.req("prompt", path), "$path.prompt")
+            val onConfirm = decodeAction(o.req("onConfirm", path), "$path.onConfirm")
+            refuseNestedConfirm(onConfirm, "$path.onConfirm")
+            val onCancel = o["onCancel"]?.let {
+                val decoded = decodeAction(it, "$path.onCancel")
+                refuseNestedConfirm(decoded, "$path.onCancel")
+                decoded
+            }
+            ConfirmAction(prompt = prompt, onConfirm = onConfirm, onCancel = onCancel)
+        }
+        // Phase 1537 — a bare node id, the CommitLocal shape. It addresses a node in THIS document,
+        // so there is nothing for a binding to compute.
+        "Focus" -> FocusAction(o.req("nodeId", path).str("$path.nodeId"))
         "ReadFileBody" ->
             ReadFileBodyAction(
                 fileRef = o.req("fileRef", path).str("$path.fileRef"),
@@ -1376,6 +1624,14 @@ private fun decodeNumberFormat(value: JsonValue, path: String): NumberFormat {
         "Percent" -> PercentNumberFormat(o.optInt("decimals", path))
         "Date" -> DateNumberFormat(enumOf<DateStyle>(o.req("dateStyle", path).str("$path.dateStyle"), "$path.dateStyle"))
         "RelativeTime" -> RelativeTimeNumberFormat(enumOf<RelativeTimeUnit>(o.req("unit", path).str("$path.unit"), "$path.unit"))
+        // Phase 1533 — `unit` is OPTIONAL here and its absence is the auto-selection request, not a
+        // default. Present-but-unreadable is still a refusal.
+        "Since" -> SinceNumberFormat(o.optStr("unit", path)?.let { enumOf<RelativeTimeUnit>(it, "$path.unit") })
+        "Duration" ->
+            DurationNumberFormat(
+                unit = enumOf<DurationUnit>(o.req("unit", path).str("$path.unit"), "$path.unit"),
+                style = enumOf<DurationStyle>(o.req("style", path).str("$path.style"), "$path.style"),
+            )
         else -> unknownCase(t, path, "NumberFormat")
     }
 }
@@ -1600,9 +1856,77 @@ private fun decodeFormFieldKind(value: JsonValue, path: String, autoBind: Contro
                 max = o.optStr("max", path),
                 step = o.optDouble("step", path),
             )
+        // Phase 1121 — every member OPTIONAL, and `allowFreeText` omits at TRUE. The one decode
+        // refusal is the control that CANNOT EXIST: free text denied and no suggestion source, so
+        // no gesture could ever put a token in. It is refused at `allowFreeText` rather than at
+        // `suggestions`, because the member that was WRITTEN is the one naming the impossible
+        // state — an absent `suggestions` is the ordinary open token box.
+        "Tokens" -> {
+            val suggestions = o["suggestions"]?.let { decodeBinding(it, "$path.suggestions") }
+            val allowFreeText = o.optBool("allowFreeText", path) ?: true
+            if (!allowFreeText && suggestions == null) {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    "$path.allowFreeText",
+                    "a Tokens field admitting no free text needs a suggestion source \u2014 with " +
+                        "neither, no gesture could ever put a token into it",
+                )
+            }
+            TokensField(
+                value = valueOr(JsonArray(emptyList()), ::decodeBindingStringList),
+                suggestions = suggestions,
+                allowFreeText = allowFreeText,
+            )
+        }
+        // Phase 1130 — `max` IS the scale, so it is required and a value below 1 is refused rather
+        // than clamped. Note the asymmetry the corpus pins: the SCALE is refused here and the VALUE
+        // is not, because a bound value is invisible to a decoder and a rule enforced only on
+        // literals would be two rules wearing one name.
+        "Rating" -> {
+            val scale = o.req("max", path).int("$path.max")
+            if (scale < 1) {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    "$path.max",
+                    "a rating scale of at least 1 \u2014 a scale with no positions has nothing to " +
+                        "draw and no keystroke that could change anything",
+                )
+            }
+            RatingField(
+                value = valueOr(JsonNumber("0"), ::decodeBindingFloat),
+                max = scale,
+                // Governs ENTRY granularity, never display: a host must not quantise a resolved
+                // value to it.
+                allowHalf = o.optBool("allowHalf", path) ?: false,
+            )
+        }
+        // Phase 1130 — only the STATIC case is judged here, and the split is recorded rather than
+        // hidden: a State / Query / Selection binding carries its text from outside the document,
+        // where a decoder cannot see it.
+        "Color" -> {
+            val v = valueOr(JsonString("#000000"))
+            val literal = (v as? StaticBinding)?.value as? JsonString
+            if (literal != null && !isHexColour(literal.value)) {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    "$path.value",
+                    "a `#rrggbb` colour \u2014 the one shape a native colour input can hold, so a " +
+                        "literal outside it names a colour this control could never carry",
+                )
+            }
+            ColorField(value = v)
+        }
         else -> unknownCase(t, path, "FormFieldKind")
     }
 }
+
+/**
+ * `#rrggbb` — six hexadecimal digits after a `#`, either case (3.6.17). Deliberately narrower than
+ * CSS: it is the one shape a native colour input can hold or return, so `#fff`, `rebeccapurple`,
+ * `rgb(0 0 0)` and an alpha channel all name a colour this control could never carry.
+ */
+private fun isHexColour(s: String): Boolean =
+    s.length == 7 && s[0] == '#' && s.drop(1).all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }
 
 private fun rangePlaceholder(): JsonValue =
     JsonObject(linkedMapOf<String, JsonValue>("min" to JsonNumber("0"), "max" to JsonNumber("0")))
@@ -2137,6 +2461,221 @@ private fun decodeEffect(value: JsonValue, path: String): EffectClass {
 }
 
 // --------------------------------------------------------------------------- //
+
+/**
+ * Phase 1537 — fail when a Confirm is reachable from [a]. Confirmation is bounded at ONE question:
+ * a dialogue that answers a dialogue is a modal stack the reader cannot escape, and it expresses no
+ * intent a single question does not.
+ *
+ * It walks the DECODED action rather than raw JSON, and descends a chain, because a chain is
+ * otherwise a hiding place — a check written against the continuation's immediate `$type` passes a
+ * nested confirm one level down.
+ */
+private fun refuseNestedConfirm(a: Action, path: String) {
+    when (a) {
+        is ConfirmAction ->
+            throw FuaranDecodeException(
+                FuaranDecodeException.WRONG_TYPE,
+                path,
+                "expected no Confirm inside another Confirm's continuation \u2014 confirmation is " +
+                    "bounded at one question",
+            )
+        is ChainAction -> a.ops.forEachIndexed { i, inner -> refuseNestedConfirm(inner, "$path.ops[$i]") }
+        else -> Unit
+    }
+}
+
+/**
+ * Every direct sub-expression of a raw `ColExpr` document, so the two walks below share one
+ * definition of the shape and cannot disagree about which members recurse.
+ *
+ * A STRUCTURAL walk rather than a typed one, because this surface holds the algebra as raw JSON
+ * (the Transform posture): every member that is an object or an array of objects is a candidate
+ * sub-expression, which is a superset of the real ones and therefore cannot miss a reference. The
+ * cost of the superset is nil — a non-expression object carries neither a `col` discriminator nor a
+ * `param` name, so it contributes nothing to either answer.
+ */
+private fun exprChildren(e: JsonValue): List<JsonValue> =
+    when (e) {
+        is JsonObject ->
+            e.members.entries.filter { it.key != "\u0024type" }.flatMap {
+                when (val v = it.value) {
+                    is JsonObject -> listOf(v)
+                    is JsonArray -> v.items.filterIsInstance<JsonObject>()
+                    else -> emptyList()
+                }
+            }
+        is JsonArray -> e.items.filterIsInstance<JsonObject>()
+        else -> emptyList()
+    }
+
+private fun exprTag(e: JsonValue): String? = ((e as? JsonObject)?.get("\u0024type") as? JsonString)?.value
+
+private fun exprName(e: JsonValue): String? = ((e as? JsonObject)?.get("name") as? JsonString)?.value
+
+/** The first `col` reference reachable in [e], if any (3.3.2 refusal 1). */
+private fun firstColReference(e: JsonValue): String? {
+    if (exprTag(e) == "col") return exprName(e) ?: ""
+    for (child in exprChildren(e)) firstColReference(child)?.let { return it }
+    return null
+}
+
+/**
+ * The first param name [e] references that [bound] does not carry, if any (3.3.2 refusal 2).
+ *
+ * The `in` arm's `param` member is a param too — it is the LIST spelling of the same reference, so
+ * leaving it out would admit an unbound membership test through the one arm that reads a param
+ * without being one.
+ */
+private fun firstUnboundParam(e: JsonValue, bound: Set<String>): String? {
+    when (exprTag(e)) {
+        "param" -> exprName(e)?.let { if (it !in bound) return it }
+        "in" -> ((e as? JsonObject)?.get("param") as? JsonString)?.value?.let { if (it !in bound) return it }
+        else -> Unit
+    }
+    for (child in exprChildren(e)) firstUnboundParam(child, bound)?.let { return it }
+    return null
+}
+
+/**
+ * `true` when [text] is a canonical ISO-8601 date the temporal axis can place — `YYYY-MM-DD`,
+ * optionally followed by `T...` whose time-of-day is discarded.
+ *
+ * STRICT by shape AND by calendar: four digits, two, two, both hyphens, a month in 1-12 and a day
+ * the month actually has. A locale spelling (`15/01/2026`) and an impossible day (`2026-13-05`) are
+ * both refused, because an unreadable date is not a date drawn slightly wrong — it is one drawn at
+ * the epoch, dragging the axis back with it.
+ */
+private fun isCanonicalIsoDay(text: String): Boolean {
+    if (text.length < 10) return false
+    if (text.length > 10 && text[10] != 'T') return false
+    if (text[4] != '-' || text[7] != '-') return false
+    val year = text.substring(0, 4).toIntOrNull() ?: return false
+    val month = text.substring(5, 7).toIntOrNull() ?: return false
+    val day = text.substring(8, 10).toIntOrNull() ?: return false
+    if (month !in 1..12 || day < 1) return false
+    val leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+    val lengths = intArrayOf(31, if (leap) 29 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    return day <= lengths[month - 1]
+}
+
+/** Phase 1491 (4l) — an annotation's x address. */
+private fun decodeChartAnnotationX(value: JsonValue, path: String): ChartAnnotationX {
+    val o = value.obj(path)
+    return when (val t = o.discriminator(path)) {
+        "Category" -> CategoryAddress(o.req("key", path).str("$path.key"))
+        "Date" -> {
+            val iso = o.req("iso", path).str("$path.iso")
+            if (!isCanonicalIsoDay(iso)) {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    "$path.iso",
+                    "expected a canonical ISO-8601 date (YYYY-MM-DD, optionally followed by a time) " +
+                        "naming a real calendar day \u2014 an event marker's date is the address it " +
+                        "is drawn at, and an unreadable one would place the marker at 1970-01-01 " +
+                        "and drag the axis back with it",
+                )
+            }
+            DateAddress(iso)
+        }
+        else -> unknownCase(t, path, "ChartAnnotationX")
+    }
+}
+
+/**
+ * Phase 1492 (4l) — a range band's PAIR.
+ *
+ * TWO REFUSALS, and they are the pair rules the WIRE can decide by itself. A non-finite endpoint is
+ * the reference line's narrowing at two slots instead of one, for its reason exactly: 4l rule 3 has
+ * both ends enter the value domain, so a NaN takes the nice-domain, every gridline and every mark
+ * with it. An UNORDERED pair is refused at the PAIR's own slot — the defect is the pair's, not
+ * either end's — rather than silently swapped, because a band written backwards is an author's
+ * mistake about their own data and swapping the ends would draw a picture they did not describe.
+ *
+ * A CATEGORY pair's order is NOT decided here: the order of two band keys is the ROWS' order, a
+ * cross-reference rather than a local property of the address.
+ */
+private fun decodeChartAnnotationRange(value: JsonValue, path: String): ChartAnnotationRange {
+    val o = value.obj(path)
+    return when (val t = o.discriminator(path)) {
+        "ValueRange" -> {
+            val from = o.req("from", path).double("$path.from")
+            val to = o.req("to", path).double("$path.to")
+            for ((slot, v) in listOf("from" to from, "to" to to)) {
+                if (!v.isFinite()) {
+                    throw FuaranDecodeException(
+                        FuaranDecodeException.WRONG_TYPE,
+                        "$path.$slot",
+                        "expected a FINITE JSON number \u2014 a range band's end names a place on " +
+                            "the value axis, and NaN / Infinity names none; give the value in the " +
+                            "axis's own units, or drop the annotation",
+                    )
+                }
+            }
+            if (from > to) {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    path,
+                    "expected an ORDERED pair \u2014 a range band runs from its lower value to its " +
+                        "upper one, and this pair runs backwards; swapping the ends silently would " +
+                        "draw a band the author did not describe",
+                )
+            }
+            ValueRange(from, to)
+        }
+        "XRange" -> {
+            val from = decodeChartAnnotationX(o.req("from", path), "$path.from")
+            val to = decodeChartAnnotationX(o.req("to", path), "$path.to")
+            // Both dates are already known canonical and calendar-valid (the address decoder
+            // refused anything else), and a canonical `YYYY-MM-DD` sorts lexicographically exactly
+            // as it sorts chronologically — so no calendar arithmetic is needed here.
+            if (from is DateAddress && to is DateAddress && from.iso > to.iso) {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    path,
+                    "expected an ORDERED pair \u2014 a range band runs from its earlier date to its " +
+                        "later one, and this pair runs backwards; swapping the ends silently would " +
+                        "draw a band the author did not describe",
+                )
+            }
+            XRange(from, to)
+        }
+        else -> unknownCase(t, path, "ChartAnnotationRange")
+    }
+}
+
+/**
+ * Phase 1490 (4l) — a chart's data-addressed annotation.
+ *
+ * THE REFERENCE LINE'S VALUE MUST BE FINITE, and that is a slot-specific NARROWING of 7 rather than
+ * a disagreement with it. 7 admits the quoted `"NaN"` / `"Infinity"` / `"-Infinity"` sentinels at
+ * every float slot and the float reader honours them — that widening is deliberate and stays. But a
+ * reference line addresses a place on the VALUE AXIS, and a non-finite value names no such place:
+ * it would enter the domain computation and put every gridline, tick and mark at a NaN coordinate.
+ * The picture is not merely wrong at the annotation, it is wrong everywhere.
+ */
+private fun decodeChartAnnotation(value: JsonValue, path: String): ChartAnnotation {
+    val o = value.obj(path)
+    val label = o["label"]?.let { decodeTextSource(it, "$path.label") }
+    return when (val t = o.discriminator(path)) {
+        "ReferenceLine" -> {
+            val v = o.req("value", path).double("$path.value")
+            if (!v.isFinite()) {
+                throw FuaranDecodeException(
+                    FuaranDecodeException.WRONG_TYPE,
+                    "$path.value",
+                    "expected a FINITE JSON number \u2014 a reference line names a place on the " +
+                        "value axis, and NaN / Infinity names none; give the value in the axis's " +
+                        "own units, or drop the annotation",
+                )
+            }
+            ReferenceLine(v, label)
+        }
+        "EventMarker" -> EventMarker(decodeChartAnnotationX(o.req("at", path), "$path.at"), label)
+        "RangeBand" -> RangeBand(decodeChartAnnotationRange(o.req("range", path), "$path.range"), label)
+        else -> unknownCase(t, path, "ChartAnnotation")
+    }
+}
 
 private fun unknownCase(discriminator: String, path: String, du: String): Nothing =
     throw FuaranDecodeException(

@@ -117,6 +117,15 @@ object ActionDispatch {
             is SetStateAction ->
                 action.value?.let { session.setState(action.key, it.encode()) } ?: host.add(action)
             // Host / closure actions — no wire-survivable session effect; hand back for host routing.
+            // Phases 1124/1537 — `Print`, `Confirm` and `Focus` are host affordances too: a print
+            // gesture, a modal round trip and a focus move all need a surface this pure session
+            // does not have, so each is handed back rather than half-performed. A `Confirm` in
+            // particular must reach the host WHOLE — its continuations are the host's to run only
+            // after the reader has answered, and applying either here would perform the act the
+            // question exists to ask about.
+            PrintAction,
+            is ConfirmAction,
+            is FocusAction,
             DispatchAction,
             is CommitLocalAction,
             is CallAction,

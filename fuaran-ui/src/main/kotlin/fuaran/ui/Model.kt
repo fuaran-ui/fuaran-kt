@@ -27,6 +27,23 @@ data class Node(
     val state: StateBehaviour? = null,
     val accessibility: Accessibility? = null,
     /**
+     * Whether the node is PRESENT in the rendered output at all (WIRE_FORMAT.md 3.6, Phase 1535).
+     *
+     * A node-level trait for the reason the trait tier exists: "should this be here at all" is
+     * uniform across every kind, and forty-odd per-spec spellings of it would be forty-odd
+     * independently driftable decisions about one concept.
+     *
+     * It is NOT [Accessibility.hidden], and the two have opposite polarity: a resolved `false` here
+     * emits NOTHING — no element, no layout, no accessibility-tree entry — where `hidden` is
+     * `aria-hidden` over a node that IS rendered. Content the reader should not have now takes
+     * this; decoration the reader should never hear takes `hidden`.
+     *
+     * Any outcome other than a resolved `false` renders the node, unresolved and errored included:
+     * hiding on absence is the one failure a reader cannot see, cannot report and cannot work
+     * around.
+     */
+    val visible: Binding? = null,
+    /**
      * The supplementary hint (WIRE_FORMAT.md 3.1, "the tooltip trait" — Phase 1112).
      *
      * **A node-level TRAIT, not a field of any kind.** "A short supplementary description of this
@@ -56,6 +73,14 @@ data class SemanticStyle(
     val weight: StyleWeight = StyleWeight.Standard,
     val role: String? = null,
     val voice: String? = null,
+    /**
+     * Phase 1472 — the one member of this record that is not presentational: it declares the text
+     * DIRECTION, which is a fact about the content rather than a style choice. Omitted at `auto`
+     * on both boundaries, like its siblings; neither a non-string nor an unrecognised token falls
+     * back, because a document declaring a direction the host cannot read must not be rendered in
+     * the opposite one in silence.
+     */
+    val direction: TextDirection = TextDirection.auto,
 )
 
 /** Optional load/empty/error surfaces. `onError` is an unobservable closure — presence only. */
@@ -93,6 +118,12 @@ data class Box(
     val layout: BoxLayout,
     val role: BoxRole,
     val heading: TextSource? = null,
+    /**
+     * Phase 1473 — the print-break controls. Both omit at `false`, and both are declarations about
+     * PAGINATED media alone: a screen host reads them and emits nothing.
+     */
+    val breakBefore: Boolean = false,
+    val keepTogether: Boolean = false,
 ) : NodeKind
 
 data class SplitPanel(val children: List<Node>, val weight: Double) : NodeKind
@@ -124,6 +155,13 @@ data class Modal(
     val open: Binding,
     val heading: TextSource? = null,
     val onDismiss: Action? = null,
+    /**
+     * WIRE_FORMAT.md 3.6.11 — omitted at [ModalityKind.Modal], which is the blocking modality every
+     * pre-modality document meant. A present value outside the two is `UNKNOWN_DU_CASE` and a
+     * non-string is `WRONG_TYPE`; neither falls back, because a document asking for a popover and
+     * getting a blocking modal has been answered with a different affordance.
+     */
+    val modality: ModalityKind = ModalityKind.Modal,
 ) : NodeKind
 
 data class ScrollArea(
@@ -151,9 +189,50 @@ data class Switch(
     val cases: List<SwitchCase>,
     val default: Node,
     val on: Binding? = null,
+    /**
+     * Phase 1122 — the timed carousel: advance to the next case every this-many milliseconds,
+     * omitted at absence. It declares the one fact a host cannot recover from the tree — every
+     * other half of a carousel was already composable, and nothing in any arrangement of those
+     * says a timer exists.
+     *
+     * A DURATION, never a flag. Non-positive and fractional values are REFUSED rather than
+     * canonicalised: `0` is what an emitter reaches for to mean "off" and the language already has
+     * a spelling for off, an absent key.
+     */
+    val autoAdvanceMs: Int? = null,
 ) : NodeKind
 
-data class SwitchCase(val match: String, val child: Node)
+/**
+ * Phase 1535 — the two spellings of a case's condition. They interleave freely in one ordered
+ * `cases` array, and first-match-wins runs over the array in AUTHORED order: a host evaluates case
+ * *n* fully before considering case *n+1*, and must not batch all the matches ahead of all the
+ * predicates.
+ */
+sealed interface SwitchCondition
+
+/** Compares the switch's resolved selector against a literal string. */
+data class MatchCondition(val value: String) : SwitchCondition
+
+/**
+ * Evaluates a `Binding<bool>` and takes the case on a RESOLVED `true` only — a resolved `false`, an
+ * unresolved binding and an errored one all fall through. There is no truthiness rule: `0`, `""`
+ * and `"false"` are refused by the coercion rather than read as `false`.
+ *
+ * It consults no selector at all, so a switch whose cases are ALL predicates needs no `on` and has
+ * no state key for anything to write.
+ */
+data class WhenCondition(val binding: Binding) : SwitchCondition
+
+/**
+ * EXACTLY ONE of `match` and `when` is present (3.6) — both together and neither at all are decode
+ * errors, the same shape and the same reasoning as `SetState`'s `value` / `valueFrom` pair.
+ *
+ * A case naming no condition is not a case that never matches; it is a document whose author meant
+ * something the wire cannot say, and a host that silently skipped it would render the `default` and
+ * report nothing. A precedence rule for "both" would have to be specified, agreed on every host and
+ * remembered by every author, for a document nobody meant to write.
+ */
+data class SwitchCase(val condition: SwitchCondition, val child: Node)
 
 data class TabHeader(val label: TextSource, val icon: String? = null, val disabled: Binding? = null)
 
@@ -572,6 +651,28 @@ data class FileUpload(
     val label: TextSource,
     val multiple: Boolean,
     val disabled: Binding? = null,
+    /**
+     * Phase 1115 — two ADDITIONAL ingress routes, never replacements for the picker. Both omit at
+     * `false`, and the polarity is load-bearing: the shortest upload document is the plain picker,
+     * which is what every document written before that revision says.
+     */
+    val dropTarget: Boolean = false,
+    val acceptPaste: Boolean = false,
+    /**
+     * Phase 1116 (3.6.18) — WHICH of the reader's own recording devices the platform should open in
+     * place of the file browser. OPTIONAL rather than omit-at-default: "say nothing" is a state of
+     * its own, because an upload naming no device is asking for the file browser, which is not one
+     * of the two devices wearing a default.
+     */
+    val capture: CaptureSource? = null,
+    /**
+     * Phase 1117 (3.6.20) — the host-registered destination an upload streams to. A NAME, and a
+     * name because it must never be an ADDRESS: a wire document comes from an arbitrary emitter,
+     * and a URL here would let that emitter choose where a reader's file goes. The empty string is
+     * REFUSED rather than read as absence, which would silently turn an upload the author meant to
+     * stream into a client-only one.
+     */
+    val destination: String? = null,
 ) : NodeKind
 
 data class Select(
@@ -618,6 +719,20 @@ data class DataGrid(
     /** Rows per page. The schema pins `minimum: 1` — a zero page size paginates nothing. */
     val pageSize: Int? = null,
     val defaultSort: DefaultSort? = null,
+    /** Phase 1473 — the paginated-media pair, on [Box]'s terms. */
+    val keepRowsTogether: Boolean = false,
+    val repeatHeader: Boolean = false,
+    /**
+     * Phase 1123 — this grid's rows may be taken out of the page as a file. Omitted at `false`.
+     */
+    val exportable: Boolean = false,
+    /**
+     * Phase 1125 — the two sides of ONE shared State key. A grid declaring [transferOutKey] K may
+     * RELEASE rows onto K; one declaring [transferInKey] K ACCEPTS rows arriving on it. Separate
+     * decoder arms, and the corpus vectors them separately for that reason.
+     */
+    val transferInKey: String? = null,
+    val transferOutKey: String? = null,
 ) : NodeKind
 
 data class GridColumn(
@@ -640,6 +755,50 @@ data class StaticRows(
 /** An initial sort: a zero-based header index (the schema pins `minimum: 0`) plus a direction. */
 data class DefaultSort(val column: Int, val direction: SortDirection)
 
+/**
+ * Phase 1491 (4l) — an annotation's x address: a CATEGORY key read under the categorical scale, and
+ * an ISO-8601 `Date` read under `Temporal`. Its own type rather than two inline fields, because a
+ * range band addresses an x-axis interval with a PAIR of these.
+ */
+sealed interface ChartAnnotationX
+
+data class CategoryAddress(val key: String) : ChartAnnotationX
+
+data class DateAddress(val iso: String) : ChartAnnotationX
+
+/**
+ * Phase 1492 (4l) — a range band's PAIR: two of the same address form, on one axis.
+ *
+ * THE AXIS IS THE CASE. 4l requires a band to declare which axis it sits on; carrying that as a
+ * separate flag beside an untyped pair would admit a document declaring the value axis and
+ * addressing it with two category keys. The union tag declares the axis AND types the pair with it,
+ * so that document cannot be written by any conformant emitter.
+ */
+sealed interface ChartAnnotationRange
+
+data class ValueRange(val from: Double, val to: Double) : ChartAnnotationRange
+
+data class XRange(val from: ChartAnnotationX, val to: ChartAnnotationX) : ChartAnnotationRange
+
+/**
+ * Phase 1490 (4l) — a chart's data-addressed annotation. An annotation names a place in the DATA's
+ * coordinates and, optionally, a label; it carries no geometry and no style at all, which is what
+ * makes it survive a data change, a theme flip, a restyle and a resize.
+ */
+sealed interface ChartAnnotation
+
+/** A horizontal line at [value] in the VALUE axis's own units. */
+data class ReferenceLine(val value: Double, val label: TextSource? = null) : ChartAnnotation
+
+/** A VERTICAL line at an x address — the reference line mirrored across the axes. */
+data class EventMarker(val at: ChartAnnotationX, val label: TextSource? = null) : ChartAnnotation
+
+/** A shaded interval on either axis, and the one member that draws BEHIND every series. */
+data class RangeBand(
+    val range: ChartAnnotationRange,
+    val label: TextSource? = null,
+) : ChartAnnotation
+
 data class Chart(
     val kind: ChartKind,
     val source: Binding,
@@ -648,6 +807,8 @@ data class Chart(
     /** Round-trips when present; absent (the legacy wire) defaults to `false`. */
     val stacked: Boolean = false,
     val title: TextSource? = null,
+    /** Phase 1490 — omitted when the chart declares none. */
+    val annotations: List<ChartAnnotation>? = null,
 ) : NodeKind
 
 data class MapNode(
@@ -749,11 +910,29 @@ data object ComputedBinding : Binding
  * The host-furnished instant. Carries no payload: the value is supplied at resolve time by the
  * host clock, which is why it is a `Clock`-determinism source rather than wire data.
  */
-data object NowBinding : Binding
+/**
+ * The host-furnished instant. Phase 1533 — the declared [grain] truncates the instant BEFORE it is
+ * read. Absent is `Second`, which is the identity; a present value outside the four is refused
+ * rather than silently read at a neighbouring resolution.
+ */
+data class NowBinding(val grain: TimeGrain? = null) : Binding
 
 data class I18nBinding(val key: String, val args: JsonValue? = null) : Binding
 
-data class LocalBinding(val flushOn: LocalFlushTrigger, val initialFrom: Binding) : Binding
+/**
+ * The controlled input's edit buffer (3.3.3). [codec] declares the buffer's OWN codec and replaces
+ * the identity on both sides; [commitTo] declares the State key the flush writes to.
+ *
+ * [commitTo] and the `onCommit` closure are mutually exclusive, because the wire cannot carry the
+ * closure and two hosts would otherwise write to different places from identical bytes.
+ */
+data class LocalBinding(
+    val flushOn: LocalFlushTrigger,
+    val initialFrom: Binding,
+    val codec: NumberFormat? = null,
+    val commitTo: String? = null,
+    val hasOnCommit: Boolean = false,
+) : Binding
 
 data class FormatBinding(
     val format: NumberFormat,
@@ -775,6 +954,21 @@ data class TransformBinding(
 
 data class TransformParam(val name: String, val from: Binding)
 
+/**
+ * Phase 1534 (3.3.2) — ONE scalar expression evaluated to ONE value over the SAME `ColExpr` algebra
+ * a [TransformBinding] pipeline step carries. The case introduces no operator and no expression
+ * language of its own, so an expression means here exactly what it means inside a `derive`.
+ *
+ * [expr] is held as raw [JsonValue] on this surface for the reason [TransformBinding]'s pipeline is:
+ * the algebra is owned by the `Fuaran.Core` codec, and a render projection does not decompose
+ * content the host does not own.
+ *
+ * Two DECODE refusals nonetheless apply, both because an expression HAS NO ROW: a `col` reference
+ * anywhere in it, and a `param` the binding's own list does not bind. Left admitted, each would
+ * decode to an expression whose evaluation could only ever fail, once per render, on every host.
+ */
+data class ExprBinding(val expr: JsonValue, val params: List<TransformParam>? = null) : Binding
+
 data class InvokeBinding(val capabilityId: String, val args: List<InvokeArg>) : Binding
 
 data class InvokeArg(val addr: String, val value: String)
@@ -794,7 +988,19 @@ data class CallAction(val endpoint: String, val into: CallTarget? = null) : Acti
 
 data class NotifyAction(val channel: String, val payload: JsonValue) : Action
 
-data class NavigateAction(val route: String) : Action
+/**
+ * Phase 1536 — [route] is a [TextSource], not a bare string, so a tree can name a destination it
+ * computes from what the reader is looking at. The bare JSON string IS `Literal`'s canonical form,
+ * so every document written before the widening decodes exactly as it did.
+ *
+ * [target] is the CLOSED `Self | Blank` enum, omitted at `Self`, and deliberately not HTML's
+ * `target` attribute: that vocabulary also carries `_parent` and `_top`, which are frame-busting
+ * gestures a hosted tree must not be able to ask for.
+ */
+data class NavigateAction(
+    val route: TextSource,
+    val target: NavigateTarget = NavigateTarget.Self,
+) : Action
 
 /**
  * Write a state slot. Exactly ONE of [value] (a literal payload) and [valueFrom] (a binding
@@ -811,7 +1017,39 @@ data class AiToolAction(val toolName: String, val args: JsonValue) : Action
 
 data class CommitLocalAction(val nodeId: String) : Action
 
-data class WriteToClipboardAction(val text: String) : Action
+/**
+ * Phase 1126 — the payload is a [TextSource]. A `text` that is neither a string nor a
+ * `$type`-tagged text source is `WRONG_TYPE` and is never coerced: a host reading the widening as
+ * "this member is now open" would put a JSON literal on the reader's clipboard, and a clipboard is
+ * a channel the reader later pastes somewhere with authority.
+ */
+data class WriteToClipboardAction(val text: TextSource) : Action
+
+/**
+ * Phase 1124 — the payload-free print, and the ONE action case strict about unrecognised members:
+ * page range, size, margins and copies are the host's page setup and the reader's dialogue, so
+ * accepting a member here would leave the emitter believing it had constrained a printing it had
+ * not, with no error anywhere saying otherwise.
+ */
+data object PrintAction : Action
+
+/**
+ * Phase 1537 — ask, then act. Confirmation is bounded at ONE question: a confirm reachable from
+ * either continuation is refused, and the check walks the DECODED continuation so a chain cannot
+ * hide the nesting. An absent [onCancel] means "nothing happens", which an absent action already
+ * expresses.
+ */
+data class ConfirmAction(
+    val prompt: TextSource,
+    val onConfirm: Action,
+    val onCancel: Action? = null,
+) : Action
+
+/**
+ * Phase 1537 — a bare node id, the [CommitLocalAction] shape. It addresses a node in THIS document,
+ * so there is nothing for a binding to compute and no [TextSource] here.
+ */
+data class FocusAction(val nodeId: String) : Action
 
 data class ReadFileBodyAction(val fileRef: String, val encoding: FileReadEncoding) : Action
 
@@ -867,6 +1105,17 @@ data class PercentNumberFormat(val decimals: Int? = null) : NumberFormat
 data class DateNumberFormat(val dateStyle: DateStyle) : NumberFormat
 
 data class RelativeTimeNumberFormat(val unit: RelativeTimeUnit) : NumberFormat
+
+/**
+ * Phase 1533 — the elapsed-time rendition. Distinct from [RelativeTimeNumberFormat]: this one is a
+ * function of the HOST instant as well as of its source, so a host with no instant renders nothing
+ * rather than an invented delta. [unit] is OPTIONAL and its absence is the auto-selection request,
+ * not a default.
+ */
+data class SinceNumberFormat(val unit: RelativeTimeUnit? = null) : NumberFormat
+
+/** Phase 819 — the numeric source counts [unit]s, rendered per the bounded [style]. */
+data class DurationNumberFormat(val unit: DurationUnit, val style: DurationStyle) : NumberFormat
 
 sealed interface LocaleSource
 
@@ -975,6 +1224,50 @@ data class DateRangeField(
     val max: String? = null,
     val step: Double? = null,
 ) : FormFieldKind
+
+/**
+ * Phase 1121 (3.6.19) — SEVERAL values accumulated as removable chips, over a suggestion set that
+ * may be open, searchable, asynchronous, or absent entirely.
+ *
+ * Every member is optional, so `{"$type":"Tokens"}` is a complete document. [allowFreeText] omits
+ * at **`true`** — the OPPOSITE polarity to [ComboboxField], and the one thing about this case a
+ * host is most likely to get wrong: a combobox's option source is REQUIRED so "constrained" is its
+ * resting state, where [suggestions] is optional so "open" is this one's. The default follows the
+ * required-ness of the set.
+ *
+ * [value] is a `Binding<string list>` and the list is ORDERED — chips appear where the reader added
+ * them, so a host must not sort or de-duplicate it.
+ */
+data class TokensField(
+    val value: Binding,
+    val suggestions: Binding? = null,
+    val allowFreeText: Boolean = true,
+) : FormFieldKind
+
+/**
+ * Phase 1130 (3.6.17) — a subjective score on a small ordinal scale. The line against
+ * [RangedNumberField] is who the number belongs to: a rating is a judgement a person GIVES, a
+ * ranged number a measurement they REPORT.
+ *
+ * [max] is the case's only required member and is refused below 1 — a scale with no positions has
+ * nothing to draw and no keystroke that could change anything. [value] is a float even where
+ * nothing can type a fraction, because the commonest rating a reader sees is an AVERAGE arriving
+ * through a query. [allowHalf] governs ENTRY, never display.
+ */
+data class RatingField(
+    val value: Binding,
+    val max: Int,
+    val allowHalf: Boolean = false,
+) : FormFieldKind
+
+/**
+ * Phase 1130 (3.6.17) — the platform's own colour picker. A CONTROL, not a `rule.format`: a swatch
+ * that opens the operating system's picker, which no format on a text field can produce.
+ *
+ * Both members optional. The value is `#rrggbb` and nothing else — the one form a native colour
+ * input can hold or return — and case is PRESERVED rather than normalised.
+ */
+data class ColorField(val value: Binding) : FormFieldKind
 
 // --------------------------------------------------------------------------- //
 // Local flush trigger

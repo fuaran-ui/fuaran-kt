@@ -367,6 +367,15 @@ object Json {
                             else -> throw JsonSyntaxException("bad escape '\\$e'")
                         }
                     }
+                    // WIRE_FORMAT.md 20.2 row 5 — a raw C0 control character inside a string is
+                    // INVALID_JSON. RFC 8259 requires it escaped, and accepting the raw byte is
+                    // the leniency that lets a tab or a newline ride through a slot every host
+                    // then renders differently.
+                    in ' '..'' ->
+                        throw JsonSyntaxException(
+                            "raw control character U+%04X inside a string (WIRE_FORMAT.md 20.2 row 5) - it must be escaped"
+                                .format(c.code),
+                        )
                     else -> sb.append(c)
                 }
             }

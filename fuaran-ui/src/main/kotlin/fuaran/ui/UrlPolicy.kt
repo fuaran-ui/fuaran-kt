@@ -310,12 +310,23 @@ val MediaKind.sanitizedPoster: SanitizedUrl?
         }
 
 /**
- * For a `Navigate` action, its `route` put through the URL floor; `null` for every other action. A
- * `Navigate` route is always a literal on the wire, so this never reports `Dynamic`.
+ * For a `Navigate` action, its `route` put through the URL floor; `null` for every other action.
+ *
+ * Phase 1536 — the route is a `TextSource`, so only its LITERAL arm has a destination a static
+ * classification can see. A bound route reports `Dynamic` for the same reason a bound `href` does:
+ * the string the router receives is resolved at dispatch, and 3.6.21 states the obligation as
+ * RESOLVE, THEN GATE — classifying the declaration would consult the floor about a template nobody
+ * navigates to while the string that matters went unexamined.
  *
  * The surface itself never routes a `Navigate` anywhere — `dispatchAction` hands it back to the
  * embedding app precisely so the app decides — which is exactly why the app must floor it before
  * turning it into an `Intent`.
  */
 val Action.sanitizedNavigateRoute: SanitizedUrl?
-    get() = (this as? NavigateAction)?.let { FuaranUrlPolicy.classify(it.route) }
+    get() =
+        (this as? NavigateAction)?.let {
+            when (val route = it.route) {
+                is LiteralText -> FuaranUrlPolicy.classify(route.text)
+                else -> SanitizedUrl.Dynamic
+            }
+        }

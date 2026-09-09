@@ -335,23 +335,38 @@ leaves the last good tree in place and surfaces the failure on `lastError`.
 
 ## What is pending — stated plainly
 
-- **The platform-baseline wave is PART-adopted, and the part is enumerable.**
-  Five capabilities landed here: `Media`'s text tracks and transcript, the
-  `Embed` kind, the node-level `tooltip` trait, the `Combobox` field and the
-  `Tree` kind. What the corpus still carries and this surface does not model:
-  form-field kinds `Color`, `Rating` and `Tokens`; `WriteToClipboard` still
-  takes a bare `String` where the corpus has moved to a text source;
-  `FileUpload` carries neither the capture nor the destination slot; and
-  `Modal` carries neither `modality` nor `anchor`. A fixture using any of them
-  raises `UNKNOWN_DU_CASE` — loudly, which is the design, but it is a gap
-  rather than a refusal. Two declared render obligations follow from the last
-  two of those (`FileUpload/picker-always-present`,
-  `Modal/aria-modal-only-when-blocking`) and are the reason the
-  render-obligation gate is currently RED: they are owed, unanswered, and not
-  exempted, because silence is not a conformant answer.
+- **That vocabulary residue is CLOSED (Phase 1499).** It read: form-field kinds
+  `Color`, `Rating` and `Tokens` unmodelled; `WriteToClipboard` still taking a
+  bare `String` where the corpus had moved to a text source; `FileUpload`
+  carrying neither the capture nor the destination slot; `Modal` carrying no
+  `modality`. All of it is adopted, along with the rest of the vocabulary the
+  corpus had grown around it — `Action.Print` / `Confirm` / `Focus`,
+  `Navigate`'s text-source route and closed target, `Binding.Expr`,
+  `Binding.Local`'s codec and commit target, `Binding.Now`'s grain,
+  `NumberFormat.Since` and `.Duration`, the `Switch` predicate cases and timed
+  advance, node-level `visible`, `SemanticStyle.direction`, `DataGrid`'s export
+  and transfer keys, the print-break controls, and the chart annotation family.
+  **Every node fixture decodes and every reject vector refuses with the pinned
+  code at the pinned path.**
+
+  Two of the closures were places this decoder silently ACCEPTED a malformed
+  document rather than failing to model a slot, which is the worse half of the
+  two: a bare string was lifted into a one-element token list, and a raw C0
+  control character was admitted inside a string. Both are refused now.
+
+  `Modal.anchor` remains unmodelled and is a separate, still-open slot — it is
+  not what either standing render obligation is about.
+- **Two declared render obligations remain owed and unanswered**
+  (`FileUpload/picker-always-present`, `Modal/aria-modal-only-when-blocking`).
+  Their STATUS is unchanged and their REASON is not: the slots they are about
+  are modelled now, so what remains is that nobody has written the checker. They
+  stay on `conformance-residue.txt` rather than being exempted, because silence
+  is not a conformant answer.
 - **Three specification adoption bars are open**: contract cards, timed advance
   on a `Switch`, and streamed upload. A host that has not adopted is not thereby
   exempt — it owes the obligation and has simply not made its answer visible.
+  Note the DECODE half of the last two now lands here; what is unadopted is the
+  RENDER answer, which is the half those bars are about.
 - **Render obligations: several asserted, several declared exempt with reasons,
   two owed and unanswered.** The gate prints all three groups by name on every
   run; the repository's `CLAUDE.md` carries the current table and the rule that

@@ -13,6 +13,7 @@ import fuaran.ui.DurationStyle
 import fuaran.ui.DurationUnit
 import fuaran.ui.DurationValueFormat
 import fuaran.ui.ExplicitLocale
+import fuaran.ui.ExprBinding
 import fuaran.ui.FilterBinding
 import fuaran.ui.FormatBinding
 import fuaran.ui.I18nBinding
@@ -92,7 +93,11 @@ class BindingContext(
             // its own (that is host work, like Format's number/date rendering), so it
             // resolves empty rather than inventing a time that would then disagree with
             // whatever the host eventually supplies.
-            NowBinding -> ""
+            is NowBinding -> ""
+            // A DERIVED value this floor cannot compute is ABSENT, not empty: the host
+            // owns the evaluator, so answering anything else would invent a figure.
+            // Phase 1534 — `ExprBinding` joins `TransformBinding` on exactly those terms.
+            is ExprBinding -> ""
             // 0.2.0/0.2.9 — the declared defaultValue is yielded until the slot is first written.
             is FilterBinding -> binding.defaultValue?.let(::jsonScalar) ?: ""
             is SelectionBinding -> binding.defaultValue?.let(::jsonScalar) ?: ""

@@ -28,10 +28,30 @@
 
 # ── Render obligations owed and unanswered (WIRE_FORMAT.md §13) ──────────────
 #
-# Both follow from vocabulary this surface does not model: `FileUpload` carries
-# neither the capture nor the destination slot, and `Modal` carries neither
-# `modality` nor `anchor`. Each is reported by the gate as "unchecked, no checker
-# registered", which is the honest answer — not checked is not passed.
+# Each is reported by the gate as "unchecked, no checker registered", which is the
+# honest answer — not checked is not passed.
+#
+# THEIR REASON CHANGED at Phase 1499 even though their status did not. It was that
+# this surface did not model the slots the claims are about; it models them now —
+# `FileUpload` carries `capture`, `destination`, `dropTarget` and `acceptPaste`,
+# and `Modal` carries `modality` — so what remains is exactly what these two lines
+# say on their face: nobody has written the checker. That is still unadopted work
+# and still not an exemption. (`Modal.anchor` is a separate, unadopted slot and is
+# not what either obligation is about.)
+#
+# THE REJECT SECTION THIS FILE ONCE NEEDED IS ABSENT BECAUSE THERE IS NOTHING IN
+# IT. Every reject vector in the shared corpus refuses with the pinned code at the
+# pinned path — 140 of them, measured on this machine — and the corpus harness
+# fails on any vector this file does not name, so the absence is a claim the gate
+# re-checks on every run rather than an omission. Phase 1499 closed the vocabulary
+# residue (the three form-field kinds, the widened clipboard payload and navigate
+# route, the `FileUpload` members, `Modal.modality`, `SemanticStyle.direction`, the
+# print-break controls, `Binding.Expr`, `Binding.Local`'s codec and commit target,
+# `Binding.Now`'s grain, the `Switch` predicate cases and timed advance,
+# `DataGrid`'s export and transfer keys, and the chart annotation family) together
+# with two places this decoder silently ACCEPTED a malformed document rather than
+# failing to model a slot: a bare string lifted into a token list, and a raw C0
+# control character admitted inside a string.
 #
 # Verified against wire-format-fixtures/render-fidelity.json (19 declared
 # obligations), PLAIN_JVM_CHECKERS (1) + COMPOSE_CHECKER_KEYS (8) and
