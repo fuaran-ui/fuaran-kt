@@ -593,6 +593,12 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 // different affordance.
                 modality = o.optStr("modality", path)?.let { enumOf<ModalityKind>(it, "$path.modality") }
                     ?: ModalityKind.Modal,
+                // 3.6.11 — the NodeId a popover belongs to. A plain optional string, so absence is
+                // `null` and a non-string is WRONG_TYPE at `.anchor`. It was DROPPED here until now
+                // while the corpus carried it in two vectors: this decoder never re-encodes, so a
+                // silently discarded member is invisible to the corpus gate and shows up only as a
+                // host that cannot say which node its popover belongs to.
+                anchor = o.optStr("anchor", path),
             )
         "ScrollArea" ->
             ScrollArea(

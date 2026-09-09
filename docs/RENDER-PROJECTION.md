@@ -445,8 +445,28 @@ renderer narrows at the Compose boundary instead, where the loss costs a pixel.
   two: a bare string was lifted into a one-element token list, and a raw C0
   control character was admitted inside a string. Both are refused now.
 
-  `Modal.anchor` remains unmodelled and is a separate, still-open slot — it is
-  not what either standing render obligation is about.
+  **`Modal.anchor` is modelled now too, and it was the last named slot in the
+  vocabulary this surface decoded and then dropped.** It is a NodeId — the node a
+  `Popover` belongs to (3.6.11) — and the drop was structurally invisible: two
+  corpus vectors carry it, both decode, and this surface has no canonical encoder
+  to compare bytes against, so a discarded member failed nothing. It surfaced only
+  as a host unable to say which node its popover belonged to. `Modal.anchor` is
+  carried on the model, refuses a non-string as `WRONG_TYPE` at `.anchor`, and is
+  kept even on a blocking modal, where 3.6.11 calls it meaningless — dropping a
+  member because this decoder judged it pointless would silently rewrite the
+  author's document, the argument the inert-`trendPolarity` clause already makes.
+  The corpus-decode harness carries its own `overlayAnchor` leg for the value, the
+  absence and the refusal.
+
+  **What is NOT adopted is PLACEMENT, and that is 3.6.11's own division rather than
+  a gap.** Nothing in the wire names a pixel: no placement token, no offset, no flip
+  strategy. Where a popover is put is the renderer's, and rule 7 states the floor a
+  surface that cannot measure its anchor owes — the surface IN FLOW at the node's own
+  document position, with no positioning of any kind. That is what the Compose arm
+  renders today, so the anchor reaches no placement here. A Compose surface that
+  wanted the real thing needs the host's window metrics and a popup surface, which is
+  an arm rather than a slot; it would read the anchor the decoder now carries.
+  Neither standing render obligation is about this slot.
 
   **The RENDER half of that adoption landed separately, and the gap is worth
   recording.** Phase 1499 widened the model and the decoder in `:fuaran-ui` and

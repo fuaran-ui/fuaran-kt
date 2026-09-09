@@ -303,9 +303,10 @@ fun renderObligationFailures(
         //
         // Why the residue is a third category and not a tenth exemption: an exemption says this
         // surface STRUCTURALLY cannot answer a claim (no playback engine, no browsing context) and
-        // is a permanent reasoned answer. These two are unanswered because the surface does not
-        // model the SLOTS the claims are about — `FileUpload` carries neither capture nor
-        // destination, `Modal` carries neither `modality` nor `anchor` — which is unadopted work.
+        // is a permanent reasoned answer. These two are unanswered because nobody has written the
+        // checker — the slots themselves are modelled (`FileUpload` carries capture, destination
+        // and the ceilings; `Modal` carries `modality`, and `anchor` since the 2026-09-09 residue
+        // sweep), which is unadopted work of a different kind but unadopted work all the same.
         // Exempting them would turn the gate green over a capability nobody has adopted, which is
         // the one thing this whole mechanism exists to prevent.
         //

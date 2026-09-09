@@ -162,6 +162,18 @@ data class Modal(
      * getting a blocking modal has been answered with a different affordance.
      */
     val modality: ModalityKind = ModalityKind.Modal,
+    /**
+     * WIRE_FORMAT.md 3.6.11 — the **NodeId** the surface belongs to, meaningful for
+     * [ModalityKind.Popover] only. It is carried rather than acted on: nothing in 3.6.11 names a
+     * pixel, and where a popover is PLACED is the renderer's under the affordance→op rule. What the
+     * model owes is that the declaration survives decode, so a host that can measure its window can
+     * read it; a host that cannot still renders the surface in flow at the node's own document
+     * position (rule 7), which is the honest floor rather than a gap.
+     *
+     * A non-string is `WRONG_TYPE` at `.anchor`. Absence is `null` — an anchorless popover is a
+     * legal document, and this decoder does not invent a target for one.
+     */
+    val anchor: String? = null,
 ) : NodeKind
 
 data class ScrollArea(

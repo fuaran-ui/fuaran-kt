@@ -947,6 +947,67 @@ fun main() {
     }
 
     // ----------------------------------------------------------------------- //
+    // The OVERLAY-ANCHOR leg (WIRE_FORMAT 3.6.11)
+    // ----------------------------------------------------------------------- //
+    //
+    // `Modal.anchor` was the last named slot in the vocabulary this surface decoded and
+    // then DROPPED, and the drop was structurally invisible: the node-round-trip family
+    // proves `popover-anchored-1` and `popover-open-1` decode, this surface has no
+    // canonical encoder to compare bytes against, and a discarded member fails nothing.
+    // It surfaced only as a host unable to say which node its popover belonged to. So the
+    // slot gets its own value assertions, plus the two a stored fixture cannot pin:
+    // ABSENCE on a blocking modal (null, not an invented target) and the REFUSAL of a
+    // non-string.
+    //
+    // Nothing here asserts PLACEMENT, and that is 3.6.11's own division rather than a gap
+    // in this leg: the wire names no pixel, no offset and no flip strategy, so what a
+    // decoder owes is that the declaration survives — where the surface is put is the
+    // renderer's, and the Compose floor renders it in flow at the node's own document
+    // position (rule 7).
+    run {
+        for ((name, expected) in
+            listOf("nodes/popover-anchored-1.json" to "swatch", "nodes/popover-open-1.json" to "help-trigger")) {
+            val fixture = File(corpus, name)
+            if (fixture.isFile) {
+                runner.check("overlayAnchor/${name.substringAfterLast('/').removeSuffix(".json")}") {
+                    val k = decodeNode(fixture.readText()).kind as? Modal ?: error("not a Modal")
+                    if (k.modality != ModalityKind.Popover) error("modality: ${k.modality}")
+                    if (k.anchor != expected) error("anchor: ${k.anchor}")
+                }
+            }
+        }
+
+        val blocking =
+            "{\"id\":\"m\",\"kind\":{\"\$type\":\"Modal\",\"children\":[],\"dismissable\":true," +
+                "\"open\":{\"\$type\":\"Static\",\"value\":false}"
+
+        runner.check("overlayAnchor/absentOnABlockingModalIsNull") {
+            // A blocking modal belongs to no node, and an anchorless popover is a legal document
+            // too. Neither gets a target invented for it.
+            val k = decodeNode("$blocking}}").kind as? Modal ?: error("not a Modal")
+            if (k.anchor != null) error("an anchor appeared from nowhere: ${k.anchor}")
+            if (k.modality != ModalityKind.Modal) error("modality: ${k.modality}")
+        }
+
+        runner.check("overlayAnchor/carriedOnABlockingModalRatherThanDropped") {
+            // 3.6.11 calls `anchor` meaningful for `Popover` ONLY — which is a statement about
+            // MEANING, not a decode rule. Dropping it here because this decoder judged it
+            // pointless would silently rewrite the author's document, the same argument the
+            // inert-trendPolarity clause makes one leg above.
+            val k = decodeNode("$blocking,\"anchor\":\"swatch\"}}").kind as? Modal ?: error("not a Modal")
+            if (k.anchor != "swatch") error("anchor: ${k.anchor}")
+        }
+
+        runner.check("overlayAnchor/aNonStringAnchorIsWrongType") {
+            val e =
+                runCatching { decodeNode("$blocking,\"anchor\":7}}") }.exceptionOrNull()
+                    as? FuaranDecodeException ?: error("a numeric anchor was ACCEPTED, or threw the wrong type")
+            if (e.code != FuaranDecodeException.WRONG_TYPE) error("code: ${e.code}")
+            if (e.path != "$.kind.anchor") error("path: ${e.path}")
+        }
+    }
+
+    // ----------------------------------------------------------------------- //
     // The MEDIA-VOCABULARY leg (WIRE_FORMAT 3.6.2 - 3.6.6)
     // ----------------------------------------------------------------------- //
     //

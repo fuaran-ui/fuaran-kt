@@ -37,7 +37,9 @@
 # (Phase 1548) `maxBytes` / `maxFiles`, and `Modal` carries `modality` — so what
 # remains is exactly what these two lines say on their face: nobody has written the
 # checker. That is still unadopted work and still not an exemption. (`Modal.anchor`
-# is a separate, unadopted slot and is not what either obligation is about.)
+# is a separate slot, decoded and carried since the 2026-09-09 residue sweep; what
+# stays unadopted there is anchored PLACEMENT, which 3.6.11 rule 7 makes the
+# renderer's rather than the wire's, and neither obligation is about it.)
 #
 # THE SET DID NOT GROW AT PHASE 1548, and that is worth saying because the artefact
 # did. `render-fidelity.json` gained a twentieth claim,
