@@ -207,6 +207,24 @@ private fun JsonObject.optStr(key: String, path: String): String? = this[key]?.s
 
 private fun JsonObject.optInt(key: String, path: String): Int? = this[key]?.int("$path.$key")
 
+/**
+ * 3.6.23 — one OPTIONAL, POSITIVE integer slot, read at decode.
+ *
+ * The floor is a DECODE RULE rather than a type because this format has no refined-integer type; it
+ * is the same rule `SrcSetEntry.width` and `Switch.autoAdvanceMs` already stand on, and it is
+ * mirrored by `minimum: 1` in the published JSON Schema so the two expressions of the contract
+ * agree. The strict integer reader runs FIRST and refuses a fraction, a 7 sentinel string and
+ * anything outside 7.1's signed 32-bit slot, so what is left for this guard is the sign alone.
+ */
+private fun JsonObject.optPositive(key: String, path: String, expectation: String): Int? =
+    this[key]?.let {
+        val n = it.int("$path.$key")
+        if (n < 1) {
+            throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, "$path.$key", expectation)
+        }
+        n
+    }
+
 private fun JsonObject.optDouble(key: String, path: String): Double? = this[key]?.double("$path.$key")
 
 private fun JsonObject.optBool(key: String, path: String): Boolean? = this[key]?.bool("$path.$key")
@@ -916,6 +934,26 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 // value MUST NOT fall back to either device.
                 capture = o.optStr("capture", path)?.let { enumOf<CaptureSource>(it, "$path.capture") },
                 destination = destination,
+                // Phase 1548 — the two declared ceilings. `maxFiles` is NOT cross-checked against
+                // `multiple`: beside `"multiple":false` the member is INERT by specification, and a
+                // host refusing it would reject documents every other host accepts, which is the
+                // divergence a declared ceiling exists to remove.
+                maxBytes =
+                    o.optPositive(
+                        "maxBytes",
+                        path,
+                        "expected a positive per-file byte ceiling — a ceiling of zero is not a " +
+                            "small ceiling but an upload that can accept no file at all, and an absent " +
+                            "member is already the spelling for no ceiling",
+                    ),
+                maxFiles =
+                    o.optPositive(
+                        "maxFiles",
+                        path,
+                        "expected a positive selection-count ceiling — a multiple upload admitting " +
+                            "zero files has no reachable selection, and an absent member is already the " +
+                            "spelling for no ceiling",
+                    ),
             )
         }
         "Select" ->

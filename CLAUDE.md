@@ -399,6 +399,7 @@ gap.
 | `Embed/sandbox-always-exactly-declared` | exempt — no frame, so no `sandbox` attribute and no token-vs-`allow` split; the tile states the SET instead |
 | `Embed/refused-embed-source-omitted` | exempt — no source is emitted at all; the 19.1 class itself IS implemented, as `Embed.sanitizedSrc` |
 | the five `Image` claims | exempt — no image element, no anchor, no `srcSet` and no caption structure is emitted |
+| `FileUpload/ceiling-recorded-never-enforced` | exempt — the claim is about a `data-` MARKER ATTRIBUTE on the static tier, and no attribute bag is emitted; the floor follows the same obligation's REASONING instead, recording that a ceiling was declared and never its value |
 | `FileUpload/picker-always-present`, `Modal/aria-modal-only-when-blocking` | **owed and unanswered** — the ingress and modality slots (Phases 1115 / 1119) are not modelled on this surface yet, so the gate is RED on these two by design until they are |
 
 The reasons are written out in full in `DECLARED_EXEMPTIONS`, one sentence each, because the reason
