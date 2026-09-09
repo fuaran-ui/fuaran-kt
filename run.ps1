@@ -180,7 +180,12 @@ $RendererNeutralKt = @(
     # coalesces, what does not and what "settled" means are ordinary logic over a queue, and typed in
     # Compose vocabulary they would be provable only on a box carrying the Android SDK. The host's thin
     # wiring (executors, publishing Compose state) stays behind the Robolectric leg.
-    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\WriteBackQueue.kt")
+    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\WriteBackQueue.kt"),
+    # Phase 1548 — the upload-ceiling projection. Same split and the same reason: whether a declared
+    # ceiling is recorded, and that its VALUE is withheld from a tier that cannot enforce it, is
+    # ordinary logic over the decoded model; in Compose vocabulary it would be provable only on a box
+    # carrying the Android SDK.
+    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\UploadCeilings.kt")
 ) | Where-Object { Test-Path $_ }
 # The direct kotlinc build runs the two `main()`-driven harnesses (`CorpusDecodeTest`, `SessionTest`)
 # via `java`; it deliberately compiles ONLY those, not every test file. The Gradle-only JUnit gates
@@ -230,6 +235,13 @@ $TestKt = @(
     Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "RenderObligations.kt" -ErrorAction SilentlyContinue |
         ForEach-Object FullName
     Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "RenderObligationHarness.kt" -ErrorAction SilentlyContinue |
+        ForEach-Object FullName
+    # Phase 1548 — the upload ceilings (WIRE_FORMAT.md 3.6.23): the decode floor's positivity rule
+    # with a corrected twin beside each corpus refusal, and the value-free read-markers that are the
+    # supporting evidence for this surface's declared exemption from
+    # `FileUpload/ceiling-recorded-never-enforced`. Both halves are ordinary logic over the decoded
+    # model, so both run here rather than only on the box holding the Android SDK.
+    Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-renderer\src\test\kotlin") -Filter "UploadCeilingHarness.kt" -ErrorAction SilentlyContinue |
         ForEach-Object FullName
 )
 $JavaSrc = @(Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-core\src\main\java") -Filter *.java -ErrorAction SilentlyContinue |
@@ -321,6 +333,17 @@ if ($LASTEXITCODE -ne 0) { throw "write-back queue harness failed" }
 Write-Host "`n== render obligations (WIRE_FORMAT.md 13) ==" -ForegroundColor Cyan
 & $Java -cp $Classpath "fuaran.renderer.RenderObligationHarnessKt"
 if ($LASTEXITCODE -ne 0) { throw "render-obligation conformance gate failed" }
+
+# --- Phase 1548: the upload ceilings (WIRE_FORMAT.md 3.6.23) ------------------------ #
+# The positivity floor at both members — asserted beside a CORRECTED TWIN for each corpus refusal,
+# because a reject vector on its own cannot tell a decoder that refuses the malformed value from one
+# that refuses the member outright — and the value-free read-markers this floor may show for a
+# ceiling it cannot enforce. Placed with the platform-neutral legs above and ahead of the decode
+# harness for the reason they record: each leg aborts on its first failure, so a standing red in the
+# decode harness would stop a regression here from ever being reported.
+Write-Host "`n== upload ceilings (WIRE_FORMAT.md 3.6.23) ==" -ForegroundColor Cyan
+& $Java -cp $Classpath "fuaran.renderer.UploadCeilingHarnessKt"
+if ($LASTEXITCODE -ne 0) { throw "upload-ceiling gate failed" }
 
 # --- Phase 542: corpus render-coverage harness -------------------------------------- #
 Write-Host "`n== Phase 542 :: corpus render-coverage ==" -ForegroundColor Cyan

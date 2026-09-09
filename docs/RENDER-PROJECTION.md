@@ -471,12 +471,44 @@ renderer narrows at the Compose boundary instead, where the loss costs a pixel.
   `writeBack` call here would be dead code that merely looked like a fix. Making
   any of them live is renderer feature work, and it is the same line the
   `ChoiceField` and `RangeField` arms already stand on.
+- **The declared upload ceilings are adopted (Phase 1548).** `FileUpload` carries
+  `maxBytes` and `maxFiles` — both optional, both positive, both §7.1's signed
+  32-bit slot — and the positivity floor is applied at DECODE, because the format
+  has no refined-integer type: `0` and below are `WRONG_TYPE` at the member's own
+  path, on the same line as an `SrcSetEntry` whose `width` is not positive. A
+  `maxFiles` beside `"multiple":false` is carried and **not** refused: §3.6.23
+  makes it inert rather than malformed, and a host refusing it would reject
+  documents every other host accepts. Each of the corpus's four refusals is
+  asserted beside a CORRECTED TWIN, on the same argument the platform-baseline
+  wave's twin leg records — a reject vector alone cannot tell a decoder that
+  refuses the malformed value from one that refuses the member outright.
+
+  **The RENDER half withholds the values, deliberately.** This floor opens no
+  file picker, so it meets no selection: §3.6.23's obligations 1–3 have nothing
+  to act on here, and obligation 5 is vacuous. What it does instead is follow
+  obligation 4's reasoning — a tier that cannot act on a ceiling records only
+  THAT one was declared, never its number — so `uploadCeilingMarkers` projects two
+  value-free booleans and the arm renders a marker line built from those alone. An
+  upload declaring neither ceiling renders exactly as it did before the revision:
+  the marker line is ABSENT, not empty. Both halves are pinned in the
+  platform-neutral `UploadCeilingHarness`, including the one assertion that can
+  actually fail — that no digit reaches the marker — with the Robolectric leg
+  re-checking it against the composition, where an arm that ignored the projection
+  and interpolated the number into its own caption would still be caught.
 - **Two declared render obligations remain owed and unanswered**
   (`FileUpload/picker-always-present`, `Modal/aria-modal-only-when-blocking`).
   Their STATUS is unchanged and their REASON is not: the slots they are about
   are modelled now, so what remains is that nobody has written the checker. They
   stay on `conformance-residue.txt` rather than being exempted, because silence
   is not a conformant answer.
+
+  **The artefact's twentieth claim arrived with Phase 1548 and is an EXEMPTION,
+  not a third residue line.** `FileUpload/ceiling-recorded-never-enforced` is
+  about a marker *attribute* on the static no-script tier, and this floor emits no
+  attribute bag and no document — the structural test the `Embed` and `Image`
+  exemptions already meet. Recording it as residue instead would have been the
+  wrong answer for the wrong reason: the slots are modelled, so it is not
+  unadopted work.
 - **Three specification adoption bars are open**: contract cards, timed advance
   on a `Switch`, and streamed upload. A host that has not adopted is not thereby
   exempt — it owes the obligation and has simply not made its answer visible.

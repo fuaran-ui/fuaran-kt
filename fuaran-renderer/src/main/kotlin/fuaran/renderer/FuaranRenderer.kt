@@ -219,7 +219,7 @@ private fun RenderNodeKind(node: Node, ctx: BindingContext) {
         // Input
         is Form -> RenderForm(k, ctx)
         is Button -> RenderButton(k, ctx)
-        is FileUpload -> OutlinedButton(onClick = {}, enabled = !ctx.resolveBool(k.disabled)) { Text(ctx.resolveText(k.label)) }
+        is FileUpload -> RenderFileUpload(k, ctx)
         is Select -> RenderSelect(k, ctx)
         is Filters -> RenderFilters(k, ctx)
         // Visualisation
@@ -1218,6 +1218,24 @@ private fun swatchColor(value: String): Color {
             Color(comps[0], comps[1], comps[2])
         }
         else -> Color(0xFFDDDDDD)
+    }
+}
+
+/**
+ * The upload floor: a labelled, enablement-aware button and NO file picker.
+ *
+ * Phase 1548 — the two declared ceilings reach the render as VALUE-FREE read-markers, never as
+ * numbers. [UploadCeilingMarkers] carries the whole reasoning; the short form is that this arm opens
+ * no picker, so it enforces nothing, and a control captioned `max 5 MB` beside a button that admits
+ * no file at all would promise a bound that is not there. An upload declaring neither ceiling
+ * renders exactly as it did before this revision — the marker line is ABSENT, not empty.
+ */
+@Composable
+private fun RenderFileUpload(k: FileUpload, ctx: BindingContext) {
+    val markers = uploadCeilingMarkers(k)
+    Column {
+        OutlinedButton(onClick = {}, enabled = !ctx.resolveBool(k.disabled)) { Text(ctx.resolveText(k.label)) }
+        markers.summary?.let { Text(it, fontSize = 11.sp, color = Color.Gray) }
     }
 }
 

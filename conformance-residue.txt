@@ -33,17 +33,33 @@
 #
 # THEIR REASON CHANGED at Phase 1499 even though their status did not. It was that
 # this surface did not model the slots the claims are about; it models them now —
-# `FileUpload` carries `capture`, `destination`, `dropTarget` and `acceptPaste`,
-# and `Modal` carries `modality` — so what remains is exactly what these two lines
-# say on their face: nobody has written the checker. That is still unadopted work
-# and still not an exemption. (`Modal.anchor` is a separate, unadopted slot and is
-# not what either obligation is about.)
+# `FileUpload` carries `capture`, `destination`, `dropTarget`, `acceptPaste` and
+# (Phase 1548) `maxBytes` / `maxFiles`, and `Modal` carries `modality` — so what
+# remains is exactly what these two lines say on their face: nobody has written the
+# checker. That is still unadopted work and still not an exemption. (`Modal.anchor`
+# is a separate, unadopted slot and is not what either obligation is about.)
+#
+# THE SET DID NOT GROW AT PHASE 1548, and that is worth saying because the artefact
+# did. `render-fidelity.json` gained a twentieth claim,
+# `FileUpload/ceiling-recorded-never-enforced`, and it is a DECLARED EXEMPTION rather
+# than a third line here: the claim is about a marker ATTRIBUTE on the static
+# no-script tier, and this floor emits no attribute bag and no document, which is the
+# structural test an exemption has to meet. The slots themselves are modelled and the
+# floor follows the same obligation's reasoning — record THAT a ceiling was declared,
+# never its value — pinned by UploadCeilingHarness.kt and UploadCeilingTest.kt.
 #
 # THE REJECT SECTION THIS FILE ONCE NEEDED IS ABSENT BECAUSE THERE IS NOTHING IN
-# IT. Every reject vector in the shared corpus refuses with the pinned code at the
-# pinned path — 140 of them, measured on this machine — and the corpus harness
+# IT, and it stayed absent through Phase 1548. Every reject vector in the shared
+# corpus refuses with the pinned code at the
+# pinned path — 140 of them when this was written — and the corpus harness
 # fails on any vector this file does not name, so the absence is a claim the gate
-# re-checks on every run rather than an omission. Phase 1499 closed the vocabulary
+# re-checks on every run rather than an omission. Phase 1548 added four (the wrong
+# shape and the non-positive value for each of `maxBytes` and `maxFiles`), all four
+# accepted here until the ceilings were modelled; the positivity floor is a DECODE
+# RULE (3.6.23) and each refusal is asserted beside its corrected twin in
+# UploadCeilingHarness.kt, because a decoder refusing every ceiling outright would
+# satisfy all four vectors and be wrong in the more expensive direction. Phase 1499
+# closed the vocabulary
 # residue (the three form-field kinds, the widened clipboard payload and navigate
 # route, the `FileUpload` members, `Modal.modality`, `SemanticStyle.direction`, the
 # print-break controls, `Binding.Expr`, `Binding.Local`'s codec and commit target,
@@ -53,8 +69,8 @@
 # failing to model a slot: a bare string lifted into a token list, and a raw C0
 # control character admitted inside a string.
 #
-# Verified against wire-format-fixtures/render-fidelity.json (19 declared
+# Verified against wire-format-fixtures/render-fidelity.json (20 declared
 # obligations), PLAIN_JVM_CHECKERS (1) + COMPOSE_CHECKER_KEYS (8) and
-# DECLARED_EXEMPTIONS (9): 19 - 8 distinct asserted - 9 exempt = these two.
+# DECLARED_EXEMPTIONS (10): 20 - 8 distinct asserted - 10 exempt = these two.
 [obligation] FileUpload/picker-always-present
 [obligation] Modal/aria-modal-only-when-blocking

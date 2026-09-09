@@ -229,6 +229,17 @@ internal val DECLARED_EXEMPTIONS: Map<String, String> =
                 "one; the decoder deliberately preserves the AUTHORED order of `srcSet` (ordering is a " +
                 "renderer's presentation rule, recorded in this repo's CLAUDE.md), and this renderer emits no " +
                 "candidate list to order",
+        "FileUpload/ceiling-recorded-never-enforced" to
+            "the claim is about a MARKER ATTRIBUTE on the static no-script tier — a `data-` marker recording " +
+                "that a ceiling was read, carrying no value — and this floor emits no attribute bag and no " +
+                "document, so there is no marker whose presence or absence a checker could observe; what it " +
+                "does instead is follow the same obligation's REASONING, which is not attribute-shaped: " +
+                "`uploadCeilingMarkers` projects each declared ceiling as a value-free boolean and the arm " +
+                "renders a marker line built only from those booleans, so an undeclared ceiling shows nothing " +
+                "and a declared one can never reach the screen as a number the button does not enforce, both " +
+                "pinned by supporting checks in UploadCeilingHarness.kt; the values are decoded and carried on " +
+                "`FileUpload` throughout, and a real picker arm owes the selection-time refusal and its report " +
+                "— obligations 1 and 2 — in the same change that opens the picker",
     )
 
 /** The canonical default reason, used for any (kind, claim) pair neither registry covers. */
