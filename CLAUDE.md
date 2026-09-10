@@ -100,6 +100,18 @@ what changed here, not the one instance.) Ordering cannot solve this; collecting
 by name when the corpus leg is red, per its own recorded argument that a counterexample read
 against a failing named vector is noise.
 
+**Publishing (Maven Central).** `.github/workflows/publish-maven-central.yml` publishes the four
+library modules under `io.fuaran` on a `v*` tag (refused unless the tag equals the root build's
+declared `version`); `workflow_dispatch` is ALWAYS a dry run to the runner's Maven local, so a
+pipeline change is proven from a branch before any tag. The `fuaran-core` JAR bundles the desktop
+natives (`fuaran_rs` + the JNI shim for linux-x64 / windows-x64 / macos-x64 / macos-aarch64, built
+natively on four runners) behind `NativeBridge.loadBundled()`; `BundledNatives` keys the layout and
+`BundledNativesTest` pins it, proving the load in the publish job with `FUARAN_EXPECT_BUNDLED=1`.
+Android's per-ABI `.so`s stay on the AAR leg above. The README's "Publishing" section names the
+four secrets. Note the Gradle wrapper runs the pure-JVM legs (`:fuaran-core:test`,
+`publishToMavenLocal`) on the reference box too — the "no Gradle binary" line above predates the
+wrapper and describes only why `run.ps1` compiles directly.
+
 ## Formatting mandate
 
 The workspace formatting mandate (Fantomas for F#, rustfmt for Rust, …) maps here to
