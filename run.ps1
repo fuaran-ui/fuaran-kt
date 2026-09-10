@@ -60,6 +60,86 @@ $JniGenDir = Join-Path $Repo "fuaran-core\src\main\jni\generated"
 $Jar = Join-Path $BuildDir "fuaran-kt.jar"
 $Corpus = Resolve-Path (Join-Path $Repo "..\wire-format-fixtures") -ErrorAction SilentlyContinue
 
+# --- Failure COLLECTION across the verification legs -------------------------------- #
+#
+# Every leg below used to `throw` on its first non-zero exit, and leg ORDER was carefully
+# argued from that: put the cheap platform-neutral harnesses ahead of the decode harness so a
+# standing decode red cannot hide a mapping regression. The argument was sound and the shape
+# it rests on is not, because ordering can only ever decide WHICH leg does the hiding. It was
+# observed pointing the other way on 2026-09-03: with the render-obligation leg failing, the
+# 576-check corpus decode harness BELOW it did not execute at all, and getting a number out of
+# the decoder meant invoking `fuaran.ui.CorpusDecodeTestKt` by hand.
+#
+# **A note on that instance, because the record should not overstate it.** The obligation leg
+# is GREEN today: its bar is "every declared obligation is asserted or declared exempt with a
+# reason", and the two obligations this repo still owes (`FileUpload/picker-always-present`,
+# `Modal/aria-modal-only-when-blocking`) report UNCHECKED without failing it. So the specific
+# masking that prompted this is not currently happening. The shape that allowed it is
+# unchanged, and it is not hypothetical: on the first run of this rewrite, in a worktree where
+# the corpus was not resolvable, the corpus leg failed — and under the old shape that single
+# failure would have taken the fuzz leg, the JNI round trip, the driver gate and the Gradle
+# legs with it, none of them reported.
+#
+# Collecting is what stops any leg hiding another: each runs, each reports, and the run fails
+# ONCE at the end naming every red. The careful order above is kept — it now decides reading
+# order rather than reachability.
+#
+# `Invoke-Leg` is therefore the shape for a leg that ESTABLISHES NOTHING later legs need.
+# Compilation is not one of those and still throws: with no jar there is nothing to run.
+$script:FailedLegs = [System.Collections.Generic.List[string]]::new()
+
+# The last leg's verdict. A SCRIPT VARIABLE rather than the function's return value, and that
+# is load-bearing rather than a style choice: `& $Action` captures the leg's native stdout into
+# the function's OUTPUT STREAM, so a `return $true/$false` comes back as an array of every line
+# java printed with the boolean on the end — which is truthy either way. The first draft of this
+# read the verdict that way and the conditional fuzz leg below ran on a red corpus leg regardless,
+# looking exactly like a working conditional. Do not "simplify" this back to a return value.
+$script:LastLegGreen = $true
+
+function Invoke-Leg {
+    <#
+      .SYNOPSIS
+        Run one verification leg, record a failure, and CONTINUE.
+      .DESCRIPTION
+        Sets $script:LastLegGreen; returns nothing usable. Read the verdict from that variable
+        immediately after the call — see the note above it.
+      .PARAMETER Name
+        What appears in the end-of-run summary. Make it the leg a reader would grep for.
+      .PARAMETER Action
+        The leg. It must end in a native command, so that $LASTEXITCODE is its exit code.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [scriptblock] $Action
+    )
+    # Seeded for the reason the desktop JNI leg below records: PowerShell does not reset
+    # $LASTEXITCODE between commands, so a leg that runs no native command would otherwise be
+    # graded on whatever the last unrelated one set.
+    $global:LASTEXITCODE = 0
+    & $Action
+    if ($LASTEXITCODE -ne 0) {
+        $script:FailedLegs.Add("$Name (exit $LASTEXITCODE)")
+        Write-Host "FAIL: $Name — exit $LASTEXITCODE. Continuing; the run fails at the end." -ForegroundColor Red
+        $script:LastLegGreen = $false
+        return
+    }
+    $script:LastLegGreen = $true
+}
+
+function Assert-AllLegsGreen {
+    <#
+      .SYNOPSIS
+        The single point of failure for every collected leg. Call it LAST.
+    #>
+    if ($script:FailedLegs.Count -eq 0) { return }
+    Write-Host "`n=======================================================================" -ForegroundColor Red
+    Write-Host "$($script:FailedLegs.Count) leg(s) FAILED — every leg ran, so this list is complete:" -ForegroundColor Red
+    foreach ($leg in $script:FailedLegs) { Write-Host "  - $leg" -ForegroundColor Red }
+    Write-Host "=======================================================================" -ForegroundColor Red
+    exit 1
+}
+
 function Resolve-Tool([string] $Name, [string[]] $Fallbacks) {
     $cmd = Get-Command $Name -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($cmd) { return $cmd.Source }
@@ -284,81 +364,101 @@ if ($Corpus) { $env:FUARAN_CORPUS = $Corpus.Path }
 # The mapping decisions and the drop set, asserted where the ordinary gate runs rather than only on
 # a machine carrying the Android SDK.
 #
-# AHEAD of the decode harness deliberately. Each leg below aborts the run on its first failure, so
-# leg order decides what a standing failure can MASK: with these last, any red in the decode
-# harness — including a reject vector this surface is known not to refuse yet — would stop a
-# mapping regression from ever being reported, and the run would blame the wrong thing. These two
-# depend on nothing the decode leg establishes (each decodes the fixtures it asserts on) and take
-# under a second, so putting them first costs nothing and buys an independent answer.
-Write-Host "`n== accessibility projection (platform-neutral) ==" -ForegroundColor Cyan
-& $Java -cp $Classpath "fuaran.renderer.AccessibilityProjectionHarnessKt"
-if ($LASTEXITCODE -ne 0) { throw "accessibility mapping harness failed" }
-& $Java -cp $Classpath "fuaran.renderer.AccessibilityCorpusHarnessKt"
-if ($LASTEXITCODE -ne 0) { throw "accessibility corpus projection harness failed" }
+# AHEAD of the decode harness deliberately, and the ORDER is now about READING rather than
+# reachability: since Phase 1654 each leg runs and reports through `Invoke-Leg`, and the run
+# fails once at the end naming every red. Leg order used to decide what a standing failure could
+# MASK, which meant it could only ever choose the direction of the masking — and it chose wrong
+# in the end, because the obligation leg below is red by design while two obligations are owed.
+# These legs still come first because they are cheap, independent (each decodes the fixtures it
+# asserts on) and answer a different question from the decoder's.
+Invoke-Leg "accessibility mapping harness" {
+    Write-Host "`n== accessibility projection (platform-neutral) ==" -ForegroundColor Cyan
+    & $Java -cp $Classpath "fuaran.renderer.AccessibilityProjectionHarnessKt"
+}
+Invoke-Leg "accessibility corpus projection harness" {
+    & $Java -cp $Classpath "fuaran.renderer.AccessibilityCorpusHarnessKt"
+}
 
 # --- The trend-sentiment projection's platform-neutral half -------------------------- #
-# Same placement argument as the two legs above: it establishes nothing the decode harness needs and
-# depends on nothing the decode harness establishes, so running it ahead keeps a standing red there
-# from masking a regression in the composition rule.
-Write-Host "`n== trend sentiment projection (platform-neutral) ==" -ForegroundColor Cyan
-& $Java -cp $Classpath "fuaran.renderer.TrendSentimentHarnessKt"
-if ($LASTEXITCODE -ne 0) { throw "trend sentiment projection harness failed" }
+# It establishes nothing the decode harness needs and depends on nothing the decode harness
+# establishes, so it answers independently whatever the decoder is doing.
+Invoke-Leg "trend sentiment projection harness" {
+    Write-Host "`n== trend sentiment projection (platform-neutral) ==" -ForegroundColor Cyan
+    & $Java -cp $Classpath "fuaran.renderer.TrendSentimentHarnessKt"
+}
 
 # --- Phase 1541: number formatting under a non-POSIX locale -------------------------- #
-# Same placement argument as the legs above. The harness sets `Locale.GERMANY` itself and restores
-# the default afterwards, so the goldens are asserted against the locale that USED to break them
-# rather than against whatever this box happens to be configured for — a gate that only ever runs
-# under a decimal-point locale cannot see the defect this closes.
-Write-Host "`n== number formatting :: locale invariance (platform-neutral) ==" -ForegroundColor Cyan
-& $Java -cp $Classpath "fuaran.renderer.NumberFormatHarnessKt"
-if ($LASTEXITCODE -ne 0) { throw "number-format locale-invariance harness failed" }
+# The harness sets `Locale.GERMANY` itself and restores the default afterwards, so the goldens are
+# asserted against the locale that USED to break them rather than against whatever this box happens
+# to be configured for — a gate that only ever runs under a decimal-point locale cannot see the
+# defect this closes.
+Invoke-Leg "number-format locale-invariance harness" {
+    Write-Host "`n== number formatting :: locale invariance (platform-neutral) ==" -ForegroundColor Cyan
+    & $Java -cp $Classpath "fuaran.renderer.NumberFormatHarnessKt"
+}
 
 # --- Phase 1541: the interaction host's write-back queue ----------------------------- #
 # Coalescing per state key, latest-wins, and what "settled" means. Platform-neutral for the reason the
 # legs above record; the Robolectric leg keeps only the claim that needs a host — that the round trip
 # leaves the caller's thread.
-Write-Host "`n== write-back queue :: coalescing + settlement (platform-neutral) ==" -ForegroundColor Cyan
-& $Java -cp $Classpath "fuaran.renderer.WriteBackQueueHarnessKt"
-if ($LASTEXITCODE -ne 0) { throw "write-back queue harness failed" }
+Invoke-Leg "write-back queue harness" {
+    Write-Host "`n== write-back queue :: coalescing + settlement (platform-neutral) ==" -ForegroundColor Cyan
+    & $Java -cp $Classpath "fuaran.renderer.WriteBackQueueHarnessKt"
+}
 
 # --- Render-obligation conformance (WIRE_FORMAT.md 13) ------------------------------ #
 # The checkable remainder of the render contract, enumerated from the corpus's generated
 # `render-fidelity.json` rather than from a list beside the checkers — so a newly declared
 # obligation arrives here as a claim with no checker and turns this leg red.
 #
-# AHEAD of the decode harness, for the reason the two legs above record: each leg aborts the run on
-# its first failure, so with this last, any standing red in the decode harness would stop an
-# obligation regression from ever being reported. It establishes nothing the decode leg needs and
-# depends on nothing the decode leg establishes.
-Write-Host "`n== render obligations (WIRE_FORMAT.md 13) ==" -ForegroundColor Cyan
-& $Java -cp $Classpath "fuaran.renderer.RenderObligationHarnessKt"
-if ($LASTEXITCODE -ne 0) { throw "render-obligation conformance gate failed" }
+# THIS is the leg whose failure prompted the collection above. It PASSES today — its bar is
+# "asserted or declared exempt with a reason", and the two obligations this repo still owes
+# (`FileUpload/picker-always-present`, `Modal/aria-modal-only-when-blocking`) report UNCHECKED
+# without failing it. Under the old abort-on-first-failure shape, a red here made every leg
+# below unreachable, the 576-check corpus decode harness included.
+Invoke-Leg "render-obligation conformance gate" {
+    Write-Host "`n== render obligations (WIRE_FORMAT.md 13) ==" -ForegroundColor Cyan
+    & $Java -cp $Classpath "fuaran.renderer.RenderObligationHarnessKt"
+}
 
 # --- Phase 1548: the upload ceilings (WIRE_FORMAT.md 3.6.23) ------------------------ #
 # The positivity floor at both members — asserted beside a CORRECTED TWIN for each corpus refusal,
 # because a reject vector on its own cannot tell a decoder that refuses the malformed value from one
 # that refuses the member outright — and the value-free read-markers this floor may show for a
-# ceiling it cannot enforce. Placed with the platform-neutral legs above and ahead of the decode
-# harness for the reason they record: each leg aborts on its first failure, so a standing red in the
-# decode harness would stop a regression here from ever being reported.
-Write-Host "`n== upload ceilings (WIRE_FORMAT.md 3.6.23) ==" -ForegroundColor Cyan
-& $Java -cp $Classpath "fuaran.renderer.UploadCeilingHarnessKt"
-if ($LASTEXITCODE -ne 0) { throw "upload-ceiling gate failed" }
+# ceiling it cannot enforce.
+Invoke-Leg "upload-ceiling gate" {
+    Write-Host "`n== upload ceilings (WIRE_FORMAT.md 3.6.23) ==" -ForegroundColor Cyan
+    & $Java -cp $Classpath "fuaran.renderer.UploadCeilingHarnessKt"
+}
 
 # --- Phase 542: corpus render-coverage harness -------------------------------------- #
-Write-Host "`n== Phase 542 :: corpus render-coverage ==" -ForegroundColor Cyan
-& $Java -cp $Classpath "fuaran.ui.CorpusDecodeTestKt"
-if ($LASTEXITCODE -ne 0) { throw "Phase 542 corpus harness failed" }
+Invoke-Leg "Phase 542 corpus harness" {
+    Write-Host "`n== Phase 542 :: corpus render-coverage ==" -ForegroundColor Cyan
+    & $Java -cp $Classpath "fuaran.ui.CorpusDecodeTestKt"
+}
+$corpusLegGreen = $script:LastLegGreen
 
 # --- Phase 1540 (H-30): decoder robustness fuzz ------------------------------------- #
 # The corpus leg above asserts the malformed inputs somebody thought of; this one asserts the
-# PROPERTY they are evidence for - that no input escapes as anything but the typed error. It runs
-# AFTER the corpus leg deliberately, the opposite of the placement argument the legs above record:
-# those establish nothing the decode harness needs, whereas a fuzz counterexample is far harder to
-# read when a named corpus vector is already failing for a reason the fuzz will rediscover as noise.
-Write-Host "`n== Phase 1540 :: decoder robustness fuzz ==" -ForegroundColor Cyan
-& $Java -cp $Classpath "fuaran.ui.DecoderFuzzTestKt"
-if ($LASTEXITCODE -ne 0) { throw "Phase 1540 decoder fuzz failed" }
+# PROPERTY they are evidence for - that no input escapes as anything but the typed error.
+#
+# It is the ONE leg that is conditional, and the condition is its own recorded argument rather
+# than the abort-on-first-failure shape everything else here has shed: a fuzz counterexample is
+# far harder to read when a named corpus vector is already failing for a reason the fuzz will
+# rediscover as noise. So a red corpus leg SKIPS this one, by name and with the reason printed —
+# which is not the same as being hidden by it. The run is already failing on the corpus leg, and
+# the summary says so.
+if ($corpusLegGreen) {
+    Invoke-Leg "Phase 1540 decoder fuzz" {
+        Write-Host "`n== Phase 1540 :: decoder robustness fuzz ==" -ForegroundColor Cyan
+        & $Java -cp $Classpath "fuaran.ui.DecoderFuzzTestKt"
+    }
+}
+else {
+    Write-Host "`n== Phase 1540 :: decoder robustness fuzz ==" -ForegroundColor Cyan
+    Write-Host ("SKIP: the corpus leg above is RED. A fuzz counterexample read against a failing named " +
+        "vector is noise — fix the corpus leg and re-run. This leg is skipped, not passed.") -ForegroundColor Yellow
+}
 
 # --- Phase 543: desktop JNI live-session round-trip --------------------------------- #
 $SessionTestClass = "fuaran.core.SessionTestKt"
@@ -378,7 +478,7 @@ if ($HasSessionTest) {
         $libDir = Split-Path $nativeDll -Parent
         $env:Path = "$libDir;$env:Path"
         & $Java "-Dfuaran.lib=$nativeDll" -cp $Classpath $SessionTestClass
-        if ($LASTEXITCODE -ne 0) { throw "Phase 543 session round-trip failed" }
+        if ($LASTEXITCODE -ne 0) { $script:FailedLegs.Add("Phase 543 session round-trip (exit $LASTEXITCODE)") }
     }
 }
 
@@ -428,7 +528,7 @@ if (-not $SkipTests) {
         # One leg here takes ~35 s on purpose: it proves an idle op stream survives past the socket
         # read timeout, which only a genuinely quiet socket can show.
         & $Gradlew ":fuaran-driver:test" "--console=plain"
-        if ($LASTEXITCODE -ne 0) { throw "Phase 545/1541 driver gate failed" }
+        if ($LASTEXITCODE -ne 0) { $script:FailedLegs.Add("Phase 545/1541 driver gate (exit $LASTEXITCODE)") }
         Write-Host "Driver gate green." -ForegroundColor Green
     }
 }
@@ -451,7 +551,7 @@ if (-not $SkipTests -and -not $SkipRenderer) {
         # gate came to `return` green on a machine that plainly had the corpus.
         $corpusArgs = if ($Corpus) { @("-Dfuaran.corpus=$($Corpus.Path)") } else { @() }
         & $Gradlew ":fuaran-renderer:testDebugUnitTest" "--console=plain" @corpusArgs
-        if ($LASTEXITCODE -ne 0) { throw "Phase 544 render-coverage gate failed" }
+        if ($LASTEXITCODE -ne 0) { $script:FailedLegs.Add("Phase 544 render-coverage gate (exit $LASTEXITCODE)") }
         Write-Host "Phase 544 render-coverage gate green." -ForegroundColor Green
 
         # --- Phase 545: interaction round-trip + Material tone bridge ---------------------------- #
@@ -463,18 +563,18 @@ if (-not $SkipTests -and -not $SkipRenderer) {
         Write-Host "`n== Phase 545 :: live interaction round-trip (Gradle + JNI) ==" -ForegroundColor Cyan
         if ($nativeDll) {
             & $Gradlew ":fuaran-core:test" "-Pfuaran.lib=$nativeDll" "--console=plain"
-            if ($LASTEXITCODE -ne 0) { throw "Phase 545 live interaction round-trip failed" }
+            if ($LASTEXITCODE -ne 0) { $script:FailedLegs.Add("Phase 545 live interaction round-trip (exit $LASTEXITCODE)") }
             Write-Host "Phase 545 live interaction round-trip green." -ForegroundColor Green
         }
         else {
             & $Gradlew ":fuaran-core:test" "--console=plain"
-            if ($LASTEXITCODE -ne 0) { throw "Phase 545 interaction gate failed" }
+            if ($LASTEXITCODE -ne 0) { $script:FailedLegs.Add("Phase 545 interaction gate (exit $LASTEXITCODE)") }
             Write-Host "Phase 545 interaction round-trip skipped cleanly (desktop native shim absent)." -ForegroundColor Yellow
         }
 
         Write-Host "`n== Phase 545 :: sample app build (assembleDebug) ==" -ForegroundColor Cyan
         & $Gradlew ":samples:assembleDebug" "--console=plain"
-        if ($LASTEXITCODE -ne 0) { throw "Phase 545 sample app build failed" }
+        if ($LASTEXITCODE -ne 0) { $script:FailedLegs.Add("Phase 545 sample app build (exit $LASTEXITCODE)") }
         Write-Host "Phase 545 sample app assembled." -ForegroundColor Green
     }
 }
@@ -502,5 +602,7 @@ if ($Package) {
         Write-Host "Android packaging skipped (NDK/cargo-ndk absent) — see message above." -ForegroundColor Yellow
     }
 }
+
+Assert-AllLegsGreen
 
 Write-Host "`nAll available legs green." -ForegroundColor Green

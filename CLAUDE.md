@@ -32,8 +32,13 @@ the wire-spec byte-parity bar (there is no canonical Kotlin encoder). Public doc
 
 Kotlin 2.x (kotlinc 2.4.0 on the reference box), JVM toolchain **21** (Microsoft JDK 21).
 The `fuaran-ui` module is a plain-JVM library — Android tooling is **not** required to
-build or test it; Android enters only for the Compose renderer (a later phase) and the
-cargo-ndk `.so` packaging leg (Phase 543, Android-only).
+build or test it; Android enters only for the **Compose renderer** (`fuaran-renderer`,
+shipped in Phases 544/545 — this line said "a later phase" until Phase 1654) and the
+cargo-ndk `.so` packaging leg (Phase 543, Android-only). Note the split within that
+module: the renderer's *decisions* — the accessibility projection, the trend-sentiment
+composition, the number formatting, the write-back queue — are platform-neutral files
+`run.ps1` compiles by name into the plain-JVM build, precisely so they are re-checked on
+a box with no SDK; only what needs a composition stays behind Robolectric.
 
 ## Layout
 
@@ -68,12 +73,32 @@ pwsh ./run.ps1 -SkipBuild   # re-run the harnesses against the existing jar
 pwsh ./run.ps1 -Package     # (skips — Android NDK + cargo-ndk absent on this box)
 ```
 
-**No Gradle binary on the reference dev box**, so `run.ps1` is the real Stage-0 build:
-it compiles directly with `kotlinc` / `javac` / `java`. The `build.gradle.kts` /
-`settings.gradle.kts` files declare the intended module graph (Kotlin 2.x, JVM 21) for a
-future Gradle wrapper — **the wrapper is deferred** (it cannot be generated without a
-Gradle binary; `gradle-wrapper.jar` is a binary artefact a `gradle wrapper` run
-produces). Do not treat the Gradle files as the live build until a wrapper lands.
+**No Gradle binary on the reference dev box**, so `run.ps1` is the real Stage-0 build for
+the plain-JVM legs: it compiles directly with `kotlinc` / `javac` / `java`.
+
+**The Gradle WRAPPER has landed** (`gradlew` / `gradlew.bat` / `gradle/wrapper/`) — this
+section said it was deferred until Phase 1654 — and the module graph in
+`settings.gradle.kts` is live, not a scaffold. `run.ps1` drives the wrapper for the legs
+that genuinely need it: the `:fuaran-driver` gate (pure JVM, so it runs on any box with
+the wrapper) and, behind an Android SDK, the `:fuaran-renderer` Robolectric render-coverage
+gate, the `:fuaran-core` interaction round trip and the sample app build. Each SKIPS by
+name when its prerequisite is absent, so a wrapper-less or SDK-less box stays green while
+saying what it did not run.
+
+So the two builds are not rivals and neither is "the real one": the direct `kotlinc` path
+is what makes the decoder and every platform-neutral decision checkable with nothing but a
+JDK, and Gradle is what the Android-shaped legs need.
+
+**Failure collection (Phase 1654).** Every verification leg runs and reports; the run fails
+ONCE at the end naming every red. It used to abort at the first, and the leg order was
+argued from that — cheap neutral harnesses ahead of the decoder so a standing decode red
+could not mask a mapping regression. That reasoning was sound and it only ever chose which
+direction the masking ran: on 2026-09-03 the render-obligation leg was failing and the
+576-check corpus decode harness below it did not execute at all. (The obligation leg is green
+today — see the correction in its own table below — but the shape that allowed the masking is
+what changed here, not the one instance.) Ordering cannot solve this; collecting can. The one conditional leg is the decoder fuzz, which skips
+by name when the corpus leg is red, per its own recorded argument that a counterexample read
+against a failing named vector is noise.
 
 ## Formatting mandate
 
@@ -400,7 +425,7 @@ gap.
 | `Embed/refused-embed-source-omitted` | exempt — no source is emitted at all; the 19.1 class itself IS implemented, as `Embed.sanitizedSrc` |
 | the five `Image` claims | exempt — no image element, no anchor, no `srcSet` and no caption structure is emitted |
 | `FileUpload/ceiling-recorded-never-enforced` | exempt — the claim is about a `data-` MARKER ATTRIBUTE on the static tier, and no attribute bag is emitted; the floor follows the same obligation's REASONING instead, recording that a ceiling was declared and never its value |
-| `FileUpload/picker-always-present`, `Modal/aria-modal-only-when-blocking` | **owed and unanswered** — the ingress and modality slots (Phases 1115 / 1119) are not modelled on this surface yet, so the gate is RED on these two by design until they are |
+| `FileUpload/picker-always-present`, `Modal/aria-modal-only-when-blocking` | **owed and unanswered** — the ingress and modality slots (Phases 1115 / 1119) are not modelled on this surface yet, so each is reported UNCHECKED, by name, on every run. Corrected 2026-09-10 (Phase 1654): this row said the gate was RED on the two by design, and it is not — the leg's bar is "asserted or declared EXEMPT with a reason", and an UNCHECKED claim is neither. That is the honest state and it is a weaker one than a red: nothing fails while these are owed, so the run's own output is the only thing that says so. Answer them, or declare an exemption; do not let the report substitute for either |
 
 The reasons are written out in full in `DECLARED_EXEMPTIONS`, one sentence each, because the reason
 is what a reader of the run has to judge. `unregistered-custom-labelled` is conditional on a

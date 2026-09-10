@@ -103,8 +103,14 @@ wire; the check happens where a real destination exists.
 
 | Module | Role |
 |---|---|
-| `fuaran-ui` | The pure-JVM sealed tree model + render-projection decoder + corpus coverage harness. Dependency-light: the JSON reader is hand-rolled, no runtime dependency. Testable on any JVM. |
-| `fuaran-core` | The C-ABI JNI binding (Phase 543): the hand-written JNI shim over the Rust session surface + the `FuaranSession` confined wrapper + native packaging. |
+| `fuaran-ui` | The pure-JVM sealed tree model + render-projection decoder + corpus coverage harness, and the `FuaranSession` confined wrapper. Dependency-light: the JSON reader is hand-rolled, no runtime dependency. Testable on any JVM. |
+| `fuaran-core` | The C-ABI JNI binding (Phase 543): the hand-written JNI shim over the Rust session surface, and native packaging. |
+
+`FuaranSession` sits in `fuaran-ui` rather than beside the JNI shim, and the split is the
+point of the layering rather than an accident of where the file landed: the confinement
+contract — one thread for the handle's whole lifetime, `AutoCloseable` with a `Cleaner`
+backstop — is a property of the SESSION, statable and testable with no native library
+present, while `fuaran-core` holds only what genuinely needs the `.so`.
 | `fuaran-renderer` | The Jetpack Compose render floor (Phase 544) + Material tone bridge and interaction round-trip (Phase 545). The corpus render-coverage gate runs headlessly under Robolectric. |
 | `fuaran-driver` | The server-driven (SDUI) driver: fetch a tree, apply streamed ops against a session, post interaction events back. Pure JVM. |
 | `samples` | An Android sample app wiring a live session through the interactive renderer. |

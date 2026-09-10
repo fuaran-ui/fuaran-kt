@@ -49,19 +49,49 @@ private val CORPUS_CANDIDATES =
     )
 
 /**
+ * The markers that identify THIS corpus, as opposed to any other corpus in the estate.
+ *
+ * `manifest.json` alone does not identify anything: the wire corpus's own `sanitization/`,
+ * `dag/` and `merge-conformance/` sub-corpora each carry one, and so does every other
+ * specification corpus in the estate. A predicate that accepts any directory containing a
+ * `manifest.json` therefore ACCEPTS a wrong corpus and fails downstream with "fixture X is
+ * absent" — loud, and about the wrong thing. These two files sit only at the root of the wire
+ * corpus, and the manifest names the second itself.
+ */
+private val CORPUS_IDENTITY_MARKERS = listOf("manifest.json", "idl.json", "WIRE_FORMAT.md")
+
+private fun isWireCorpus(dir: File): Boolean = CORPUS_IDENTITY_MARKERS.all { File(dir, it).isFile }
+
+/**
  * Locate the corpus. `FUARAN_CORPUS` is what the repo's own driver sets; `fuaran.corpus` is what
  * the Gradle unit-test task sets, so the same leg runs under either gate without a second copy of
  * the expectations.
+ *
+ * **A DECLARED root is refused BY NAME rather than fallen back from** (Phase 1654, the 2026-08-29
+ * resolver sweep's item 5). The fixed candidate list below is safe by construction — those paths
+ * can only be this corpus — so the hazard is entirely on the declared leg: an operator who points
+ * the variable at a sibling corpus, or at a stale path, previously got either silent acceptance of
+ * the wrong tree or a silent fall-through to the right one. Both are misdiagnoses. Falling back is
+ * the worse of the two, because it makes the override unfalsifiable: a typo'd path produces a run
+ * that looks exactly like a working one, so nobody learns the variable was never read.
  */
 internal fun locateA11yCorpus(): File? {
     val declared = listOfNotNull(System.getenv("FUARAN_CORPUS"), System.getProperty("fuaran.corpus"))
     for (d in declared) {
         val f = File(d)
-        if (File(f, "manifest.json").isFile) return f
+        if (isWireCorpus(f)) return f
+        val missing = CORPUS_IDENTITY_MARKERS.filterNot { File(f, it).isFile }
+        error(
+            "the declared corpus root '$d' (${f.absolutePath}) is not the Fuaran UI wire-format corpus: " +
+                "$missing absent. It is REFUSED rather than ignored — falling back to the search below " +
+                "would run this gate against a corpus you did not name, and a typo would look identical " +
+                "to a working run. Point FUARAN_CORPUS / -Dfuaran.corpus at the wire-format corpus root, " +
+                "or unset it and let the search find it.",
+        )
     }
     for (c in CORPUS_CANDIDATES) {
         val f = File(c)
-        if (File(f, "manifest.json").isFile) return f
+        if (isWireCorpus(f)) return f
     }
     return null
 }

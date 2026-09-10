@@ -17,9 +17,16 @@ A pull request without DCO sign-off on every commit will not be merged.
 
 ## Per-commit hard requirements
 
-1. **`pwsh ./run.ps1` is green** — the one-command gate: format check, build, and the full test
-   suite in one pass.
-2. **Formatting** — match the existing code style; `run.ps1` runs the format check. Unformatted code is not mergeable.
+1. **`pwsh ./run.ps1` is green** — the one-command gate: build, then every verification leg in
+   one pass. Since Phase 1654 the legs COLLECT their failures rather than aborting at the first,
+   so a red run names every failing leg at the end; read that summary rather than the first
+   error.
+2. **Formatting** — match the existing code style by hand: 4-space indent, trailing commas,
+   Kotlin official style. **`run.ps1` runs NO format check**, and this line used to say it did.
+   ktlint is the intended gate and has not landed, so formatting here is a review obligation
+   rather than a mechanical one — which is the whole reason it is worth saying plainly. Sending
+   a contributor to a gate that does not exist means unformatted code reaches review believing
+   it was checked.
 3. **Conformance** — the decoder must keep decoding every corpus node fixture (the decode-only bar — this surface never canonically encodes, so there is no byte-parity leg).
 
 ## Pull request flow
