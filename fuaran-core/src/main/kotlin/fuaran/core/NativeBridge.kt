@@ -12,12 +12,16 @@ import fuaran.ui.FuaranNativeBridge
  *
  * Load the JNI shim once before creating a session:
  * `NativeBridge.load("/abs/path/fuaran_jni.dll")` (desktop test leg) or
- * `NativeBridge.loadLibrary("fuaran_jni")` (packaged / Android).
+ * `NativeBridge.loadLibrary("fuaran_jni")` (Android — the per-ABI `.so`s in the AAR), or
+ * `NativeBridge.loadBundled()` (desktop — the natives the Maven Central JAR bundles).
  */
 object NativeBridge : FuaranNativeBridge {
     fun load(absolutePath: String) = FuaranNative.load(absolutePath)
 
     fun loadLibrary(name: String) = FuaranNative.loadLibrary(name)
+
+    /** Load the desktop natives bundled in this JAR for the running platform; see [BundledNatives]. */
+    fun loadBundled() = BundledNatives.load()
 
     override fun sessionNew(nodeJson: ByteArray): Long = FuaranNative.sessionNew(nodeJson)
 

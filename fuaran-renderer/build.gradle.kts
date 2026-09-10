@@ -5,12 +5,14 @@
 // (Phase 544). A pure projection of the decoded model into composables — no wire-JSON parsing
 // lives here (decode happens first, in `:fuaran-ui`). Android library so it can host Compose; the
 // render-coverage gate runs headlessly on the JVM under Robolectric (no emulator).
+import com.vanniktech.maven.publish.AndroidSingleVariantLibrary
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.vanniktech.maven.publish")
 }
 
 android {
@@ -106,4 +108,10 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("androidx.test.ext:junit:1.2.1")
+}
+
+// Maven Central — the release AAR only (with sources). Identity, licence and SCM are configured once
+// in the root build.
+mavenPublishing {
+    configure(AndroidSingleVariantLibrary("release", sourcesJar = true, publishJavadocJar = true))
 }

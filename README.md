@@ -10,12 +10,12 @@ Apache-2.0 from day one.
 
 ## Get started
 
-> **Not published yet.** There is no Maven Central release of these modules, and nothing in this
-> repository publishes one. Build from source (`pwsh ./run.ps1`), or include the modules in your own
-> Gradle build with an `includeBuild` / project dependency. A coordinate is printed here on the day
-> it resolves and not before — this section used to carry
-> `implementation("io.fuaran:fuaran-ui:0.1.0")`, which is not a plan, it is a dependency line that
-> fails.
+> **Not on Maven Central yet.** The release is wired — `.github/workflows/publish-maven-central.yml`
+> publishes the four library modules under the `io.fuaran` group on a `v*` tag — but no tag has been
+> cut, so no coordinate resolves. Until one does, build from source (`pwsh ./run.ps1`) or include the
+> modules in your own Gradle build with an `includeBuild` / project dependency. A coordinate is
+> printed here on the day it resolves and not before: this section used to carry a dependency line
+> that failed, which is not a plan.
 
 Decode a session's canonical tree JSON into the sealed model and match over it with
 `when` — an unmodelled `$type` throws a structured `FuaranDecodeException`:
@@ -160,3 +160,23 @@ reference core's decode semantics:
   **`Selection.field`** (the declarative row-field projection).
 - **`DrawStyle.markId`** — keyed mark identity on data-bearing `Drawing` shapes
   (object constancy under reorder/refresh).
+
+## Publishing (maintainers)
+
+Maven Central, through Sonatype's Central Portal, from
+[`.github/workflows/publish-maven-central.yml`](.github/workflows/publish-maven-central.yml):
+
+- **A `v*` tag publishes.** The tag must equal the `version` the root `build.gradle.kts` declares
+  (the workflow refuses otherwise); the bundle is signed and released automatically once the portal
+  validates it. A branch push reaches no publish job.
+- **`workflow_dispatch` is always a dry run** — every leg is built as for a release, the result goes
+  to the runner's Maven local and is uploaded as an artifact, and nothing reaches a registry. Run it
+  from a branch to prove a change to the pipeline.
+- **`fuaran-core` bundles the desktop natives** (`fuaran_rs` + the JNI shim for linux-x64,
+  windows-x64, macos-x64 and macos-aarch64) inside its JAR; `NativeBridge.loadBundled()` extracts and
+  loads them. The workflow proves the loader binds its own shim before anything is published. A
+  pure-decode consumer of `fuaran-ui` never touches the natives.
+- **Secrets** (repository): `MAVEN_CENTRAL_USERNAME` / `MAVEN_CENTRAL_PASSWORD` — a Central Portal
+  user token; `MAVEN_SIGNING_KEY` / `MAVEN_SIGNING_KEY_PASSWORD` — an ASCII-armoured GPG private
+  key and its passphrase. The `io.fuaran` namespace must be verified on the portal before the first
+  release.
