@@ -1,0 +1,212 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Diametrical Ltd.
+#
+# Maven Central publication of the four library modules (`fuaran-ui`, `fuaran-driver`,
+# `fuaran-core`, `fuaran-renderer`) under the `io.fuaran` group, through Sonatype's Central Portal.
+#
+# Two triggers, two very different things:
+#
+#   * a `v*` TAG publishes. The tag must equal the version the root build declares (the
+#     workflow refuses otherwise), the bundle is signed with the key the secrets carry, and the
+#     portal releases it automatically once validated. A branch push reaches no publish job.
+#   * `workflow_dispatch` is ALWAYS a dry run: every leg is built exactly as for a release and
+#     the result is published to the runner's Maven local and uploaded as an artifact, so the
+#     whole pipeline — natives on four platforms, the bundled loader binding its own shim, the
+#     AAR, the POMs — is proven without anything reaching a registry. Run it from a branch to
+#     verify a change to this file.
+#
+# `fuaran-core` carries the reference core (`fuaran_rs`) and the JNI shim (`fuaran_jni`) for each
+# desktop platform INSIDE the JAR (the sqlite-jdbc pattern): the `natives` matrix builds them on
+# the platform itself — no cross-compilation — and the publish job stages them where
+# `fuaran-core/build.gradle.kts` packs them and `NativeBridge.loadBundled()` finds them. A
+# pure-decode consumer of `fuaran-ui` never touches any of this. Android's per-ABI `.so`s are a
+# separate leg (`run.ps1 -Package`, cargo-ndk) and are not what this workflow builds.
+#
+# Secrets (repository, operator-provisioned — see README "Publishing"):
+#   MAVEN_CENTRAL_USERNAME / MAVEN_CENTRAL_PASSWORD  a Central Portal user token
+#   MAVEN_SIGNING_KEY / MAVEN_SIGNING_KEY_PASSWORD    an ASCII-armoured GPG private key + passphrase
+name: Publish to Maven Central
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-maven-central-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  natives:
+    name: natives (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, platform: linux-x64 }
+          - { os: windows-latest, platform: windows-x64 }
+          - { os: macos-13, platform: macos-x64 }
+          - { os: macos-latest, platform: macos-aarch64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The reference core is its own PUBLIC repo; the shim links against it and includes the
+      # C-ABI header this repo carries as a byte-compared copy.
+      - name: Checkout fuaran-rs (the reference core)
+        uses: actions/checkout@v4
+        with:
+          repository: fuaran-ui/fuaran-rs
+          path: _fuaran-rs
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the reference core (release cdylib)
+        working-directory: _fuaran-rs
+        run: cargo build --release --lib
+
+      # The JNI header is generated from the Java bridge's `native` declarations (it is
+      # gitignored; `run.ps1` does the same on a dev box).
+      - name: Generate the JNI header
+        shell: bash
+        run: |
+          javac -h fuaran-core/src/main/jni/generated -d "$RUNNER_TEMP/jni-classes" \
+            fuaran-core/src/main/java/fuaran/core/FuaranNative.java
+
+      - name: Compile the JNI shim (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="natives/${{ matrix.platform }}"
+          mkdir -p "$out"
+          case "${{ runner.os }}" in
+            Linux)
+              ext=so; inc=linux; rpath='-Wl,-rpath,$ORIGIN'
+              cp "_fuaran-rs/target/release/libfuaran_rs.$ext" "$out/"
+              ;;
+            macOS)
+              ext=dylib; inc=darwin; rpath='-Wl,-rpath,@loader_path'
+              cp "_fuaran-rs/target/release/libfuaran_rs.$ext" "$out/"
+              # The shim records the core by its install name; make that name resolve beside
+              # the shim (the loader extracts both to one directory and loads the core first).
+              install_name_tool -id "@rpath/libfuaran_rs.$ext" "$out/libfuaran_rs.$ext"
+              ;;
+          esac
+          cc -shared -fPIC -o "$out/libfuaran_jni.$ext" fuaran-core/src/main/jni/fuaran_jni.c \
+            -I fuaran-core/src/main/jni \
+            -I "$JAVA_HOME/include" -I "$JAVA_HOME/include/$inc" \
+            -L "$out" -lfuaran_rs $rpath
+          ls -l "$out"
+
+      - name: MSVC host toolchain (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # `cl` builds the DLL against the core's import library; the `JNIEXPORT` symbols are
+      # `__declspec(dllexport)` on win32, so no .def file. The import library and export file
+      # the link leaves beside the DLL are build residue, not natives, and are removed.
+      - name: Compile the JNI shim (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          mkdir natives\windows-x64
+          copy _fuaran-rs\target\release\fuaran_rs.dll natives\windows-x64\
+          cl /nologo /LD /Fo:%RUNNER_TEMP%\ /Fe:natives\windows-x64\fuaran_jni.dll fuaran-core\src\main\jni\fuaran_jni.c /I fuaran-core\src\main\jni /I "%JAVA_HOME%\include" /I "%JAVA_HOME%\include\win32" _fuaran-rs\target\release\fuaran_rs.dll.lib
+          if errorlevel 1 exit /b 1
+          del /q natives\windows-x64\*.exp natives\windows-x64\*.lib
+          dir natives\windows-x64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: natives-${{ matrix.platform }}
+          path: natives/${{ matrix.platform }}/
+          if-no-files-found: error
+
+  publish:
+    needs: natives
+    runs-on: ubuntu-latest
+    env:
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # A tag that does not name the declared version publishes a lie: refuse it before anything
+      # is built. (The Python host's publish workflow makes the same refusal.)
+      - name: Refuse a tag that does not equal the declared version
+        if: github.event_name == 'push'
+        run: |
+          declared=$(sed -n 's/^[[:space:]]*version = "\(.*\)"/\1/p' build.gradle.kts | head -n 1)
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "$declared" ]; then
+            echo "::error::tag v$tag does not equal the version build.gradle.kts declares ($declared)"
+            exit 1
+          fi
+          echo "releasing $declared"
+
+      - name: Download the natives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: natives-*
+          path: fuaran-core/natives
+
+      # download-artifact nests each artifact under its own name; the JAR layout wants the
+      # bare platform key.
+      - name: Stage the natives under their platform keys
+        run: |
+          set -euo pipefail
+          cd fuaran-core/natives
+          for d in natives-*; do mv "$d" "${d#natives-}"; done
+          find . -type f | sort
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up the Android SDK (the :fuaran-renderer AAR)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-36 build-tools;36.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # The loader must bind the shim it bundles — proven on the runner's own platform before
+      # anything is published. A JAR whose loader cannot load its own natives never ships.
+      - name: Prove the bundled natives load (linux-x64)
+        env:
+          FUARAN_EXPECT_BUNDLED: "1"
+        run: ./gradlew :fuaran-core:test --console=plain --tests 'fuaran.core.BundledNativesTest'
+
+      - name: Publish to Maven local (dry run)
+        if: env.DRY_RUN == 'true'
+        run: ./gradlew publishToMavenLocal --console=plain
+
+      - name: List what a release would upload (dry run)
+        if: env.DRY_RUN == 'true'
+        run: find ~/.m2/repository/io/fuaran -type f | sort
+
+      - name: Upload the dry-run repository
+        if: env.DRY_RUN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: maven-local-io-fuaran
+          path: ~/.m2/repository/io/fuaran/
+
+      - name: Publish to Maven Central
+        if: env.DRY_RUN != 'true'
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.MAVEN_SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.MAVEN_SIGNING_KEY_PASSWORD }}
+        run: ./gradlew publishToMavenCentral --console=plain

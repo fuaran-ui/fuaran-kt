@@ -8,8 +8,12 @@
 // test re-projects into. (Phase 543; wired into the Gradle graph at Phase 545.)
 import java.io.File
 
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.KotlinJvm
+
 plugins {
     kotlin("jvm")
+    id("com.vanniktech.maven.publish")
 }
 
 kotlin {
@@ -46,4 +50,21 @@ tasks.test {
         showStandardStreams = true
         events("passed", "skipped", "failed")
     }
+}
+
+// Bundled desktop natives (the sqlite-jdbc pattern). The release workflow builds `fuaran_rs` and the
+// JNI shim on each desktop platform and stages them under `natives/<platform>/`; this packs them into
+// the JAR at `fuaran/core/natives/<platform>/`, where `NativeBridge.loadBundled()` finds them. The
+// directory does not exist on a dev box, so a locally built JAR carries none — the desktop test leg
+// loads the shim by absolute path instead, exactly as before.
+tasks.processResources {
+    from(layout.projectDirectory.dir("natives")) {
+        into("fuaran/core/natives")
+    }
+}
+
+// Maven Central — the artifact shape only; identity, licence and SCM are configured once in the
+// root build. An empty javadoc jar satisfies Central's javadoc requirement (no Dokka here).
+mavenPublishing {
+    configure(KotlinJvm(javadocJar = JavadocJar.Empty(), sourcesJar = true))
 }
