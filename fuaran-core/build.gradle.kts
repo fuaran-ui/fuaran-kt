@@ -10,6 +10,7 @@ import java.io.File
 
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinJvm
+import com.vanniktech.maven.publish.SourcesJar
 
 plugins {
     kotlin("jvm")
@@ -66,5 +67,5 @@ tasks.processResources {
 // Maven Central — the artifact shape only; identity, licence and SCM are configured once in the
 // root build. An empty javadoc jar satisfies Central's javadoc requirement (no Dokka here).
 mavenPublishing {
-    configure(KotlinJvm(javadocJar = JavadocJar.Empty(), sourcesJar = true))
+    configure(KotlinJvm(javadocJar = JavadocJar.Empty(), sourcesJar = SourcesJar.Sources()))
 }

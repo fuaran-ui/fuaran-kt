@@ -6,6 +6,8 @@
 // lives here (decode happens first, in `:fuaran-ui`). Android library so it can host Compose; the
 // render-coverage gate runs headlessly on the JVM under Robolectric (no emulator).
 import com.vanniktech.maven.publish.AndroidSingleVariantLibrary
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.SourcesJar
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -110,8 +112,17 @@ dependencies {
     testImplementation("androidx.test.ext:junit:1.2.1")
 }
 
-// Maven Central — the release AAR only (with sources). Identity, licence and SCM are configured once
-// in the root build.
+// Maven Central — the release AAR with sources and an EMPTY javadoc jar. Identity, licence and SCM
+// are configured once in the root build. The empty jar is deliberate: AGP's own javadoc generation
+// (`javaDocReleaseGeneration`, a bundled K1-era Dokka) crashes on these Kotlin 2.4 sources — the
+// first dry run died in it — and Central requires only that a javadoc jar EXIST, which is the same
+// answer the three pure-JVM modules give.
 mavenPublishing {
-    configure(AndroidSingleVariantLibrary("release", sourcesJar = true, publishJavadocJar = true))
+    configure(
+        AndroidSingleVariantLibrary(
+            javadocJar = JavadocJar.Empty(),
+            sourcesJar = SourcesJar.Sources(),
+            variant = "release",
+        ),
+    )
 }
