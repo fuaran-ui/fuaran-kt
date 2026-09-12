@@ -16,6 +16,7 @@ import fuaran.ui.LiteralText
 import fuaran.ui.Markdown
 import fuaran.ui.Metric
 import fuaran.ui.Node
+import fuaran.ui.Placement
 import fuaran.ui.ResolvedRows
 import fuaran.ui.SelectionBinding
 import fuaran.ui.decodeNode
@@ -56,6 +57,27 @@ private class Runner {
     }
 }
 
+/**
+ * The ids of a Box's children, read off the session's OWN re-encoded tree — so a placement
+ * assertion is about the tree the core HOLDS, never a Kotlin-side echo of the request.
+ *
+ * Box-only, which is all the placement seed contains; a non-Box parent reads as childless
+ * and fails the assertion loudly rather than quietly matching an empty expectation.
+ */
+private fun childIds(treeJson: String, parentId: String): List<String> {
+    fun kids(node: Node): List<Node> = (node.kind as? Box)?.children ?: emptyList()
+    fun find(node: Node): Node? {
+        if (node.id == parentId) return node
+        for (child in kids(node)) {
+            val hit = find(child)
+            if (hit != null) return hit
+        }
+        return null
+    }
+    val parent = find(decodeNode(treeJson)) ?: error("no node '$parentId' in the session tree")
+    return kids(parent).map { it.id }
+}
+
 private fun require(cond: Boolean, msg: String) {
     if (!cond) error(msg)
 }
@@ -65,6 +87,18 @@ private fun require(cond: Boolean, msg: String) {
 private const val SEED_METRIC =
     """{"id":"metric-1","kind":{"${'$'}type":"Metric","format":{"${'$'}type":"Currency","code":"GBP"},""" +
         """"label":"Revenue","tone":"Brand","value":{"${'$'}type":"Static","value":1234.5}}}"""
+
+// A two-container tree for the Phase 1673 placement leg: a box with two children and an
+// empty box beside it, so a move can be observed both LEAVING and ARRIVING.
+private const val SEED_PLACEMENT =
+    """{"id":"root","kind":{"${'$'}type":"Box","children":[""" +
+        """{"id":"left","kind":{"${'$'}type":"Box","children":[""" +
+        """{"id":"a","kind":{"${'$'}type":"Markdown","text":"A"}},""" +
+        """{"id":"b","kind":{"${'$'}type":"Markdown","text":"B"}}],""" +
+        """"layout":{"${'$'}type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}},""" +
+        """{"id":"right","kind":{"${'$'}type":"Box","children":[],""" +
+        """"layout":{"${'$'}type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}],""" +
+        """"layout":{"${'$'}type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}"""
 
 private const val EDIT_TO_MARKDOWN =
     """{"${'$'}type":"EditNode","newKind":{"${'$'}type":"Markdown","text":{"${'$'}type":"Literal","text":"Edited"}},"target":"metric-1"}"""
@@ -481,6 +515,69 @@ fun main() {
             require(pool.awaitTermination(30, TimeUnit.SECONDS)) { "confinement stress did not finish in time" }
             require(results.size == threads * 25) { "expected ${threads * 25} reads, got ${results.size}" }
             require(results.all { it == expected }) { "concurrent tree_json reads diverged — confinement broke" }
+        }
+    }
+
+    // --- Placement: the drag-move, EXERCISED rather than declared (Phase 1673) ---
+    //
+    // `move` existed on the Rust library surface from Phase 833 and on the C-ABI from
+    // nowhere, so this decode-only projection could not reach it at all. These checks are
+    // what make "a Kotlin session performs a move with one call" a measurement.
+    runner.check("placement/move-relocates-a-node-and-keeps-its-id") {
+        FuaranSession.create(NativeBridge, SEED_PLACEMENT).use { session ->
+            val envelope = session.move(source = "a", parentId = "right", placement = Placement.Last)
+            require(envelope.contains("\"MoveNode\"")) { "expected a MoveNode op, got: $envelope" }
+            val tree = session.treeJson()
+            require(childIds(tree, "left") == listOf("b")) {
+                "the moved node should have left its old parent: ${childIds(tree, "left")}"
+            }
+            // Under its OWN id: a move mints nothing and remaps nothing. That is the whole
+            // difference between this verb and a duplicate.
+            require(childIds(tree, "right") == listOf("a")) {
+                "the moved node should have arrived under its own id: ${childIds(tree, "right")}"
+            }
+        }
+    }
+
+    runner.check("placement/move-before-an-anchor-lands-in-position") {
+        FuaranSession.create(NativeBridge, SEED_PLACEMENT).use { session ->
+            session.move(source = "right", parentId = "left", placement = Placement.Before("b"))
+            val ids = childIds(session.treeJson(), "left")
+            require(ids == listOf("a", "right", "b")) { "expected [a, right, b], got $ids" }
+        }
+    }
+
+    runner.check("placement/a-refused-move-is-typed-and-changes-nothing") {
+        FuaranSession.create(NativeBridge, SEED_PLACEMENT).use { session ->
+            val before = session.treeJson()
+            val e =
+                try {
+                    session.move(source = "left", parentId = "left", placement = Placement.Last)
+                    null
+                } catch (e: FuaranException) {
+                    e
+                }
+            require(e != null) { "moving a node into itself should have thrown" }
+            require(e.code == "MoveIntoSelf") { "expected MoveIntoSelf, got ${e.code}" }
+            require(session.treeJson() == before) { "a refused move must leave the held tree untouched" }
+        }
+    }
+
+    runner.check("placement/a-quote-in-a-node-id-is-escaped-rather-than-breaking-the-request") {
+        FuaranSession.create(NativeBridge, SEED_PLACEMENT).use { session ->
+            // Built through this tier's JSON writer, so the core READS the document and judges
+            // its content (the id is absent). Concatenated, the quote would close the string and
+            // this would be a `request` parse error instead — a Kotlin-side defect wearing a
+            // core-side error's clothes.
+            val e =
+                try {
+                    session.move(source = "no\"such", parentId = "right", placement = Placement.Last)
+                    null
+                } catch (e: FuaranException) {
+                    e
+                }
+            require(e != null) { "expected a refusal for an absent node" }
+            require(e.code == "NodeNotFound") { "expected NodeNotFound, got ${e.code}" }
         }
     }
 

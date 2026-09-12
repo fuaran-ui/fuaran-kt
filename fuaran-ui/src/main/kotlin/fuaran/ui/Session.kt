@@ -89,6 +89,51 @@ class FuaranSession private constructor(
         throwIfError(result)
     }
 
+    /**
+     * RELOCATE a node already in the tree — the drag-move (Phase 1673). Returns the core's success
+     * envelope, `{"ok":true,"op":{..}}`, carrying the op the verb EMITTED.
+     *
+     * The op rides back because it is the artefact the verb computed: a host that journals, replays
+     * or diffs its op-stream needs it and cannot re-derive it from the resulting tree.
+     *
+     * The node KEEPS ITS ID: the core emits `MoveNode` (plus a `ReorderChildren` when appending
+     * does not already give the wanted order), so nothing is minted and nothing is remapped. That
+     * is why a caller cannot spell a move as place-then-remove — between those two ops the moved
+     * id either does not exist or exists twice.
+     *
+     * This surface is a DECODE-ONLY projection: it cannot author a `TreeOp`, so without this entry
+     * point the only way to move a node from Kotlin was to reimplement the placement algebra here,
+     * which is the second implementation the C-ABI exists to prevent.
+     *
+     * ONLY `move` is surfaced, and that is a scope decision rather than an oversight. The core also
+     * carries `place` / `nudge` / `duplicate` / `paste` (Phase 833) and this surface cannot reach
+     * any of them either; whether a decode-only projection should author placements GENERALLY is a
+     * product question that has not been asked, and answering it as a side effect of adding a
+     * drag-move would be deciding it rather than raising it.
+     *
+     * On refusal the held tree is UNTOUCHED and a typed [FuaranException] is raised whose class is
+     * `"placement"` (the apply-side refusal this move would have met, PRE-STATED — so a drag UI can
+     * grey out an illegal drop without a dry-run apply) or `"request"`.
+     *
+     * @param source the id of the node to relocate.
+     * @param parentId the destination container.
+     * @param placement where among the destination's children it lands.
+     */
+    fun move(source: String, parentId: String, placement: Placement): String {
+        val members = LinkedHashMap<String, JsonValue>()
+        members["parentId"] = JsonString(parentId)
+        members["placement"] = JsonString(placement.caseName())
+        placement.anchorId()?.let { members["anchor"] = JsonString(it) }
+        members["source"] = JsonString(source)
+        // Built through this tier's own JSON writer rather than by string concatenation: a node id
+        // is caller data, and an unescaped quote in one would close the string and come back as a
+        // core-side parse error — a Kotlin-side defect wearing a core-side error's clothes.
+        val request = JsonObject(members).encode()
+        val result = onExecutor { bridge.sessionMove(handle, request.toByteArray(UTF_8)).toString(UTF_8) }
+        throwIfError(result)
+        return result
+    }
+
     /** Write a reactive `$state.<key>` slot from a JSON value. Re-read [treeJson] / [render] to observe. */
     override fun setState(key: String, valueJson: String) = writeSlot(key, valueJson, bridge::sessionSetState)
 
@@ -293,6 +338,13 @@ interface FuaranNativeBridge {
     /** The resolved rows of one row-bearing node, addressed by node id (Phase 752/753). */
     fun sessionResolvedRows(handle: Long, nodeId: ByteArray): ByteArray
 
+    /**
+     * Relocate a node already in the tree from a canonical-JSON request document (Phase 1673):
+     * `{"source":..,"parentId":..,"placement":"Last"|"First"|"Before"|"After","anchor":..?}`.
+     * Returns `{"ok":true,"op":{..}}` or an error envelope; on refusal the held tree is untouched.
+     */
+    fun sessionMove(handle: Long, requestJson: ByteArray): ByteArray
+
     fun sessionApplyOp(handle: Long, opJson: ByteArray): ByteArray
 
     fun sessionSetState(handle: Long, key: ByteArray, value: ByteArray): ByteArray
@@ -301,6 +353,52 @@ interface FuaranNativeBridge {
 
     fun sessionSetQuery(handle: Long, key: ByteArray, value: ByteArray): ByteArray
 }
+
+/**
+ * Where a placement puts a node among its new siblings (Phase 833's placement algebra, reached
+ * from this surface by [FuaranSession.move]).
+ *
+ * The anchor is carried by [Before] / [After] and by nothing else, which is deliberate: the core
+ * REFUSES an anchor supplied alongside `Last` / `First` rather than silently dropping it — a caller
+ * that supplied one has stated an intent that would not be honoured — so a type that cannot express
+ * the refused shape is better than one that can and is told off for it.
+ */
+sealed interface Placement {
+    /** Append to the destination's children. */
+    data object Last : Placement
+
+    /** Insert as the destination's first child. */
+    data object First : Placement
+
+    /** Insert immediately before [anchor], which must be among the destination's post-op children. */
+    data class Before(val anchor: String) : Placement
+
+    /** Insert immediately after [anchor], which must be among the destination's post-op children. */
+    data class After(val anchor: String) : Placement
+}
+
+/** The wire spelling of a placement case — the `"placement"` member of a request document. */
+internal fun Placement.caseName(): String =
+    when (this) {
+        Placement.Last -> "Last"
+        Placement.First -> "First"
+        is Placement.Before -> "Before"
+        is Placement.After -> "After"
+    }
+
+/**
+ * The anchor a placement carries, or `null` for the two that take none.
+ *
+ * Named `anchorId` rather than `anchor` on purpose: an extension property called `anchor` would sit
+ * beside a member of the same name on two of the cases, and which one a reader thinks is being read
+ * inside the `when` should not be a question anybody has to answer.
+ */
+internal fun Placement.anchorId(): String? =
+    when (this) {
+        Placement.Last, Placement.First -> null
+        is Placement.Before -> anchor
+        is Placement.After -> anchor
+    }
 
 /**
  * A call was made on a [FuaranSession] whose handle has been (or is about to be) freed.

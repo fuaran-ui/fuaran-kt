@@ -164,6 +164,33 @@ JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionResolvedRows(J
     return buf_to_jarray(env, out);
 }
 
+/*
+ * The placement verb (Phase 1673). One request document in, one result envelope
+ * out — the same marshalling shape as sessionApplyOp above, factored because the
+ * core carries four more verbs of exactly this shape (place / nudge / duplicate /
+ * paste) that this surface does not yet reach, and a helper is what makes adding
+ * one of them a single line rather than another copy of this body.
+ */
+static jbyteArray one_document(JNIEnv *env, jlong handle, jbyteArray document,
+                               FuaranBuf (*fn)(FuaranSession *, const uint8_t *, size_t)) {
+    uint8_t *in;
+    size_t len;
+    if (!jarray_to_input(env, document, &in, &len)) {
+        return buf_to_jarray(env, (FuaranBuf){NULL, 0});
+    }
+    FuaranBuf out = fn(as_session(handle), in, len);
+    if (in != NULL) {
+        fuaran_dealloc(in, len);
+    }
+    return buf_to_jarray(env, out);
+}
+
+JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionMove(JNIEnv *env, jclass cls, jlong handle,
+                                                                       jbyteArray requestJson) {
+    (void)cls;
+    return one_document(env, handle, requestJson, fuaran_session_move);
+}
+
 JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionApplyOp(JNIEnv *env, jclass cls, jlong handle,
                                                                           jbyteArray opJson) {
     (void)cls;

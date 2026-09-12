@@ -63,6 +63,20 @@ public final class FuaranNative {
      */
     public static native byte[] sessionResolvedRows(long handle, byte[] nodeId);
 
+    /**
+     * RELOCATE a node already in the tree (Phase 1673) from a canonical-JSON request
+     * document: {@code {"source":"...","parentId":"...","placement":"Last"|"First"|"Before"|"After",
+     * "anchor":"..."?}}. The node KEEPS ITS ID — the core emits {@code MoveNode} (plus a
+     * {@code ReorderChildren} when appending does not already give the wanted order) — which is
+     * why a caller cannot spell a move as place-then-remove: between those two ops the moved id
+     * either does not exist or exists twice.
+     *
+     * <p>Returns {@code {"ok":true,"op":{...}}} with the emitted op, or an error envelope whose
+     * class is {@code "placement"} (the apply-side refusal this move would have met, pre-stated)
+     * or {@code "request"}. On refusal the held tree is untouched.
+     */
+    public static native byte[] sessionMove(long handle, byte[] requestJson);
+
     public static native byte[] sessionApplyOp(long handle, byte[] opJson);
 
     public static native byte[] sessionSetState(long handle, byte[] key, byte[] value);
