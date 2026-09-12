@@ -55,12 +55,12 @@ jobs:
           - { os: macos-latest, platform: macos-aarch64 }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The reference core is its own PUBLIC repo; the shim links against it and includes the
       # C-ABI header this repo carries as a byte-compared copy.
       - name: Checkout fuaran-rs (the reference core)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: fuaran-ui/fuaran-rs
           path: _fuaran-rs
@@ -140,7 +140,7 @@ jobs:
     env:
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # A tag that does not name the declared version publishes a lie: refuse it before anything
       # is built. (The Python host's publish workflow makes the same refusal.)

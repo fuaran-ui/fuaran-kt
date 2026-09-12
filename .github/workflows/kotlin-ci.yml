@@ -34,7 +34,7 @@ jobs:
   kotlin:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # ── The corpus is PINNED (Phase 1703) ──────────────────────────────────
       # `corpus-pin.json` records the one corpus revision this repository's gates
@@ -60,7 +60,7 @@ jobs:
           echo "corpus pinned at $ref"
 
       - name: Checkout wire-format-fixtures corpus
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: fuaran-ui/fuaran-ui-specification
           ref: ${{ steps.pin.outputs.ref }}
@@ -262,12 +262,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout fuaran-kt
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: fuaran-kt
 
       - name: Checkout fuaran-rs (sibling reference core)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: fuaran-ui/fuaran-rs
           path: fuaran-rs
@@ -286,7 +286,7 @@ jobs:
           echo "corpus pinned at $ref"
 
       - name: Checkout wire-format-fixtures corpus (at the pin)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: fuaran-ui/fuaran-ui-specification
           ref: ${{ steps.pin.outputs.ref }}
