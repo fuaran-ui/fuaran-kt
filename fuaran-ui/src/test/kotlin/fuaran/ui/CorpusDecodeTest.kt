@@ -1544,7 +1544,18 @@ fun main() {
     runner.check("determinism/every-well-formed-number-still-parses") {
         // The corrected twins. A grammar written one clause too tight refuses these, and
         // no reject fixture would notice.
-        for (lit in listOf("0", "3", "-3", "2147483647", "-2147483648")) {
+        //
+        // `2147483647` LEFT THIS LIST AT PHASE 1677 and did not lose its coverage.
+        // These checks use `Skeleton.rows` as a convenient integer slot, and §21.9
+        // gave that slot a VALUE ceiling of 10 000 — so the 32-bit upper boundary is
+        // no longer an accept case there, and asserting that it is would be asserting
+        // the bound away. It moved to the §21.9 block above, where it is required to
+        // be LIMIT_EXCEEDED; that is a STRONGER statement about the grammar than this
+        // one was, because a limit can only be reported on a value the reader
+        // successfully parsed. `-2147483648` stays: §21.9 is an upper bound only, so
+        // the lower boundary is still an ordinary accept. `10000` joins the list as
+        // the at-the-bound document §21.2 rule 1 obliges every host to accept.
+        for (lit in listOf("0", "3", "-3", "10000", "-2147483648")) {
             val got = refusalCode(skeleton(lit))
             if (got != "ACCEPTED") error("'$lit' must decode, got $got")
         }
