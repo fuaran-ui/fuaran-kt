@@ -118,7 +118,7 @@ jobs:
           java-version: "21"
 
       - name: Set up the Android SDK (compileSdk 36 for :fuaran-renderer)
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: "platforms;android-36 build-tools;36.0.0"
 
@@ -331,7 +331,7 @@ jobs:
       # The Gradle graph includes two Android modules, so a plain-JVM task still needs
       # the SDK at configuration time. Nothing here builds them.
       - name: Set up the Android SDK (the Gradle graph configures :fuaran-renderer)
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: "platforms;android-36 build-tools;36.0.0"
 
