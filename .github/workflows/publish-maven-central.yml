@@ -65,7 +65,7 @@ jobs:
           repository: fuaran-ui/fuaran-rs
           path: _fuaran-rs
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -170,7 +170,7 @@ jobs:
           for d in natives-*; do mv "$d" "${d#natives-}"; done
           find . -type f | sort
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
