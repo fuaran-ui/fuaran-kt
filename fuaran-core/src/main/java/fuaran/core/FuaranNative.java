@@ -77,6 +77,44 @@ public final class FuaranNative {
      */
     public static native byte[] sessionMove(long handle, byte[] requestJson);
 
+    /**
+     * INSERT a new node among a parent's children (Phase 1703):
+     * {@code {"parentId":"...","placement":"...","anchor":"..."?,"child":{...node...}}}.
+     *
+     * <p>A {@code place} mints and remaps NOTHING: an id in {@code child} that is already in the
+     * tree is refused as {@code DuplicateId}, where {@link #sessionPaste} would remap it. Same
+     * envelope contract as {@link #sessionMove}.
+     */
+    public static native byte[] sessionPlace(long handle, byte[] requestJson);
+
+    /**
+     * Move a node one or more positions among its OWN siblings (Phase 1703):
+     * {@code {"target":"...","delta":±n}}. No destination — it never leaves its parent.
+     *
+     * <p>Refuses {@code CannotNudgeRoot} and {@code NudgeOutOfRange} rather than clamping, so a
+     * held-key repeat stops at the end of the sibling list instead of silently doing nothing.
+     */
+    public static native byte[] sessionNudge(long handle, byte[] requestJson);
+
+    /**
+     * COPY a node already in the tree and place the copy (Phase 1703):
+     * {@code {"source":"...","parentId":"...","placement":"...","anchor":"..."?,"idPrefix":"..."?}}.
+     *
+     * <p>Every id in the clone that collides with one already in the tree is remapped; ids that do
+     * not collide are preserved. {@code idPrefix} selects the deterministic strategy
+     * ({@code <prefix>-1}, {@code -2}, … in traversal order); omitting it takes the derived one
+     * ({@code <oldId>-copy}, then {@code -copy-2}, …).
+     */
+    public static native byte[] sessionDuplicate(long handle, byte[] requestJson);
+
+    /**
+     * Place a subtree lifted from ANOTHER tree (Phase 1703):
+     * {@code {"subtree":{...node...},"parentId":"...","placement":"...","anchor":"..."?,"idPrefix":"..."?}}.
+     * The id-remapping contract of {@link #sessionDuplicate}; what differs is that the subtree
+     * arrives as a document rather than as an id.
+     */
+    public static native byte[] sessionPaste(long handle, byte[] requestJson);
+
     public static native byte[] sessionApplyOp(long handle, byte[] opJson);
 
     public static native byte[] sessionSetState(long handle, byte[] key, byte[] value);

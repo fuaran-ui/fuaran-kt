@@ -36,14 +36,58 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The corpus is its own PUBLIC repo since 2026-07-27, so no token is
-      # needed. Checked out as a sibling, which is also where the harnesses'
-      # relative-path fallback looks.
+      # ── The corpus is PINNED (Phase 1703) ──────────────────────────────────
+      # `corpus-pin.json` records the one corpus revision this repository's gates
+      # certify against. Before it, this job checked the corpus out at whatever was
+      # current, so any corpus-side phase reddened this repository with no commit
+      # of its own — which is not a signal about this code at all, and is the
+      # reason a red here stopped meaning anything for days at a time.
+      #
+      # Full depth: `rev-list --count` needs BOTH ends of the range, and a depth-1
+      # checkout holds neither the pinned commit nor `origin/main`, so the drift
+      # report would answer "unknown" on every run.
+      - name: Read the pinned corpus revision
+        id: pin
+        run: |
+          # The only 40-character hex run in the file is the commit, so `grep -o`
+          # reads it with no capture group.
+          ref=$(grep -o '[0-9a-f]\{40\}' corpus-pin.json | head -1)
+          test -n "$ref" || {
+            echo "::error::corpus-pin.json records no 40-character authorityCommit — the corpus checkout below has nothing to pin to"
+            exit 1
+          }
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "corpus pinned at $ref"
+
       - name: Checkout wire-format-fixtures corpus
         uses: actions/checkout@v4
         with:
           repository: fuaran-ui/fuaran-ui-specification
+          ref: ${{ steps.pin.outputs.ref }}
+          fetch-depth: 0
           path: _corpus
+
+      # ASSERT the checkout is at the pin, then REPORT how far the pin is behind the
+      # corpus's real head. Two different claims, and both are needed: without the
+      # assert, dropping the `ref:` above would silently return this job to
+      # certifying against whatever is current and every gate would stay green;
+      # without the report, the pin would make drift invisible instead of
+      # deliberate, which is a worse trade than the red it replaced.
+      #
+      # Drift is a NOTICE, not a failure. Being behind is the ordinary resting state
+      # between a fixture being authored and the decoder work that adopts it.
+      - name: Corpus pin — assert the checkout, report the drift
+        run: |
+          set +e
+          pwsh -NoProfile -File dev-scripts/corpus-pin.ps1 -Authority "$GITHUB_WORKSPACE/_corpus" -Assert
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "corpus pin current." ;;
+            2) echo "::notice::the corpus has moved past this repository's pin (see the distance above). Adopting it is a deliberate change-set." ;;
+            3) echo "::error::the corpus checkout is not at the pin — the gates below would certify against a revision this repository has not adopted"; exit 1 ;;
+            *) echo "::warning::the corpus pin could not be measured (exit $rc)" ;;
+          esac
 
       # BOTH gates skip cleanly when the corpus is absent — correct for a
       # standalone clone, and exactly how a gate ends up passing while checking
@@ -93,7 +137,14 @@ jobs:
       # the available claim: the shared library is absent, so the round trip cannot run,
       # but "does this still compile against the seam" is answerable and was not being
       # answered. Cheap, and it fails for the right reason.
-      - name: Compile gate (:fuaran-core — the JNI adapter is built by no other gate)
+      #
+      # Phase 1703 added a `kotlin-native` job that RUNS that round trip, so this is no
+      # longer the only gate reaching the module. Kept anyway, and not as a leftover:
+      # this job carries no fuaran-rs checkout and no Rust build, so it answers the
+      # compile question on a far shorter dependency chain - an ordinary Kotlin-side
+      # break is reported here before the native job has finished fetching a crate
+      # index.
+      - name: Compile gate (:fuaran-core — the cheap half of the native module's build)
         run: ./gradlew :fuaran-core:testClasses --console=plain
 
       # Gate 1 — the wire-format corpus decode harness. Fails the build on any
@@ -188,4 +239,189 @@ jobs:
           path: |
             **/build/reports/tests/**
             **/build/test-results/**
+          if-no-files-found: ignore
+
+  # ── The JNI shim, compiled; and the live session, round-tripped (Phase 1703) ──
+  #
+  # Two claims this repository could not make before, and they are different claims:
+  #
+  #   1. the hand-written C JNI shim COMPILES against the C-ABI header. It is built by
+  #      no gate anywhere — `run.ps1`'s desktop leg needs a Rust toolchain and a C
+  #      compiler, the Android AAR leg needs the NDK, and the `kotlin` job above
+  #      compiles only Kotlin and Java. So a signature drift in `fuaran.h` reached
+  #      whoever next built an Android release, as a link-time or run-time fault on a
+  #      device, with nothing pointing back at the header change that caused it.
+  #   2. a Kotlin session PERFORMS the five placement verbs against the real core. The
+  #      round-trip tests existed and ran nowhere: `:fuaran-core:test` was invoked by no
+  #      workflow, and its classes skip without a shim.
+  #
+  # ubuntu-latest, not macOS: this is a desktop-native leg and a Linux runner carries
+  # rustup, a C compiler and a JDK at a tenth of the macOS rate. What it certifies —
+  # that the declarations agree and the round trip works — is not platform-specific.
+  kotlin-native:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fuaran-kt
+        uses: actions/checkout@v4
+        with:
+          path: fuaran-kt
+
+      - name: Checkout fuaran-rs (sibling reference core)
+        uses: actions/checkout@v4
+        with:
+          repository: fuaran-ui/fuaran-rs
+          path: fuaran-rs
+
+      - name: Read the pinned corpus revision
+        id: pin
+        run: |
+          # The only 40-character hex run in the file is the commit, so `grep -o`
+          # reads it with no capture group.
+          ref=$(grep -o '[0-9a-f]\{40\}' fuaran-kt/corpus-pin.json | head -1)
+          test -n "$ref" || {
+            echo "::error::corpus-pin.json records no 40-character authorityCommit"
+            exit 1
+          }
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "corpus pinned at $ref"
+
+      - name: Checkout wire-format-fixtures corpus (at the pin)
+        uses: actions/checkout@v4
+        with:
+          repository: fuaran-ui/fuaran-ui-specification
+          ref: ${{ steps.pin.outputs.ref }}
+          fetch-depth: 0
+          path: wire-format-fixtures
+
+      - name: Corpus pin — assert the checkout, report the drift
+        working-directory: fuaran-kt
+        run: |
+          set +e
+          pwsh -NoProfile -File dev-scripts/corpus-pin.ps1 -Authority "$GITHUB_WORKSPACE/wire-format-fixtures" -Assert
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "corpus pin current." ;;
+            2) echo "::notice::the corpus has moved past this repository's pin (distance above)." ;;
+            3) echo "::error::the corpus checkout is not at the pin"; exit 1 ;;
+            *) echo "::warning::the corpus pin could not be measured (exit $rc)" ;;
+          esac
+
+      # BEFORE the compile, so a header change is reported as a header change rather
+      # than as whatever the compiler says about it two steps later. This is the leg
+      # `run.ps1` performs locally and no workflow performed at all: the `kotlin` job
+      # above has no fuaran-rs checkout, so it is structurally unable to compare.
+      - name: C-ABI header (fuaran.h) is byte-identical to the reference
+        run: |
+          copy=fuaran-kt/fuaran-core/src/main/jni/include/fuaran.h
+          if ! cmp -s "$copy" fuaran-rs/include/fuaran.h; then
+            echo "::error::fuaran.h has drifted from the reference core's header."
+            echo "The copy is GENERATED. Regenerate it and read the diff:"
+            echo "  cp fuaran-rs/include/fuaran.h $copy"
+            diff -u "$copy" fuaran-rs/include/fuaran.h || true
+            exit 1
+          fi
+          echo "fuaran.h byte-identical to the reference."
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # The Gradle graph includes two Android modules, so a plain-JVM task still needs
+      # the SDK at configuration time. Nothing here builds them.
+      - name: Set up the Android SDK (the Gradle graph configures :fuaran-renderer)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-36 build-tools;36.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # `javac -h` (JDK 21 has no `javah`) emits the JNI header from the `native`
+      # declarations. The shim `#include`s it, so this must precede the compile.
+      - name: Generate the JNI header (javac -h)
+        working-directory: fuaran-kt
+        run: |
+          mkdir -p fuaran-core/src/main/jni/generated build/ci
+          javac -h fuaran-core/src/main/jni/generated -d build/ci fuaran-core/src/main/java/fuaran/core/FuaranNative.java
+
+      # Claim 1. Compile-only: the question "do these declarations still agree" is
+      # answerable without a core to link against, and answering it separately is what
+      # makes a drift report say *header* rather than *linker*.
+      #
+      # The two -Werror= flags are the ones that catch drift specifically: a verb
+      # missing from the header becomes an implicit declaration, and a changed
+      # signature becomes an incompatible pointer where the shim hands the function to
+      # `one_document`. -Wall/-Wextra are informational — a stylistic warning must not
+      # redden a gate about the ABI.
+      - name: Compile gate — the JNI shim builds against the C-ABI header
+        working-directory: fuaran-kt
+        run: |
+          cc -c -fPIC -O1 -Wall -Wextra -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -I fuaran-core/src/main/jni -I "$JAVA_HOME/include" -I "$JAVA_HOME/include/linux" -o build/fuaran_jni.o fuaran-core/src/main/jni/fuaran_jni.c
+          echo "JNI shim compiles against the header."
+
+      # The go-red proof for claim 1. A gate that has never been seen to fail is a gate
+      # nobody knows the polarity of — and this one's whole value is that it fails when
+      # the header moves. Perturbs a SCRATCH copy; the committed header is untouched.
+      - name: Compile gate go-red proof (a header that lost a verb must fail)
+        working-directory: fuaran-kt
+        run: |
+          set -uo pipefail
+          scratch="$RUNNER_TEMP/hdr-drift"
+          rm -rf "$scratch"
+          mkdir -p "$scratch"
+          cp -r fuaran-core/src/main/jni/. "$scratch/"
+          # Rename ONE declared verb in the scratch header: the shim's call to the real
+          # name is then an implicit declaration, which is what a removed or renamed
+          # C-ABI entry point looks like from here.
+          sed -i 's/fuaran_session_place/fuaran_session_placed/' "$scratch/include/fuaran.h"
+          if cc -c -fPIC -Werror=implicit-function-declaration -I "$scratch" -I "$JAVA_HOME/include" -I "$JAVA_HOME/include/linux" -o "$RUNNER_TEMP/drift.o" "$scratch/fuaran_jni.c" 2>/dev/null; then
+            echo "::error::the shim compiled against a header missing a verb it calls — the #include is not load-bearing"
+            exit 1
+          fi
+          echo "go-red OK: a header that no longer declares a verb the shim calls reds the compile gate."
+
+      - name: Cache cargo + Rust target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuaran-rs/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('fuaran-rs/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Build the Rust reference core
+        working-directory: fuaran-rs
+        run: cargo build
+
+      # Linked against the cdylib rather than the staticlib, with `$ORIGIN` on the
+      # runpath and the core staged beside the shim — the same two-file layout the
+      # desktop dev script produces on Windows, so the loader resolves the dependency
+      # from where the shim sits rather than from an ambient search path.
+      - name: Link the JNI shim against the core
+        working-directory: fuaran-kt
+        run: |
+          mkdir -p build/native
+          cc -shared -o build/native/libfuaran_jni.so build/fuaran_jni.o -L "$GITHUB_WORKSPACE/fuaran-rs/target/debug" -lfuaran_rs -Wl,-rpath,'$ORIGIN'
+          cp "$GITHUB_WORKSPACE/fuaran-rs/target/debug/libfuaran_rs.so" build/native/
+          ls -l build/native
+
+      # Claim 2. `-Pfuaran.requireNative=1` is what stops this reporting green by
+      # skipping: the shim is right there, so an unloadable one is a failure, not a
+      # platform fact. It is exactly the state this job would otherwise be in if the
+      # path below were ever wrong.
+      - name: Live-session round trip + the five placement verbs (:fuaran-core:test)
+        working-directory: fuaran-kt
+        run: |
+          ./gradlew :fuaran-core:test --console=plain -Pfuaran.lib="$PWD/build/native/libfuaran_jni.so" -Pfuaran.requireNative=1
+
+      - name: Upload native test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kotlin-native-test-reports
+          path: |
+            fuaran-kt/**/build/reports/tests/**
+            fuaran-kt/**/build/test-results/**
           if-no-files-found: ignore

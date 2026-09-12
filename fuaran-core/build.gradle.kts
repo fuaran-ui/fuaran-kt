@@ -47,6 +47,17 @@ tasks.test {
             environment("PATH", dir + File.pathSeparator + (System.getenv("PATH") ?: ""))
         }
     }
+    // Phase 1703. The clean skip above is right for a box with no Rust toolchain and is also how a
+    // suite comes to report green having certified nothing — so a caller that HAS built the shim
+    // says so, and an absent `fuaran.lib` then FAILS instead of skipping. Forwarded explicitly, the
+    // way `fuaran.lib` is, rather than trusting the test JVM to inherit an ambient variable: the
+    // corpus gate next door spent a long time green precisely because it did trust that.
+    val requireNative =
+        providers.gradleProperty("fuaran.requireNative")
+            .orElse(providers.environmentVariable("FUARAN_REQUIRE_NATIVE"))
+    if (requireNative.isPresent) {
+        systemProperty("fuaran.requireNative", requireNative.get())
+    }
     testLogging {
         showStandardStreams = true
         events("passed", "skipped", "failed")

@@ -105,11 +105,13 @@ class FuaranSession private constructor(
      * point the only way to move a node from Kotlin was to reimplement the placement algebra here,
      * which is the second implementation the C-ABI exists to prevent.
      *
-     * ONLY `move` is surfaced, and that is a scope decision rather than an oversight. The core also
-     * carries `place` / `nudge` / `duplicate` / `paste` (Phase 833) and this surface cannot reach
-     * any of them either; whether a decode-only projection should author placements GENERALLY is a
-     * product question that has not been asked, and answering it as a side effect of adding a
-     * drag-move would be deciding it rather than raising it.
+     * ALL FIVE verbs are surfaced (Phase 1703). Phase 1673 asked whether a decode-only projection
+     * should author placements GENERALLY, deliberately left it open, and surfaced only the
+     * drag-move. The answer is yes, and the argument is that the question was settled by `move`
+     * rather than raised by it: a surface that can relocate a node but not insert one is not a
+     * narrower answer to "may this tier author placements" — it is the same answer applied to one
+     * fifth of the algebra, with the other four fifths reachable only through the reimplementation
+     * this seam exists to prevent.
      *
      * On refusal the held tree is UNTOUCHED and a typed [FuaranException] is raised whose class is
      * `"placement"` (the apply-side refusal this move would have met, PRE-STATED — so a drag UI can
@@ -119,20 +121,126 @@ class FuaranSession private constructor(
      * @param parentId the destination container.
      * @param placement where among the destination's children it lands.
      */
-    fun move(source: String, parentId: String, placement: Placement): String {
-        val members = LinkedHashMap<String, JsonValue>()
-        members["parentId"] = JsonString(parentId)
-        members["placement"] = JsonString(placement.caseName())
-        placement.anchorId()?.let { members["anchor"] = JsonString(it) }
-        members["source"] = JsonString(source)
-        // Built through this tier's own JSON writer rather than by string concatenation: a node id
-        // is caller data, and an unescaped quote in one would close the string and come back as a
-        // core-side parse error — a Kotlin-side defect wearing a core-side error's clothes.
-        val request = JsonObject(members).encode()
-        val result = onExecutor { bridge.sessionMove(handle, request.toByteArray(UTF_8)).toString(UTF_8) }
+    fun move(source: String, parentId: String, placement: Placement): String =
+        placementVerb(
+            bridge::sessionMove,
+            placementRequest(parentId, placement, listOf("source" to JsonString(source).encode())),
+        )
+
+    /**
+     * Insert a NEW node among a parent's children (Phase 1703).
+     *
+     * [childJson] is a canonical wire `Node` DOCUMENT, not a [Node], and that follows from the tier
+     * being decode-only: this surface parses the wire form and does not emit it, so there is no
+     * `Node` → JSON direction here to offer and inventing one would be a second encoder — the same
+     * defect one layer up. The document is spliced verbatim and judged by the CORE's parser, which
+     * is the decoder that owns that judgement; a malformed one comes back as a `"request"` error
+     * rather than being quietly reshaped here.
+     *
+     * Raises `ParentNotFound` / `ChildlessKind` when the destination cannot take a child,
+     * `UnknownAnchor` when the anchor is not among its post-op children, and `DuplicateId` when an
+     * id in the child is already in the tree — a `place` mints and remaps NOTHING, which is exactly
+     * what separates it from [paste].
+     */
+    fun place(childJson: String, parentId: String, placement: Placement): String =
+        placementVerb(
+            bridge::sessionPlace,
+            placementRequest(parentId, placement, listOf("child" to childJson)),
+        )
+
+    /**
+     * Move a node one or more positions among its OWN siblings (Phase 1703) — the keyboard/handle
+     * nudge, which takes no destination because it never leaves its parent.
+     *
+     * [delta] is a whole number of sibling positions; negative moves earlier. Raises
+     * `CannotNudgeRoot` (the root has no siblings) or `NudgeOutOfRange` (the result would fall
+     * outside the sibling list) — both refused before any op is emitted, so a held-key repeat stops
+     * at the end rather than clamping silently.
+     */
+    fun nudge(target: String, delta: Int): String =
+        placementVerb(
+            bridge::sessionNudge,
+            jsonObjectOf(listOf("target" to JsonString(target).encode(), "delta" to delta.toString())),
+        )
+
+    /**
+     * Copy a node ALREADY IN THE TREE and place the copy (Phase 1703).
+     *
+     * Unlike [move] the copy is a NEW node: every id in it that collides with one already in the
+     * tree is remapped, and ids that do not collide are preserved. [idPrefix] selects the
+     * deterministic strategy — minted ids are `<prefix>-1`, `-2`, … in traversal order — and
+     * omitting it takes the derived strategy (`<oldId>-copy`, then `-copy-2`, …). Pass one when the
+     * caller must PREDICT the minted ids; omit it when the copy should read as a copy of something.
+     */
+    fun duplicate(source: String, parentId: String, placement: Placement, idPrefix: String? = null): String =
+        placementVerb(
+            bridge::sessionDuplicate,
+            placementRequest(parentId, placement, cloneMembers("source" to JsonString(source).encode(), idPrefix)),
+        )
+
+    /**
+     * Place a subtree lifted from ANOTHER tree (Phase 1703) — the clipboard verb.
+     *
+     * The same id-remapping contract as [duplicate] (that is the whole difference from [place],
+     * which refuses a collision rather than remapping it); what differs is where the subtree came
+     * from, so it arrives as a document rather than as an id. See [place] on why a document.
+     */
+    fun paste(
+        subtreeJson: String,
+        parentId: String,
+        placement: Placement,
+        idPrefix: String? = null,
+    ): String =
+        placementVerb(
+            bridge::sessionPaste,
+            placementRequest(parentId, placement, cloneMembers("subtree" to subtreeJson, idPrefix)),
+        )
+
+    // --- Placement boundary helpers ------------------------------------------------------------
+
+    /**
+     * One placement call: marshal the request, read the envelope, raise on a refusal, hand back the
+     * core's success envelope `{"ok":true,"op":{..}}`.
+     */
+    private fun placementVerb(fn: (Long, ByteArray) -> ByteArray, request: String): String {
+        val result = onExecutor { fn(handle, request.toByteArray(UTF_8)).toString(UTF_8) }
         throwIfError(result)
         return result
     }
+
+    /**
+     * A request object from members that are ALREADY ENCODED JSON.
+     *
+     * Every string member is encoded through this tier's own writer at its call site
+     * (`JsonString(x).encode()`) rather than concatenated: a node id is caller data, and an
+     * unescaped quote in one would close the string and come back as a core-side parse error — a
+     * Kotlin-side defect wearing a core-side error's clothes.
+     *
+     * A node DOCUMENT is spliced verbatim instead. That is not a hole in the encoder: re-reading it
+     * through this tier's reader would move the judgement about what is a valid wire document from
+     * the core — which owns it, and whose limits are the ones that apply — to a reader whose limits
+     * are its own. A malformed splice is refused by the core's parser as a `"request"` error.
+     */
+    private fun jsonObjectOf(members: List<Pair<String, String>>): String =
+        members.joinToString(",", "{", "}") { (key, encoded) -> JsonString(key).encode() + ":" + encoded }
+
+    /** The destination members every placement verb but [nudge] carries, plus the verb's own. */
+    private fun placementRequest(
+        parentId: String,
+        placement: Placement,
+        extra: List<Pair<String, String>>,
+    ): String {
+        val members = mutableListOf<Pair<String, String>>()
+        members += "parentId" to JsonString(parentId).encode()
+        members += "placement" to JsonString(placement.caseName()).encode()
+        placement.anchorId()?.let { members += "anchor" to JsonString(it).encode() }
+        members += extra
+        return jsonObjectOf(members)
+    }
+
+    /** The clone verbs' members: what is being cloned, plus an optional fresh-id strategy. */
+    private fun cloneMembers(subject: Pair<String, String>, idPrefix: String?): List<Pair<String, String>> =
+        if (idPrefix == null) listOf(subject) else listOf(subject, "idPrefix" to JsonString(idPrefix).encode())
 
     /** Write a reactive `$state.<key>` slot from a JSON value. Re-read [treeJson] / [render] to observe. */
     override fun setState(key: String, valueJson: String) = writeSlot(key, valueJson, bridge::sessionSetState)
@@ -339,11 +447,35 @@ interface FuaranNativeBridge {
     fun sessionResolvedRows(handle: Long, nodeId: ByteArray): ByteArray
 
     /**
-     * Relocate a node already in the tree from a canonical-JSON request document (Phase 1673):
-     * `{"source":..,"parentId":..,"placement":"Last"|"First"|"Before"|"After","anchor":..?}`.
-     * Returns `{"ok":true,"op":{..}}` or an error envelope; on refusal the held tree is untouched.
+     * The five placement verbs (Phase 833; `move` surfaced here at Phase 1673, the rest at 1703).
+     * Each takes ONE canonical-JSON request document and returns `{"ok":true,"op":{..}}` carrying
+     * the op it emitted, or an error envelope whose class is `"placement"` or `"request"`; on
+     * refusal the held tree is untouched.
+     *
+     * ```
+     * place      {"parentId":..,"placement":"Last"|"First"|"Before"|"After","anchor":..?,"child":{..node..}}
+     * move       { ..destination.., "source":.. }
+     * paste      { ..destination.., "subtree":{..node..}, "idPrefix":..? }
+     * duplicate  { ..destination.., "source":.., "idPrefix":..? }
+     * nudge      {"target":..,"delta":<whole number of sibling positions>}
+     * ```
+     *
+     * One shape across all five, which is why they sit together here: a binding writes one
+     * marshalling body and five one-line forwards rather than five bodies.
      */
+    fun sessionPlace(handle: Long, requestJson: ByteArray): ByteArray
+
+    /** See [sessionPlace]. Relocates a node already in the tree; the node KEEPS ITS ID. */
     fun sessionMove(handle: Long, requestJson: ByteArray): ByteArray
+
+    /** See [sessionPlace]. Moves a node among its own siblings; takes no destination. */
+    fun sessionNudge(handle: Long, requestJson: ByteArray): ByteArray
+
+    /** See [sessionPlace]. Copies a node already in the tree, minting ids for the copy. */
+    fun sessionDuplicate(handle: Long, requestJson: ByteArray): ByteArray
+
+    /** See [sessionPlace]. Places a subtree from another tree, remapping colliding ids. */
+    fun sessionPaste(handle: Long, requestJson: ByteArray): ByteArray
 
     fun sessionApplyOp(handle: Long, opJson: ByteArray): ByteArray
 
