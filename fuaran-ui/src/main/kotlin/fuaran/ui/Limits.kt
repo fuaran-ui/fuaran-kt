@@ -95,6 +95,71 @@ object WireLimits {
      * produced it.
      */
     const val MAX_NODES: Int = 100_000
+
+    /**
+     * Bounds the `ColExpr` nodes in ONE expression (WIRE_FORMAT.md 21.8).
+     *
+     * The bounds above do not see what an expression COSTS. An expression is small in bytes
+     * and shallow in JSON relative to the work it names, so a document well inside every
+     * structural limit can still name an evaluation that is not — and what a host does with
+     * an expression is EVALUATE it.
+     *
+     * Counted per EXPRESSION rather than per document or per pipeline: a tree may carry many
+     * bounded expressions, and twenty `derive` steps of ten nodes each are twenty cheap
+     * evaluations rather than one expensive one, so a whole-pipeline sum would refuse that
+     * legitimate shape while catching no blow-up this bound misses. The aggregate is the
+     * document's own size bound's job.
+     *
+     * Its SCOPE is EVERY expression a decoded document can name, and there are exactly two
+     * positions: a `Binding.Expr`'s `expr` (3.3.2), and the expression a `Binding.Transform`
+     * pipeline embeds — a `derive` step's `expr`, a `filter` step's `pred`. Those two are the
+     * whole surface as a fact about the vocabulary rather than as a promise: `filter` and
+     * `derive` are the only pipeline steps carrying an expression, and the operand of a
+     * `join` / `union` / `intersect` / `except` is a data source, never another pipeline.
+     *
+     * The pipeline positions were EXPLICITLY EXCLUDED until 21.8 was amended, which is what
+     * made the bound bypassable by wrapping an expression in a Transform — including the one
+     * shape a `Binding.Expr` already refused. Closing that changes what an already-shipped
+     * decoder accepts, so the refusal is stated rather than left to be read off the code: a
+     * document past the bound is refused OUTRIGHT, with no profile boundary and no
+     * grandfathering, because 21.2 rules 1 and 2 admit no second acceptance class.
+     *
+     * ONE count and not a count plus a depth: depth is at most the node count for every
+     * expression, so an expression 600 deep is already 600 nodes and already refused, and a
+     * second number would be one more figure to keep in step across the hosts while refusing
+     * nothing this one does not.
+     */
+    const val MAX_EXPR_NODES: Int = 512
+
+    /**
+     * Bounds the value of ONE `Skeleton` node's `rows` slot (WIRE_FORMAT.md 21.9).
+     *
+     * The first bound here that a document breaches with four digits rather than with bulk,
+     * and [MAX_EXPR_NODES]'s argument applies more sharply because this is not even an
+     * evaluation — the rows are simply not present in the input. A renderer emits one
+     * placeholder row per count, so a `Skeleton` naming a hundred million rows is a handful
+     * of bytes, one node and three JSON levels. Every structural limit is satisfied, and each
+     * is satisfied because none of them is looking at the value.
+     *
+     * Counted per NODE rather than per document: a tree may carry many `Skeleton` nodes, each
+     * bounded here, with the whole still bounded by [MAX_NODES].
+     *
+     * **7.1 decides FIRST, and the ORDER is the whole of what keeps the two rules apart.**
+     * 7.1 governs what a typed integer slot can HOLD, and `2147483647` is finite,
+     * fraction-free and inside signed 32-bit, so 7.1 admits it; this bound then refuses it
+     * for the work it names. So a value that is not an integer at all stays `WRONG_TYPE` and
+     * never a limit breach, and a 32-bit-valid value past the bound is `LIMIT_EXCEEDED` and
+     * never a wrong type. Reading this as a narrowing of the slot's TYPE gets both halves
+     * wrong at once: it answers `WRONG_TYPE` at the 32-bit maximum AND refuses the
+     * at-the-bound document 21.2 rule 1 obliges every host to accept.
+     *
+     * An UPPER bound only, and the omission is deliberate. A negative count expands nothing,
+     * so it is not a resource breach, and answering `LIMIT_EXCEEDED` for it would tell an
+     * author to come back under a ceiling when what they wrote is a count that cannot be
+     * drawn at all. That is an authoring defect, and it belongs to the pre-emit validator
+     * family this decode-only surface does not carry.
+     */
+    const val MAX_SKELETON_ROWS: Int = 10_000
 }
 
 /** One decode call's 21 node-axis counters. See the thread-local note on [WireLimits]. */

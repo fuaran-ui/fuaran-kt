@@ -535,6 +535,105 @@ fun main() {
         if (problems.isNotEmpty()) error(problems.first())
     }
 
+    // The two VALUE bounds (21.8, 21.9) — bounds on what a document NAMES rather than on the
+    // shape of a walk, so each sits at the slot that reads it rather than on the node axis
+    // above. The corpus pins both sides of each, so what is asserted HERE is only what those
+    // vectors structurally cannot reach: that the expression budget is per EXPRESSION and not
+    // per pipeline, that it covers the `Binding.Expr` position the corpus exercises only
+    // THROUGH a Transform, and that 7.1 still decides the `rows` slot before 21.9 does.
+    fun pipelineGrid(steps: String): String =
+        "{\"id\":\"x\",\"kind\":{\"\$type\":\"DataGrid\",\"columns\":[],\"rowKeyField\":\"a\"," +
+            "\"source\":{\"\$type\":\"Transform\",\"pipeline\":[$steps]," +
+            "\"source\":{\"columns\":{\"a\":{\"validity\":[true],\"values\":[1]}}," +
+            "\"schema\":[{\"name\":\"a\",\"type\":\"int\"}]}}}}"
+
+    // A `coalesce` over n `col` leaves — n + 1 ColExpr nodes, the root counting as one.
+    fun colExpr(n: Int): String =
+        "{\"\$type\":\"coalesce\",\"exprs\":[" +
+            (0 until n).joinToString(",") { "{\"\$type\":\"col\",\"name\":\"a\"}" } + "]}"
+
+    // An `Expr` binding has no ROW, so its expression is built from `param` leaves rather than
+    // `col` — with `col` the 3.3.2 column refusal answers first and the assertion measures
+    // nothing. This is the shape `reject-limit-expr-nodes-transform-bypass` carries, which is the
+    // point: it is exactly what a `Binding.Expr` refuses, and exactly what wrapping it in a
+    // Transform used to smuggle past the bound.
+    fun paramExpr(n: Int): String =
+        "{\"\$type\":\"coalesce\",\"exprs\":[" +
+            (0 until n).joinToString(",") { "{\"\$type\":\"param\",\"name\":\"p\"}" } + "]}"
+
+    fun exprBoundText(expr: String): String =
+        "{\"id\":\"x\",\"kind\":{\"\$type\":\"Markdown\",\"text\":{\"\$type\":\"Bound\"," +
+            "\"binding\":{\"\$type\":\"Expr\",\"expr\":$expr," +
+            "\"params\":[{\"from\":{\"\$type\":\"State\",\"key\":\"k\"},\"name\":\"p\"}]}}}}"
+
+    fun skeleton(rows: String): String = "{\"id\":\"s\",\"kind\":{\"\$type\":\"Skeleton\",\"rows\":$rows}}"
+
+    runner.check("limits/the-expression-budget-is-per-expression-not-per-pipeline") {
+        // Twenty `derive` steps of ten nodes each are twenty cheap evaluations, not one
+        // expensive one. Two steps each comfortably inside the bound must decode even though
+        // their SUM is well past it — a whole-pipeline sum would refuse this legitimate shape
+        // while catching no blow-up the per-expression bound misses.
+        val step = "{\"\$type\":\"derive\",\"expr\":${colExpr(400)},\"name\":\"d\"}"
+        decodeNode(pipelineGrid("$step,$step"))
+    }
+    runner.check("limits/an-oversized-pipeline-expression-is-refused-at-its-own-STEP") {
+        val ok = "{\"\$type\":\"derive\",\"expr\":${colExpr(10)},\"name\":\"d\"}"
+        val over = "{\"\$type\":\"filter\",\"pred\":${colExpr(WireLimits.MAX_EXPR_NODES)}}"
+        val e =
+            try {
+                decodeNode(pipelineGrid("$ok,$over"))
+                error("expected a pipeline expression one node past the bound to be refused")
+            } catch (e: FuaranDecodeException) {
+                e
+            }
+        if (e.code != FuaranDecodeException.LIMIT_EXCEEDED) error("expected LIMIT_EXCEEDED, got ${e.code}")
+        // The offending STEP, not merely the binding — "one of your expressions is too big"
+        // is not an actionable report in a pipeline of nine steps.
+        if (e.path != "\$.kind.source.pipeline[1].pred") error("expected the offending step's path, got ${e.path}")
+    }
+    runner.check("limits/the-expression-bound-covers-a-Binding-Expr-too") {
+        // The position 21.8 was written for, and the one the corpus reaches only THROUGH a
+        // Transform: every `reject-limit-expr-nodes-*` vector is a pipeline, so a host that
+        // bounded the pipeline alone would pass the corpus with the original position open.
+        decodeNode(exprBoundText(paramExpr(WireLimits.MAX_EXPR_NODES - 1)))
+        val e =
+            try {
+                decodeNode(exprBoundText(paramExpr(WireLimits.MAX_EXPR_NODES)))
+                error("expected an Expr binding one node past the bound to be refused")
+            } catch (e: FuaranDecodeException) {
+                e
+            }
+        if (e.code != FuaranDecodeException.LIMIT_EXCEEDED) error("expected LIMIT_EXCEEDED, got ${e.code}")
+        if (e.path != "\$.kind.text.binding.expr") error("expected the expression's own path, got ${e.path}")
+    }
+    runner.check("limits/skeleton-rows-at-the-bound-decodes-and-one-past-it-is-refused") {
+        decodeNode(skeleton("${WireLimits.MAX_SKELETON_ROWS}"))
+        val got = limitCodeOf(skeleton("${WireLimits.MAX_SKELETON_ROWS + 1}"))
+        if (got != FuaranDecodeException.LIMIT_EXCEEDED) error("expected LIMIT_EXCEEDED, got $got")
+    }
+    runner.check("limits/7-1-decides-the-rows-slot-before-21-9-does") {
+        // The ORDER is the whole of what keeps the two rules apart, and one misreading
+        // breaches both at once: a host that read 21.9 as a narrowing of the slot's TYPE
+        // answers WRONG_TYPE at the 32-bit maximum AND refuses the at-the-bound document the
+        // check above requires. A value the slot cannot hold at all is a WRONG_TYPE...
+        for (rows in listOf("2.5", "1e10", "3000000000", "\"NaN\"")) {
+            val got = limitCodeOf(skeleton(rows))
+            if (got != FuaranDecodeException.WRONG_TYPE) error("rows=$rows: expected WRONG_TYPE, got $got")
+        }
+        // ...and a 32-bit-VALID value past the bound is a limit breach, never a wrong type.
+        // 10 001 cannot separate the two readings; the 32-bit maximum is the only value that
+        // can, which is why the corpus's reject vector carries it.
+        val got = limitCodeOf(skeleton("2147483647"))
+        if (got != FuaranDecodeException.LIMIT_EXCEEDED) error("expected LIMIT_EXCEEDED, got $got")
+    }
+    runner.check("limits/the-skeleton-row-ceiling-is-an-UPPER-bound-only") {
+        // A negative count expands nothing, so it is not a resource breach: answering
+        // LIMIT_EXCEEDED would tell an author to come back under a ceiling when what they
+        // wrote is a count that cannot be drawn at all. That is an authoring defect, and it
+        // belongs to the pre-emit validator family this decode-only surface does not carry.
+        decodeNode(skeleton("-1"))
+    }
+
     // ----------------------------------------------------------------------- //
     // The URL safety floor
     // ----------------------------------------------------------------------- //
