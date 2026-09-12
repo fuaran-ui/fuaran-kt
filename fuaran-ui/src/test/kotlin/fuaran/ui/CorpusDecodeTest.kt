@@ -566,7 +566,7 @@ fun main() {
             "\"binding\":{\"\$type\":\"Expr\",\"expr\":$expr," +
             "\"params\":[{\"from\":{\"\$type\":\"State\",\"key\":\"k\"},\"name\":\"p\"}]}}}}"
 
-    fun skeleton(rows: String): String = "{\"id\":\"s\",\"kind\":{\"\$type\":\"Skeleton\",\"rows\":$rows}}"
+    fun skeletonRowsDoc(rows: String): String = "{\"id\":\"s\",\"kind\":{\"\$type\":\"Skeleton\",\"rows\":$rows}}"
 
     runner.check("limits/the-expression-budget-is-per-expression-not-per-pipeline") {
         // Twenty `derive` steps of ten nodes each are twenty cheap evaluations, not one
@@ -607,8 +607,8 @@ fun main() {
         if (e.path != "\$.kind.text.binding.expr") error("expected the expression's own path, got ${e.path}")
     }
     runner.check("limits/skeleton-rows-at-the-bound-decodes-and-one-past-it-is-refused") {
-        decodeNode(skeleton("${WireLimits.MAX_SKELETON_ROWS}"))
-        val got = limitCodeOf(skeleton("${WireLimits.MAX_SKELETON_ROWS + 1}"))
+        decodeNode(skeletonRowsDoc("${WireLimits.MAX_SKELETON_ROWS}"))
+        val got = limitCodeOf(skeletonRowsDoc("${WireLimits.MAX_SKELETON_ROWS + 1}"))
         if (got != FuaranDecodeException.LIMIT_EXCEEDED) error("expected LIMIT_EXCEEDED, got $got")
     }
     runner.check("limits/7-1-decides-the-rows-slot-before-21-9-does") {
@@ -617,13 +617,13 @@ fun main() {
         // answers WRONG_TYPE at the 32-bit maximum AND refuses the at-the-bound document the
         // check above requires. A value the slot cannot hold at all is a WRONG_TYPE...
         for (rows in listOf("2.5", "1e10", "3000000000", "\"NaN\"")) {
-            val got = limitCodeOf(skeleton(rows))
+            val got = limitCodeOf(skeletonRowsDoc(rows))
             if (got != FuaranDecodeException.WRONG_TYPE) error("rows=$rows: expected WRONG_TYPE, got $got")
         }
         // ...and a 32-bit-VALID value past the bound is a limit breach, never a wrong type.
         // 10 001 cannot separate the two readings; the 32-bit maximum is the only value that
         // can, which is why the corpus's reject vector carries it.
-        val got = limitCodeOf(skeleton("2147483647"))
+        val got = limitCodeOf(skeletonRowsDoc("2147483647"))
         if (got != FuaranDecodeException.LIMIT_EXCEEDED) error("expected LIMIT_EXCEEDED, got $got")
     }
     runner.check("limits/the-skeleton-row-ceiling-is-an-UPPER-bound-only") {
@@ -631,7 +631,7 @@ fun main() {
         // LIMIT_EXCEEDED would tell an author to come back under a ceiling when what they
         // wrote is a count that cannot be drawn at all. That is an authoring defect, and it
         // belongs to the pre-emit validator family this decode-only surface does not carry.
-        decodeNode(skeleton("-1"))
+        decodeNode(skeletonRowsDoc("-1"))
     }
 
     // ----------------------------------------------------------------------- //
