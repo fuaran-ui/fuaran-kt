@@ -180,6 +180,68 @@ private fun JsonValue.payloadMap(path: String): JsonValue {
     return o
 }
 
+/**
+ * An `I18n` argument bag — the argument discriminated BY INSPECTION (WIRE_FORMAT.md 5, Phase 1661).
+ *
+ * An argument is a `Binding<JSON>` rather than a bare value, and the wire carries no tag saying
+ * which of the two forms one is: an object carrying a `$type` member is the BINDING form, and any
+ * other JSON value is the LITERAL form. The discriminator is read off each ARGUMENT and never off
+ * the BAG — a bag mixing the two arms is the one shape a host that read it off the bag gets wrong,
+ * and both single-arm bags pass under either mistake.
+ *
+ * This surface still holds the bag RAW, so nothing typed is added and every literal bag decodes to
+ * exactly the bytes it always did. What IS added is the half the raw hold skipped: a binding
+ * argument naming no known case, and a known case with a required member missing, both went
+ * unraised here while every other host refused the same document. An unrecognised `$type` is
+ * REFUSED rather than read back as an object literal — falling through to the literal arm would
+ * substitute a discriminator's own text into a sentence a reader reads, which is worse than
+ * refusing the document.
+ *
+ * The LITERAL arm keeps rule 12 exactly as [payloadMap] applied it to the whole bag before: an
+ * explicit `null` is not a payload, and the refusal names the offending key.
+ */
+private fun JsonValue.i18nArgs(path: String): JsonValue {
+    val o = obj(path)
+    for ((name, arg) in o.members) {
+        val argPath = "$path.$name"
+        if (arg is JsonObject && arg["\u0024type"] != null) {
+            // Decoded for its REFUSALS; the bag itself stays raw, so the result is deliberately
+            // discarded rather than stored on a typed slot this projection does not carry.
+            decodeBinding(arg, argPath)
+        } else {
+            arg.payload(argPath)
+        }
+    }
+    return o
+}
+
+/**
+ * `Skeleton.rows`, bounded by WIRE_FORMAT.md 21.9.
+ *
+ * The strict integer reader runs FIRST, so 7.1's slot rule is untouched: a fractional value, a
+ * non-finite sentinel and anything outside the signed 32-bit range are all still `WRONG_TYPE` and
+ * never a limit breach. The bound then refuses a value the slot CAN hold but whose work the format
+ * will not carry — a renderer emits one placeholder row per count, so a four-digit difference in
+ * two bytes of input is three orders of magnitude of emitted markup. The two codes answer
+ * different questions, and the ORDER is what keeps them apart.
+ *
+ * Upper bound only, deliberately: a negative count expands nothing, so it is an authoring defect
+ * for the pre-emit validator rather than a resource breach for this one.
+ */
+private fun decodeSkeletonRows(value: JsonValue, path: String): Int {
+    val rows = value.int(path)
+    if (rows > WireLimits.MAX_SKELETON_ROWS) {
+        throw FuaranDecodeException(
+            FuaranDecodeException.LIMIT_EXCEEDED,
+            path,
+            "a Skeleton naming $rows placeholder rows is past the wire limit MAX_SKELETON_ROWS = " +
+                "${WireLimits.MAX_SKELETON_ROWS}; expected a skeleton of no more than " +
+                "${WireLimits.MAX_SKELETON_ROWS} rows",
+        )
+    }
+    return rows
+}
+
 private fun JsonObject.req(key: String, path: String): JsonValue =
     this[key] ?: throw FuaranDecodeException(FuaranDecodeException.MISSING_FIELD, "$path.$key", "required field absent")
 
@@ -743,7 +805,9 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 label = o["label"]?.let { decodeTextSource(it, "$path.label") },
                 caveat = o["caveat"]?.let { decodeTextSource(it, "$path.caveat") },
             )
-        "Skeleton" -> Skeleton(rows = o.req("rows", path).int("$path.rows"))
+        // 21.9 — `rows` is a count the renderer EXPANDS, so the slot's own bound is read here
+        // (after 7.1's integer rule, never instead of it). See [decodeSkeletonRows].
+        "Skeleton" -> Skeleton(rows = decodeSkeletonRows(o.req("rows", path), "$path.rows"))
         "LabelValueRow" ->
             LabelValueRow(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
@@ -1106,7 +1170,7 @@ private fun decodeTextSource(value: JsonValue, path: String): TextSource {
     return when (val t = o.discriminator(path)) {
         "Literal" -> LiteralText(o.req("text", path).str("$path.text"))
         "Bound" -> BoundText(decodeBinding(o.req("binding", path), "$path.binding"))
-        "I18n" -> I18nText(o.req("key", path).str("$path.key"), o["args"]?.payloadMap("$path.args"))
+        "I18n" -> I18nText(o.req("key", path).str("$path.key"), o["args"]?.i18nArgs("$path.args"))
         else -> unknownCase(t, path, "TextSource")
     }
 }
@@ -1274,7 +1338,10 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
         // default: a document naming a grain the host cannot honour must not be rendered at a
         // neighbouring resolution in silence.
         "Now" -> NowBinding(o.optStr("grain", path)?.let { enumOf<TimeGrain>(it, "$path.grain") })
-        "I18n" -> I18nBinding(o.req("key", path).str("$path.key"), o["args"]?.payloadMap("$path.args"))
+        // The SAME argument type `TextSource.I18n` carries (5, Phase 1661); the two slots differ
+        // only in presence (this one's bag is omitted when absent) and in the canonical spelling
+        // of a literal, neither of which a decoder reading both spellings gets to care about.
+        "I18n" -> I18nBinding(o.req("key", path).str("$path.key"), o["args"]?.i18nArgs("$path.args"))
         "Local" -> {
             // 3.3.3 — the buffer's own codec REPLACES the identity on both sides: `format` renders
             // through it, `parse` inverts it. The admitted set is therefore the NumberFormat cases
@@ -1324,12 +1391,20 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
                 locale = decodeLocaleSource(o.req("locale", path), "$path.locale"),
                 source = decodeBinding(o.req("source", path), "$path.source"),
             )
-        "Transform" ->
+        "Transform" -> {
+            val source = unwrapTransformSource(o.req("source", path), "$path.source")
+            val pipeline = o.req("pipeline", path)
+            // Phase 1662 (21.8) — the expressions this pipeline EMBEDS, bounded at DECODE and not
+            // at validation: a document that decodes must not be able to name an unbounded
+            // evaluation, since a host may decode, store and forward a tree without ever running a
+            // validator over it. The pipeline stays raw; this only refuses.
+            checkPipelineExprBound(pipeline, path)
             TransformBinding(
-                source = unwrapTransformSource(o.req("source", path), "$path.source"),
-                pipeline = o.req("pipeline", path),
+                source = source,
+                pipeline = pipeline,
                 params = o["params"]?.let { decodeTransformParams(it, "$path.params") },
             )
+        }
         // Phase 1534 (3.3.2) — ONE scalar expression evaluated to ONE value. The expression itself
         // is held as raw JSON for the reason a Transform pipeline is: the ColExpr algebra is owned
         // by the Fuaran.Core codec, and a render projection does not decompose content the host
@@ -1350,6 +1425,10 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
                         "supplies the frame",
                 )
             }
+            // Phase 1662 (21.8) — the position the bound was WRITTEN for, and one budget for both
+            // it and the pipeline positions above, because the thing bounded is identical either
+            // way: the evaluation named by one ColExpr.
+            refuseOversizedExpr(expr, exprPath)
             val bound = (params ?: emptyList()).map { it.name }.toSet()
             // Statically decidable HERE where it is not for a Transform, whose unbound filter params
             // are PRUNED under the deliberate "unset chip => no constraint" leniency: an Expr has no
@@ -2579,6 +2658,77 @@ private fun firstUnboundParam(e: JsonValue, bound: Set<String>): String? {
     }
     for (child in exprChildren(e)) firstUnboundParam(child, bound)?.let { return it }
     return null
+}
+
+/**
+ * Counts the `ColExpr` nodes of [e] into [count], stopping as soon as the verdict is settled
+ * (21.8, Phase 1662).
+ *
+ * Capped at one past [WireLimits.MAX_EXPR_NODES] rather than run to completion: a hostile
+ * expression is exactly the input that must not be walked to the end, and the only question this
+ * answers is whether the bound is breached.
+ *
+ * It reuses [exprChildren], so the three walks over this surface cannot disagree about which
+ * members recurse. That walk is a structural SUPERSET of the real sub-expressions — the algebra is
+ * held as raw JSON here, so a member is a candidate whenever it is an object or an array of them —
+ * and a superset is the RIGHT direction for a resource bound: a node the walk could not see would
+ * be a node the bound could not refuse, which is the bypass 21.8 was amended to close.
+ */
+private fun exprNodeCount(e: JsonValue, count: IntArray) {
+    count[0]++
+    if (count[0] > WireLimits.MAX_EXPR_NODES) return
+    for (child in exprChildren(e)) exprNodeCount(child, count)
+}
+
+/**
+ * Refuses [e] when it carries more `ColExpr` nodes than 21.8 admits, at [path] — the offending
+ * expression's own member, so an author is told which expression to come back under.
+ */
+private fun refuseOversizedExpr(e: JsonValue, path: String) {
+    val count = intArrayOf(0)
+    exprNodeCount(e, count)
+    if (count[0] > WireLimits.MAX_EXPR_NODES) {
+        throw FuaranDecodeException(
+            FuaranDecodeException.LIMIT_EXCEEDED,
+            path,
+            "this expression carries more than the wire limit MAX_EXPR_NODES = " +
+                "${WireLimits.MAX_EXPR_NODES} ColExpr nodes; expected an expression of no more " +
+                "than ${WireLimits.MAX_EXPR_NODES} nodes",
+        )
+    }
+}
+
+/**
+ * 21.8's node bound over the expressions a `Binding.Transform` PIPELINE embeds (Phase 1662).
+ *
+ * [WireLimits.MAX_EXPR_NODES] bounded `Binding.Expr` alone until 21.8 was amended, and saying so
+ * made the bound bypassable by wrapping the expression in a Transform: a `derive`'s expression and
+ * a `filter`'s predicate reach the same evaluator and carried no ceiling on any host.
+ *
+ * `filter` and `derive` are the whole surface — the only pipeline steps carrying an expression; a
+ * `join` / `union` / `intersect` / `except` operand is a data source (an embedded table or a named
+ * `ref`), never another pipeline — so there is no recursive axis to descend.
+ *
+ * The same budget, counted per EMBEDDED EXPRESSION rather than summed over the pipeline, refused
+ * at the path of the offending `expr` / `pred` member so an author is told which STEP to come back
+ * under. The first breach wins; 21.8 leaves which one unspecified where several breach.
+ *
+ * The pipeline is held RAW on this surface, so the 3.6 `predicate` spelling is accepted beside the
+ * canonical `pred` — the REPORTED path stays canonical, which is the name the language uses and
+ * the one every other host answers with.
+ */
+private fun checkPipelineExprBound(pipeline: JsonValue, path: String) {
+    val steps = (pipeline as? JsonArray)?.items ?: return
+    steps.forEachIndexed { i, step ->
+        val o = step as? JsonObject ?: return@forEachIndexed
+        val (slot, expr) =
+            when (exprTag(o)) {
+                "filter" -> "pred" to o.getAliased("pred", "predicate")
+                "derive" -> "expr" to o["expr"]
+                else -> return@forEachIndexed
+            }
+        if (expr != null) refuseOversizedExpr(expr, "$path.pipeline[$i].$slot")
+    }
 }
 
 /**

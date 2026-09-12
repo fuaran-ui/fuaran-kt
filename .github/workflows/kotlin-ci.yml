@@ -80,6 +80,22 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # Gate 0 — :fuaran-core COMPILES.
+      #
+      # Neither gate below reaches this module: gate 1 is :fuaran-ui, gate 2 is
+      # :fuaran-renderer, and :fuaran-core's own test leg is a native round trip that
+      # needs the Rust shim this runner has no toolchain to build. So the JNI adapter,
+      # its Java `native` declarations and the C-ABI seam they implement were compiled
+      # by NO gate here — a change to the bridge seam could break the module and CI
+      # would report green, because nothing asked it to build.
+      #
+      # `testClasses` compiles main + test sources and RUNS nothing, which is exactly
+      # the available claim: the shared library is absent, so the round trip cannot run,
+      # but "does this still compile against the seam" is answerable and was not being
+      # answered. Cheap, and it fails for the right reason.
+      - name: Compile gate (:fuaran-core — the JNI adapter is built by no other gate)
+        run: ./gradlew :fuaran-core:testClasses --console=plain
+
       # Gate 1 — the wire-format corpus decode harness. Fails the build on any
       # failed check by its own exit code; the grep additionally refuses a run
       # that located no corpus, since that path exits 0.

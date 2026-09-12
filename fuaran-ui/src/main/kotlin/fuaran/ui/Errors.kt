@@ -28,11 +28,17 @@ class FuaranDecodeException(
 
         /**
          * A [WireLimits] resource bound is breached — node depth, JSON depth, string
-         * length, array length, or total node count. The input is well-formed JSON; it
-         * is refused for being structurally unbounded, which is exactly why this is not
+         * length, array length, total node count, the expression-node count of 21.8, or
+         * the skeleton-row ceiling of 21.9. The input is well-formed JSON; it is refused
+         * for naming more work than the format carries, which is exactly why this is not
          * [INVALID_JSON]: calling a well-formed-but-too-deep document malformed sends an
          * author to repair the wrong thing. [detail] names the limit and the observed
          * shape so they know which bound to come back under.
+         *
+         * The last two are bounds on a VALUE rather than on the shape of a walk, and each
+         * sits at the slot that reads it — AFTER 7.1 has decided the slot's type, never
+         * instead of it. So a `Skeleton` whose `rows` is fractional or outside signed
+         * 32-bit stays [WRONG_TYPE]; only a value the slot can hold reaches this code.
          */
         const val LIMIT_EXCEEDED = "LIMIT_EXCEEDED"
     }
