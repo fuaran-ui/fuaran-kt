@@ -122,7 +122,7 @@ jobs:
         with:
           packages: "platforms;android-36 build-tools;36.0.0"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       # Gate 0 — :fuaran-core COMPILES.
       #
@@ -335,7 +335,7 @@ jobs:
         with:
           packages: "platforms;android-36 build-tools;36.0.0"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       # `javac -h` (JDK 21 has no `javah`) emits the JNI header from the `native`
       # declarations. The shim `#include`s it, so this must precede the compile.

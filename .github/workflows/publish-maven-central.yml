@@ -180,7 +180,7 @@ jobs:
         with:
           packages: "platforms;android-36 build-tools;36.0.0"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       # The loader must bind the shim it bundles — proven on the runner's own platform before
       # anything is published. A JAR whose loader cannot load its own natives never ships.
