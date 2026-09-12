@@ -165,11 +165,11 @@ JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionResolvedRows(J
 }
 
 /*
- * The placement verb (Phase 1673). One request document in, one result envelope
- * out — the same marshalling shape as sessionApplyOp above, factored because the
- * core carries four more verbs of exactly this shape (place / nudge / duplicate /
- * paste) that this surface does not yet reach, and a helper is what makes adding
- * one of them a single line rather than another copy of this body.
+ * The placement verbs (Phase 1673's `move`; the other four Phase 1703). One request
+ * document in, one result envelope out — the same marshalling shape as
+ * sessionApplyOp above, factored when there was one caller precisely so that the
+ * other four would be a line each rather than four more copies of this body. They
+ * are, below.
  */
 static jbyteArray one_document(JNIEnv *env, jlong handle, jbyteArray document,
                                FuaranBuf (*fn)(FuaranSession *, const uint8_t *, size_t)) {
@@ -189,6 +189,30 @@ JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionMove(JNIEnv *e
                                                                        jbyteArray requestJson) {
     (void)cls;
     return one_document(env, handle, requestJson, fuaran_session_move);
+}
+
+JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionPlace(JNIEnv *env, jclass cls, jlong handle,
+                                                                        jbyteArray requestJson) {
+    (void)cls;
+    return one_document(env, handle, requestJson, fuaran_session_place);
+}
+
+JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionNudge(JNIEnv *env, jclass cls, jlong handle,
+                                                                        jbyteArray requestJson) {
+    (void)cls;
+    return one_document(env, handle, requestJson, fuaran_session_nudge);
+}
+
+JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionDuplicate(JNIEnv *env, jclass cls, jlong handle,
+                                                                            jbyteArray requestJson) {
+    (void)cls;
+    return one_document(env, handle, requestJson, fuaran_session_duplicate);
+}
+
+JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionPaste(JNIEnv *env, jclass cls, jlong handle,
+                                                                        jbyteArray requestJson) {
+    (void)cls;
+    return one_document(env, handle, requestJson, fuaran_session_paste);
 }
 
 JNIEXPORT jbyteArray JNICALL Java_fuaran_core_FuaranNative_sessionApplyOp(JNIEnv *env, jclass cls, jlong handle,

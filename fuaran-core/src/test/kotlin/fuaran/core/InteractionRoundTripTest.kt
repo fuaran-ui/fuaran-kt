@@ -19,7 +19,6 @@ import fuaran.ui.FuaranSession
 import fuaran.ui.decodeNode
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets.UTF_8
-import org.junit.Assume.assumeTrue
 import org.junit.BeforeClass
 import org.junit.Test
 import kotlin.test.assertEquals
@@ -39,26 +38,21 @@ import kotlin.test.assertTrue
  *
  * **Gated:** the desktop native shim is supplied via `-Dfuaran.lib` (built by
  * `dev-scripts/build-native-desktop.ps1`; wired through the Gradle `test` task from `-Pfuaran.lib`).
- * When it is absent the whole class **skips cleanly** (JUnit `assumeTrue`) — the Swift-side
- * clean-skip pattern — so `:fuaran-core:test` is green on a box without the Rust toolchain.
+ * When it is absent the whole class **skips cleanly** — the Swift-side clean-skip pattern — so
+ * `:fuaran-core:test` is green on a box without the Rust toolchain, unless `FUARAN_REQUIRE_NATIVE=1`
+ * says the caller built the shim and expects the leg to RUN. See [NativeLeg].
  */
 class InteractionRoundTripTest {
     companion object {
-        private var loaded = false
-
+        // Phase 1703: the load-or-skip decision moved to the module-wide `NativeLeg` gate, which
+        // gives this leg the half it was missing — under `FUARAN_REQUIRE_NATIVE=1` an absent shim
+        // is a FAILURE rather than a clean skip. The skip is right on a box with no Rust toolchain
+        // and wrong in a workflow that has just built one, and only the caller can tell which case
+        // it is in: before this, a CI job that built the shim and then failed to pass its path
+        // would have skipped every test here and reported green.
         @BeforeClass
         @JvmStatic
-        fun loadNative() {
-            val libPath = System.getProperty("fuaran.lib")
-            assumeTrue(
-                "SKIP: -Dfuaran.lib not set (desktop JNI shim unavailable — Rust toolchain / C compiler absent).",
-                !libPath.isNullOrBlank(),
-            )
-            if (!loaded) {
-                NativeBridge.load(libPath)
-                loaded = true
-            }
-        }
+        fun loadNative() = NativeLeg.loadOrSkip()
 
         // 0.2.0 canonical seeds: bare-string Literals; the scalar displayed value is `value`
         // (the retired `source` spelling is a hard decode error in the core).

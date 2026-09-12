@@ -221,6 +221,26 @@ else {
     Write-Host "fuaran.h byte-identical to the reference." -ForegroundColor Green
 }
 
+# --- Corpus pin drift (Phase 1703) --------------------------------------------------- #
+# `corpus-pin.json` records the ONE corpus revision this repository's gates certify against, and CI
+# checks the corpus out at it. That closes the class where a corpus commit reddens this repository
+# with no change of its own — at the price of a SILENT staleness if nobody ever looks, which is
+# exactly why the distance is reported here and on every CI run rather than only when something
+# breaks.
+#
+# Advisory, never fatal: being behind the corpus is the ordinary resting state between a fixture
+# being authored and the decoder work that adopts it. Same placement and same reasoning as the
+# header check above — a text comparison needing no JDK, Kotlin or Rust, so a box with none of them
+# still answers the question it CAN answer.
+Write-Host "`n== corpus pin drift ==" -ForegroundColor Cyan
+$global:LASTEXITCODE = 0
+& pwsh -NoProfile -File (Join-Path $Repo "dev-scripts/corpus-pin.ps1")
+if ($LASTEXITCODE -eq 2) {
+    Write-Host ("NOTE: the corpus has moved past the pin (above). Adopting it is a deliberate " +
+        "change-set, not a sweep.") -ForegroundColor Yellow
+}
+$global:LASTEXITCODE = 0
+
 if (-not $Java -or -not $Kotlinc) {
     $missing = @()
     if (-not $Java) { $missing += 'a JDK (java; JAVA_HOME or PATH)' }
@@ -479,6 +499,10 @@ if ($HasSessionTest) {
         $env:Path = "$libDir;$env:Path"
         & $Java "-Dfuaran.lib=$nativeDll" -cp $Classpath $SessionTestClass
         if ($LASTEXITCODE -ne 0) { $script:FailedLegs.Add("Phase 543 session round-trip (exit $LASTEXITCODE)") }
+        # Handed to the Gradle `:fuaran-core:test` leg further down (Phase 1703). It cannot run here
+        # because $Gradlew is resolved below; and it cannot be folded into the `java` call above
+        # because that classpath is the kotlinc jar, which carries none of the JUnit classes.
+        $script:NativeShim = $nativeDll
     }
 }
 
@@ -530,6 +554,28 @@ if (-not $SkipTests) {
         & $Gradlew ":fuaran-driver:test" "--console=plain"
         if ($LASTEXITCODE -ne 0) { $script:FailedLegs.Add("Phase 545/1541 driver gate (exit $LASTEXITCODE)") }
         Write-Host "Driver gate green." -ForegroundColor Green
+    }
+}
+
+# --- Phase 1703: the JUnit live-native leg (:fuaran-core:test) ----------------------- #
+# `:fuaran-core:test` holds the JUnit half of the native round trip — the Phase 545 interaction
+# loop and the Phase 1703 five-verb placement leg — and NOTHING invoked it. The kotlinc leg above
+# compiles a hand-listed set of `main()` harnesses with no JUnit on its classpath, so those classes
+# were compiled by Gradle and run by nobody on this box: an entire module's tests standing between
+# a green local gate and a red CI one.
+#
+# It runs only when the desktop shim was actually built above. Without it the tests would skip, and
+# a skipped gate reporting green is the class this repository has already been bitten by twice —
+# hence `-Pfuaran.requireNative=1` here: we HAVE the shim, so a skip now is a defect, not a
+# platform fact.
+if (-not $SkipTests -and $script:NativeShim) {
+    Write-Host "`n== Phase 1703 :: JUnit live-native leg (:fuaran-core:test) ==" -ForegroundColor Cyan
+    if (-not (Test-Path $Gradlew)) {
+        Write-Host "SKIP: no Gradle wrapper ($GradlewName) — the JUnit native leg needs the Gradle build." -ForegroundColor Yellow
+    }
+    else {
+        & $Gradlew ":fuaran-core:test" "--console=plain" "-Pfuaran.lib=$($script:NativeShim)" "-Pfuaran.requireNative=1"
+        if ($LASTEXITCODE -ne 0) { $script:FailedLegs.Add("Phase 1703 JUnit native leg (exit $LASTEXITCODE)") }
     }
 }
 
