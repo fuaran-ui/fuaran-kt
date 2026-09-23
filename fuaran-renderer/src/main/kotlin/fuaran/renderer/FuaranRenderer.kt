@@ -69,8 +69,8 @@ import fuaran.ui.Custom
 import fuaran.ui.CustomCell
 import fuaran.ui.DataGrid
 import fuaran.ui.DateCell
-import fuaran.ui.DateField
-import fuaran.ui.DateRangeField
+import fuaran.ui.DateTimeField
+import fuaran.ui.DateTimeRangeField
 import fuaran.ui.Disclosure
 import fuaran.ui.Drawing
 import fuaran.ui.EditableCell
@@ -1080,7 +1080,7 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
                 )
             }
         }
-        is DateField -> {
+        is DateTimeField -> {
             var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
             val key = stateKeyOf(kind.value)
             OutlinedTextField(
@@ -1094,7 +1094,7 @@ private fun RenderFormField(field: FormField, ctx: BindingContext) {
         // over from the reference renderer is ONE pair with ONE write-back, not two
         // coordinated DateFields — so this is a single field over the resolved
         // "from – to" pair rather than two independent controls.
-        is DateRangeField -> {
+        is DateTimeRangeField -> {
             var v by remember { mutableStateOf(ctx.resolve(kind.value)) }
             val key = stateKeyOf(kind.value)
             OutlinedTextField(

@@ -8,7 +8,7 @@ import fuaran.ui.BoundText
 import fuaran.ui.ComputedBinding
 import fuaran.ui.CurrencyValueFormat
 import fuaran.ui.CustomValueFormat
-import fuaran.ui.DateValueFormat
+import fuaran.ui.DateTimeValueFormat
 import fuaran.ui.DurationStyle
 import fuaran.ui.DurationUnit
 import fuaran.ui.DurationValueFormat
@@ -249,7 +249,7 @@ fun formatDuration(raw: Double, unit: DurationUnit, style: DurationStyle): Strin
 fun formatCellValue(text: String, format: ValueFormat): String {
     val n = text.toDoubleOrNull() ?: return text
     return when (format) {
-        NoValueFormat, CustomValueFormat, is DateValueFormat -> text
+        NoValueFormat, CustomValueFormat, is DateTimeValueFormat -> text
         is NumberValueFormat -> String.format(Locale.ROOT, "%.${format.decimals ?: 0}f", n)
         is CurrencyValueFormat -> "${format.code} " + String.format(Locale.ROOT, "%.2f", n)
         is PercentValueFormat -> String.format(Locale.ROOT, "%.${format.decimals ?: 0}f%%", n * 100)

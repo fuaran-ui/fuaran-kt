@@ -369,6 +369,9 @@ private fun decodeNode(value: JsonValue, path: String): Node {
         // `{"$type":"Literal"}` envelope both land, and `42` is WRONG_TYPE at `$.tooltip` rather
         // than a hint stringified out of a JSON type — a fabrication no downstream check catches.
         val tooltip = obj["tooltip"]?.let { decodeTextSource(it, "$path.tooltip") }
+        // Phase 1812 — the author-declared fallback: a full node, walked by the same decoder as any
+        // nested node, preserved and never rendered by a reader that decodes the kind.
+        val fallback = obj["fallback"]?.let { decodeNode(it, "$path.fallback") }
         return Node(
             id = id,
             kind = kind,
@@ -379,6 +382,7 @@ private fun decodeNode(value: JsonValue, path: String): Node {
             // Phase 1535 — the conditional-presence TRAIT, an ordinary `Binding<bool>` slot beside
             // the tooltip. The 3.6 bare-scalar coercion reaches it like any other binding slot.
             visible = obj["visible"]?.let { decodeBindingBool(it, "$path.visible") },
+            fallback = fallback,
         )
     } finally {
         // In `finally` because a default-deny decoder leaves by a throw more often than
@@ -580,6 +584,8 @@ private fun decodeAccessibility(value: JsonValue, path: String): Accessibility {
         role = o.optStr("role", path),
         liveRegion = o["liveRegion"]?.let { decodeLiveRegion(it, "$path.liveRegion") },
         hidden = o["hidden"]?.let { decodeBindingBool(it, "$path.hidden") },
+        // Phase 1812 — the spoken rendering, an ordinary TextSource slot like `tooltip`.
+        speak = o["speak"]?.let { decodeTextSource(it, "$path.speak") },
     )
 }
 
@@ -1727,7 +1733,9 @@ private fun decodeValueFormat(value: JsonValue, path: String): ValueFormat {
         "Currency" -> CurrencyValueFormat(o.req("code", path).str("$path.code"))
         "Percent" -> PercentValueFormat(o.optInt("decimals", path))
         "SignificantDigits" -> SignificantDigitsValueFormat(o.req("digits", path).int("$path.digits"))
-        "Date" -> DateValueFormat(o.req("format", path).str("$path.format"))
+        // Phase 1811 — `DateTime` is canonical; `Date` (the pre-rename spelling) is its section-16
+        // lenient alias, decoded to the same value.
+        "DateTime", "Date" -> DateTimeValueFormat(o.req("format", path).str("$path.format"))
         "Duration" ->
             DurationValueFormat(
                 unit = enumOf<DurationUnit>(o.req("unit", path).str("$path.unit"), "$path.unit"),
@@ -1745,7 +1753,13 @@ private fun decodeNumberFormat(value: JsonValue, path: String): NumberFormat {
         "Number" -> NumberNumberFormat(o.optInt("decimals", path))
         "Currency" -> CurrencyNumberFormat(o.req("isoCode", path).str("$path.isoCode"))
         "Percent" -> PercentNumberFormat(o.optInt("decimals", path))
-        "Date" -> DateNumberFormat(enumOf<DateStyle>(o.req("dateStyle", path).str("$path.dateStyle"), "$path.dateStyle"))
+        // Phase 1811 — `DateTime` is canonical; `Date` is its section-16 lenient alias. Phase 1810 —
+        // both style slots are optional; neither present is the validator's subject, not a shape error.
+        "DateTime", "Date" ->
+            DateTimeNumberFormat(
+                dateStyle = o.optStr("dateStyle", path)?.let { enumOf<DateStyle>(it, "$path.dateStyle") },
+                timeStyle = o.optStr("timeStyle", path)?.let { enumOf<TimeStyle>(it, "$path.timeStyle") },
+            )
         "RelativeTime" -> RelativeTimeNumberFormat(enumOf<RelativeTimeUnit>(o.req("unit", path).str("$path.unit"), "$path.unit"))
         // Phase 1533 — `unit` is OPTIONAL here and its absence is the auto-selection request, not a
         // default. Present-but-unreadable is still a refusal.
@@ -1871,6 +1885,29 @@ private fun decodeFormField(value: JsonValue, path: String): FormField {
     )
 }
 
+/**
+ * Phase 1811 — the `variant` of a `DateTime` / `DateTimeRange` field, read through the section-16
+ * `Time` / `TimeRange` alias rule. Under the canonical tag (or the pre-rename alias) `variant` is
+ * required as it always was. Under the time-alias tag the alias SUPPLIES `Time` when the member is
+ * absent, and an explicit member beside it must agree — a `$type` of `Time` carrying `variant: "Date"`
+ * is refused as ambiguous rather than resolved to either.
+ */
+private fun temporalVariant(o: JsonObject, path: String, tag: String, timeAlias: String): DateTimeFieldVariant {
+    if (tag != timeAlias) {
+        return enumOf<DateTimeFieldVariant>(o.req("variant", path).str("$path.variant"), "$path.variant")
+    }
+    val raw = o["variant"] ?: return DateTimeFieldVariant.Time
+    val variant = enumOf<DateTimeFieldVariant>(raw.str("$path.variant"), "$path.variant")
+    if (variant != DateTimeFieldVariant.Time) {
+        throw FuaranDecodeException(
+            FuaranDecodeException.WRONG_TYPE,
+            "$path.variant",
+            "a \$type of $timeAlias already fixes the variant to Time, and a different one beside it is ambiguous",
+        )
+    }
+    return variant
+}
+
 private fun decodeFormFieldKind(value: JsonValue, path: String, autoBind: ControlAutoBind): FormFieldKind {
     val o = value.obj(path)
     // Value slot: present ⇒ decode; absent ⇒ the context's auto-binding (never an error).
@@ -1945,16 +1982,22 @@ private fun decodeFormFieldKind(value: JsonValue, path: String, autoBind: Contro
                 max = o.optDouble("max", path),
                 step = o.optDouble("step", path),
             )
-        "Date" ->
-            DateField(
+        // Phase 1811 — `DateTime` is canonical. `Date` is the pre-rename spelling, kept as a
+        // section-16 lenient alias by the reference host's D8 ruling; `Time` is the invented spelling
+        // the rename exists to make findable — a `DateTime{variant:"Time"}` reached for by intent,
+        // so the alias SUPPLIES the variant when absent and REFUSES a disagreeing one beside it.
+        "DateTime", "Date", "Time" ->
+            DateTimeField(
                 value = valueOr(JsonString("")),
-                variant = enumOf<DateFieldVariant>(o.req("variant", path).str("$path.variant"), "$path.variant"),
+                variant = temporalVariant(o, path, t, "Time"),
                 min = o.optStr("min", path),
                 max = o.optStr("max", path),
                 step = o.optDouble("step", path),
             )
-        "DateRange" ->
-            DateRangeField(
+        // Phase 1811 — `DateTimeRange` is canonical; `DateRange` (pre-rename) and `TimeRange`
+        // (invented, fixes `variant` to `Time`) are its section-16 lenient aliases on the rule above.
+        "DateTimeRange", "DateRange", "TimeRange" ->
+            DateTimeRangeField(
                 value =
                     when (val v = o["value"]) {
                         null -> autoBind.autoBinding(dateRangePlaceholder())
@@ -1974,7 +2017,7 @@ private fun decodeFormFieldKind(value: JsonValue, path: String, autoBind: Contro
                             }
                         else -> decodeBinding(v, "$path.value")
                     },
-                variant = enumOf<DateFieldVariant>(o.req("variant", path).str("$path.variant"), "$path.variant"),
+                variant = temporalVariant(o, path, t, "TimeRange"),
                 min = o.optStr("min", path),
                 max = o.optStr("max", path),
                 step = o.optDouble("step", path),
@@ -2105,7 +2148,7 @@ private fun dateRangePair(v: JsonValue, path: String): JsonValue {
         throw FuaranDecodeException(
             FuaranDecodeException.WRONG_TYPE,
             path,
-            "date-range start '$from' is after end '$to' — a DateRange pair is ordered (from <= to); " +
+            "date-range start '$from' is after end '$to' — a DateTimeRange pair is ordered (from <= to); " +
                 "ISO-8601 strings of one variant compare lexicographically, so swap the two values",
         )
     }

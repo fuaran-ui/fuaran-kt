@@ -95,6 +95,13 @@ enum class EmbedPermission { AllowScripts, AllowSameOrigin, AllowForms, AllowFul
 
 enum class DateStyle { Short, Medium, Long, Full }
 
+/**
+ * Phase 1810 — the time-of-day half of `Format.DateTime`'s `dateStyle` / `timeStyle` pair. The
+ * same four cases as [DateStyle], deliberately a SEPARATE enum: the two name breadths of different
+ * things.
+ */
+enum class TimeStyle { Short, Medium, Long, Full }
+
 enum class RelativeTimeUnit { Second, Minute, Hour, Day, Week, Month, Year }
 
 enum class FileReadEncoding { Text, Base64, DataUrl }
@@ -105,7 +112,11 @@ enum class BoxRole { Group, Card, Dashboard, Separator }
 
 enum class MathDisplay { Inline, Block }
 
-enum class DateFieldVariant { Date, Time, DateTime }
+/**
+ * Phase 1811 — `DateTimeVariant` on the wire (was `DateVariant`): the temporal breadth of a
+ * [DateTimeField] / [DateTimeRangeField]. The three cases did not move.
+ */
+enum class DateTimeFieldVariant { Date, Time, DateTime }
 
 enum class MountDirection { OutOnly, InOnly, TwoWay }
 

@@ -64,6 +64,12 @@ data class Node(
      * minting hint text out of a JSON type is a defect no downstream check could ever catch.
      */
     val tooltip: TextSource? = null,
+    /**
+     * Phase 1812 — the author-declared degraded rendering: a full node a BEHIND reader (one that
+     * meets this node's kind as a transport-only `Unknown`) renders in place of its placeholder. A
+     * current reader decodes and preserves it and never renders it. Omitted when absent.
+     */
+    val fallback: Node? = null,
 )
 
 /** Semantic style facet (WIRE_FORMAT.md 3.1). `role` / `voice` are held as raw tokens (render-only). */
@@ -98,6 +104,12 @@ data class Accessibility(
     val role: String? = null,
     val liveRegion: String? = null,
     val hidden: Binding? = null,
+    /**
+     * Phase 1812 — the node's SPOKEN rendering for a voice surface: an ordinary [TextSource]
+     * (bare-string canonical for a literal, as `tooltip`). Inert to every visual renderer: it MUST
+     * reach no attribute and no visible text.
+     */
+    val speak: TextSource? = null,
 )
 
 // --------------------------------------------------------------------------- //
@@ -1111,7 +1123,8 @@ data class PercentValueFormat(val decimals: Int? = null) : ValueFormat
 
 data class SignificantDigitsValueFormat(val digits: Int) : ValueFormat
 
-data class DateValueFormat(val format: String) : ValueFormat
+/** Phase 1811 — `CellFormat.DateTime` (was `Date`): the pattern renders a date, a time or both. */
+data class DateTimeValueFormat(val format: String) : ValueFormat
 
 /** An elapsed-time format: the unit the raw value counts in, plus the rendering style. */
 data class DurationValueFormat(val unit: DurationUnit, val style: DurationStyle) : ValueFormat
@@ -1135,7 +1148,12 @@ data class CurrencyNumberFormat(val isoCode: String) : NumberFormat
 
 data class PercentNumberFormat(val decimals: Int? = null) : NumberFormat
 
-data class DateNumberFormat(val dateStyle: DateStyle) : NumberFormat
+/**
+ * `Format.DateTime` (was `Date` until Phase 1811). Phase 1810 — `dateStyle` / `timeStyle` are BOTH
+ * optional: `timeStyle` alone is a time of day, both together a date-time. Neither present is a
+ * validator concern on the reference host, not a decode refusal.
+ */
+data class DateTimeNumberFormat(val dateStyle: DateStyle? = null, val timeStyle: TimeStyle? = null) : NumberFormat
 
 data class RelativeTimeNumberFormat(val unit: RelativeTimeUnit) : NumberFormat
 
@@ -1233,9 +1251,10 @@ data class RangeField(
     val step: Double? = null,
 ) : FormFieldKind
 
-data class DateField(
+/** Phase 1811 — `DateTime` (was `Date`): a date, a time of day or both, per [variant]. */
+data class DateTimeField(
     val value: Binding,
-    val variant: DateFieldVariant,
+    val variant: DateTimeFieldVariant,
     val min: String? = null,
     val max: String? = null,
     val step: Double? = null,
@@ -1250,9 +1269,10 @@ data class DateField(
  * pair binds ONE filter param, not two — the reason the case exists rather than
  * two coordinated `DateField`s.
  */
-data class DateRangeField(
+/** Phase 1811 — `DateTimeRange` (was `DateRange`): the single-control range over [DateTimeField]'s conventions. */
+data class DateTimeRangeField(
     val value: Binding,
-    val variant: DateFieldVariant,
+    val variant: DateTimeFieldVariant,
     val min: String? = null,
     val max: String? = null,
     val step: Double? = null,

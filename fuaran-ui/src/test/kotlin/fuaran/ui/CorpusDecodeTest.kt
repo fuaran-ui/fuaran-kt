@@ -273,14 +273,14 @@ fun main() {
     // the corpus leg does not: that all three spellings normalise to the SAME canonical
     // bare `{from, to}` pair, not merely that each decodes.
     fun dateRangeForm(valueJson: String): String =
-        "{\"id\":\"f\",\"kind\":{\"\$type\":\"Form\",\"fields\":[{\"id\":\"stay\",\"kind\":{\"\$type\":\"DateRange\"," +
+        "{\"id\":\"f\",\"kind\":{\"\$type\":\"Form\",\"fields\":[{\"id\":\"stay\",\"kind\":{\"\$type\":\"DateTimeRange\"," +
             "\"value\":$valueJson,\"variant\":\"Date\"},\"label\":\"Stay\",\"required\":false}]," +
             "\"onSubmit\":{\"\$type\":\"Dispatch\"},\"submitLabel\":\"Book\"}}"
 
     fun decodedPair(valueJson: String): Pair<String, String> {
         val node = decodeNode(dateRangeForm(valueJson))
         val field = (node.kind as Form).fields.single()
-        val binding = (field.kind as DateRangeField).value
+        val binding = (field.kind as DateTimeRangeField).value
         val pair = (binding as StaticBinding).value as JsonObject
         return (pair["from"] as JsonString).value to (pair["to"] as JsonString).value
     }
