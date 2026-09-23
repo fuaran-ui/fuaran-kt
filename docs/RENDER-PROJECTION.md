@@ -522,6 +522,19 @@ renderer narrows at the Compose boundary instead, where the loss costs a pixel.
   stay on `conformance-residue.txt` rather than being exempted, because silence
   is not a conformant answer.
 
+  **Phase 1855 moved the pin and closed three of the four the corpus then owed
+  here.** `DataGrid/interactive-row-only-with-action` (3.6.24) is ASSERTED: the
+  decoder carries `onRowClick`'s one readable fact as `DataGrid.rowActionDeclared`,
+  the platform-neutral `gridRowInteractivity` marks every bound row iff declared,
+  no `staticRows` row ever and no row where none is on screen, and the grid arm
+  applies it as a handler-less click action in the row's semantics. The two
+  `Sparkline` float-sequence claims (24.7) are DECLARED EXEMPTIONS — both concern
+  resolving a host-fed series, and the arm is handed no series (the declined
+  lowering). `Modal/aria-modal-only-when-blocking` left the residue as an
+  exemption too: both modalities render in flow, so no inertness claim is ever
+  emitted, and `aria-modal` / role `dialog` have no Compose counterpart.
+  `FileUpload/picker-always-present` is the one residue line left.
+
   **The artefact's twentieth claim arrived with Phase 1548 and is an EXEMPTION,
   not a third residue line.** `FileUpload/ceiling-recorded-never-enforced` is
   about a marker *attribute* on the static no-script tier, and this floor emits no

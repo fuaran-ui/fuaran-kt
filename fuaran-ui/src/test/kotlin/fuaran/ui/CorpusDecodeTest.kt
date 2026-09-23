@@ -1394,6 +1394,56 @@ fun main() {
         "reject/reject-tree-nested-item-missing-id.json",
         "{\"label\":\"Cocoa\"}" to "{\"id\":\"cocoa\",\"label\":\"Cocoa\"}",
     )
+    // Phase 1855 (porting 1821) — a pipeline step naming its columns BOTH ways. Each vector gets
+    // TWO twins, one per spelling kept, because the rule is "either, not both": a decoder that
+    // refused every `cols` (or every `col`) would satisfy the vector and the canonical twin, and be
+    // wrong in the direction the lenient-accept family exists to protect — the alias twin is what
+    // catches that. The pipeline is held raw here, so each twin decoding proves the refusal was the
+    // ambiguity and nothing else about the step.
+    twin(
+        "transform-project-columns-and-cols/keep-canonical",
+        "reject/reject-transform-project-columns-and-cols.json",
+        ",\"cols\":[{\"a\":\"dept\",\"b\":\"team\"}]" to "",
+    )
+    twin(
+        "transform-project-columns-and-cols/keep-alias",
+        "reject/reject-transform-project-columns-and-cols.json",
+        "\"columns\":[{\"a\":\"dept\",\"b\":\"dept\"}]," to "",
+    )
+    twin(
+        "transform-sort-key-column-and-col/keep-canonical",
+        "reject/reject-transform-sort-key-column-and-col.json",
+        ",\"col\":\"salary\"" to "",
+    )
+    twin(
+        "transform-sort-key-column-and-col/keep-alias",
+        "reject/reject-transform-sort-key-column-and-col.json",
+        "\"column\":\"dept\"," to "",
+    )
+    runner.check("refusal-by-class/transform-window-orderby-column-and-col") {
+        // No corpus vector carries this position, and it is checked because the reference decides
+        // it with the SAME key reader as a sort key (one definition across both), so a surface
+        // refusing the ambiguity at `sort` and admitting it at `window.orderBy` would disagree with
+        // the reference on bytes the corpus simply has not written down yet. Derived from the sort
+        // vector by swapping the step, so the document around it is the corpus's own.
+        val sortVector = corpusText("reject/reject-transform-sort-key-column-and-col.json")
+        val sortStep = "{\"\$type\":\"sort\",\"by\":[{\"column\":\"dept\",\"col\":\"salary\",\"dir\":\"asc\"}]}"
+        if (!sortVector.contains(sortStep)) error("the sort vector no longer carries the step this probe rewrites")
+        fun windowDoc(key: String) =
+            sortVector.replace(
+                sortStep,
+                "{\"\$type\":\"window\",\"as\":\"rn\",\"fn\":\"rowNumber\",\"orderBy\":[$key],\"partitionBy\":[]}",
+            )
+        val e =
+            runCatching { decodeNode(windowDoc("{\"column\":\"dept\",\"col\":\"salary\",\"dir\":\"asc\"}")) }
+                .exceptionOrNull() as? FuaranDecodeException
+                ?: error("a window orderBy key carrying both \"column\" and \"col\" was ACCEPTED")
+        if (e.code != FuaranDecodeException.WRONG_TYPE || e.path != "\$.kind.source.pipeline") {
+            error("expected WRONG_TYPE at \$.kind.source.pipeline, got ${e.code} at ${e.path}")
+        }
+        decodeNode(windowDoc("{\"column\":\"dept\",\"dir\":\"asc\"}"))
+        decodeNode(windowDoc("{\"col\":\"dept\",\"dir\":\"asc\"}"))
+    }
 
     runner.check("refusal-by-class/tree-item-depth-is-bounded-on-its-own-axis") {
         // 21.5. The at-max fixture and its past-the-bound twin are BOTH in the corpus, which

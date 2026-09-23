@@ -3,7 +3,12 @@
 package fuaran.renderer
 
 import fuaran.ui.Audio
+import fuaran.ui.DataGrid
+import fuaran.ui.JsonObject
+import fuaran.ui.JsonString
+import fuaran.ui.ResolvedRows
 import fuaran.ui.Video
+import fuaran.ui.decodeNode
 import java.io.File
 
 /**
@@ -111,6 +116,93 @@ private fun checkNoAutoplayPathwayStructurally() {
     }
 }
 
+/** Decode a grid node from WIRE bytes: 3.6.24 is about what a host emits on the strength of a
+ *  declaration it READ, and a hand-built model would skip the reading. */
+private fun gridFrom(json: String): DataGrid =
+    decodeNode(json).kind as? DataGrid ?: error("expected a DataGrid node from: $json")
+
+/** Two rows, so "every row" and "no row" are both observable — a single-row grid satisfies a
+ *  surface that marks only the first. */
+private val TWO_BOUND_ROWS =
+    ResolvedRows.Rows(
+        listOf(
+            JsonObject(mapOf("reference" to JsonString("S-1"))),
+            JsonObject(mapOf("reference" to JsonString("S-2"))),
+        ),
+    )
+
+/**
+ * `DataGrid/interactive-row-only-with-action` (WIRE_FORMAT.md 3.6.24, Phase 1855) — asserted over
+ * [gridRowInteractivity], the projection the grid arm applies one-for-one to the rows it draws.
+ *
+ * Every subject is decoded from wire bytes, and each of the section's three rules is exercised in
+ * the direction a surface gets wrong while looking right: rule 1 on EVERY row (a surface marking the
+ * first passes a one-row test), rule 2 with a static grid that DOES declare a row action (a surface
+ * reading the declaration and stopping there passes everything else), and rule 3 as an EMPTY list
+ * rather than an all-`false` one (a `false` asserts a row that is not on screen).
+ */
+private fun checkInteractiveRowOnlyWithAction() {
+    // 3.6.24's own example document: a bound grid DECLARING a row action.
+    val declaring =
+        gridFrom(
+            "{\"id\":\"grid-clickable\",\"kind\":{\"\$type\":\"DataGrid\",\"columns\":[{\"field\":\"reference\"," +
+                "\"kind\":{\"\$type\":\"Text\"},\"label\":\"Reference\"}],\"onRowClick\":\"<closure>\"," +
+                "\"rowKeyField\":\"reference\",\"source\":{\"\$type\":\"Query\",\"name\":\"settlements\"}}}",
+        )
+    // Verify the probe: without this, a decoder that dropped the sentinel would make every
+    // assertion below about the undeclared case, and the "if" half would go unchecked.
+    if (!declaring.rowActionDeclared) {
+        error("the `<closure>` sentinel's one fact — a declared row action — was not read")
+    }
+
+    // RULE 1, the "if" half — every bound row, not the first.
+    val marked = gridRowInteractivity(declaring, TWO_BOUND_ROWS)
+    if (marked.markers != listOf(true, true)) {
+        error("a declaring grid must mark EVERY bound row, got ${marked.markers}")
+    }
+
+    // RULE 1, the "only if" half — the polarity `nodes/grid-1.json` pins: no `onRowClick` key.
+    val silent =
+        gridFrom(
+            "{\"id\":\"grid-1\",\"kind\":{\"\$type\":\"DataGrid\",\"columns\":[{\"kind\":{\"\$type\":\"Text\"}," +
+                "\"label\":\"Channel\",\"value\":\"<closure>\"}],\"rowKey\":\"<closure>\"," +
+                "\"source\":{\"\$type\":\"Static\",\"value\":[]}}}",
+        )
+    if (silent.rowActionDeclared) error("a grid with no `onRowClick` key read as declaring one")
+    val unmarked = gridRowInteractivity(silent, TWO_BOUND_ROWS)
+    if (unmarked.markers != listOf(false, false)) {
+        error("a grid declaring no row action must mark NO row, got ${unmarked.markers}")
+    }
+
+    // RULE 2 — a `staticRows` grid DECLARING `onRowClick` marks no row, and still reports the
+    // declaration: rule 2 IS the divergence between the two.
+    val staticRows =
+        "\"staticRows\":{\"headers\":[\"Term\",\"Definition\"],\"rows\":[[\"MVU\",\"Model-View-Update\"]," +
+            "[\"DSL\",\"Domain-specific language\"]]}"
+    val staticDeclaring =
+        gridFrom(
+            "{\"id\":\"table-clickable\",\"kind\":{\"\$type\":\"DataGrid\",\"columns\":[]," +
+                "\"onRowClick\":\"<closure>\",\"source\":{\"\$type\":\"Static\",\"value\":[]},$staticRows}}",
+        )
+    if (!staticDeclaring.rowActionDeclared) error("the static grid DOES declare a row action — that is the trap")
+    val staticMarkers = gridRowInteractivity(staticDeclaring, TWO_BOUND_ROWS)
+    if (staticMarkers.markers != listOf(false, false)) {
+        error("a staticRows grid must mark no row whatever it declares, got ${staticMarkers.markers}")
+    }
+    if (!staticMarkers.rowActionDeclared) error("rule 2 withholds the marker, not the report of the declaration")
+
+    // RULE 3 — no row on screen, so no marker: EMPTY, not all-false.
+    for (placeholder in listOf(ResolvedRows.NotResolved, ResolvedRows.NoRowSource)) {
+        val vacuous = gridRowInteractivity(declaring, placeholder)
+        if (vacuous.markers.isNotEmpty()) {
+            error("$placeholder renders no row, so it carries no marker — got ${vacuous.markers}")
+        }
+    }
+    if (gridRowInteractivity(declaring, ResolvedRows.Rows(emptyList())).markers.isNotEmpty()) {
+        error("an empty bound result renders no row, so it carries no marker")
+    }
+}
+
 /**
  * The claims asserted in this plain-JVM leg, keyed by the artefact's WIRE tokens because the
  * enumeration they are matched against comes from the artefact.
@@ -118,6 +210,9 @@ private fun checkNoAutoplayPathwayStructurally() {
 internal val PLAIN_JVM_CHECKERS: Map<String, () -> Unit> =
     linkedMapOf(
         "Media/no-autoplay-pathway" to ::checkNoAutoplayPathwayStructurally,
+        // 3.6.24 (Phase 1855). The decision is ordinary logic over the decoded grid, so it is
+        // asserted here, on every machine; the grid arm applies the projection row for row.
+        "DataGrid/interactive-row-only-with-action" to ::checkInteractiveRowOnlyWithAction,
     )
 
 /**
@@ -240,6 +335,36 @@ internal val DECLARED_EXEMPTIONS: Map<String, String> =
                 "pinned by supporting checks in UploadCeilingHarness.kt; the values are decoded and carried on " +
                 "`FileUpload` throughout, and a real picker arm owes the selection-time refusal and its report " +
                 "— obligations 1 and 2 — in the same change that opens the picker",
+        // Phase 1855 — 3.6.11. Exempt, not residue: the `modality` slot IS modelled and decoded,
+        // and what is absent is the vocabulary the claim is stated in, not work on a slot.
+        "Modal/aria-modal-only-when-blocking" to
+            "this floor mounts no overlay for either modality — a `Modal` renders as a card IN FLOW at the node's own " +
+                "position, the shape 3.6.11 rule 7 gives a host that cannot place a surface — so it draws no scrim " +
+                "under either, makes nothing behind either inert and claims inertness for neither; the claim's two " +
+                "tokens have no Compose counterpart to emit, since `aria-modal` is an HTML attribute and `dialog` is " +
+                "a role this surface's accessibility projection already reports UNMAPPED rather than approximates " +
+                "(roleSemanticsOf), so there is no emitted inertness claim whose presence under `Modal` and absence " +
+                "under `Popover` a checker could observe; the popover half of the rule (no scrim, no inertness) is " +
+                "met because nothing overlays at all, and a real overlay arm owes a blocking window for `modality: " +
+                "Modal` alone, never for `Popover`, in the same change that adds it",
+        // Phase 1855 — 24.7. Both claims are about a RESOLVER of a host-fed series, and this surface
+        // has none; the decline is the pinned Phase 1099/551 contract recorded in this repo's CLAUDE.md.
+        "Sparkline/float-seq-reads-element-wise" to
+            "this floor resolves no float sequence at all: the Sparkline arm draws a fixed placeholder and is " +
+                "handed no `Sparkline`, so the series is unreachable from it by the type system — the lowering " +
+                "this surface DECLINED, pinned by the structural test in RenderObligationTest — and no other arm " +
+                "reads a float-sequence slot, so there is no per-element reading whose count or position a " +
+                "checker could compare against the host store; a static series is still typed element by " +
+                "element at decode (decodeBindingFloatSeq), and an arm that starts reading a series owes one " +
+                "reading per element, NaN in place, in the same change that lets it see one",
+        "Sparkline/float-seq-accept-set-closed" to
+            "no host-fed series is ever resolved on this floor, for the structural reason the element-wise " +
+                "exemption beside it gives, so there is no runtime accept set to be wider or narrower than the " +
+                "format's; the half of the claim this surface DOES reach is the decode path at the same slot, " +
+                "which admits a JSON number or one of the three exact sentinel spellings by SET MEMBERSHIP " +
+                "rather than by a parse (FLOAT_SENTINELS in the decoder), so `\"3.5\"` is refused there, and the " +
+                "corpus's non-numeric-element and wrong-case-sentinel vectors pin that reader — so a resolver added " +
+                "later inherits a closed set to agree with rather than a runtime's float parser",
     )
 
 /** The canonical default reason, used for any (kind, claim) pair neither registry covers. */
@@ -303,12 +428,18 @@ fun renderObligationFailures(
         //
         // Why the residue is a third category and not a tenth exemption: an exemption says this
         // surface STRUCTURALLY cannot answer a claim (no playback engine, no browsing context) and
-        // is a permanent reasoned answer. These two are unanswered because nobody has written the
-        // checker — the slots themselves are modelled (`FileUpload` carries capture, destination
-        // and the ceilings; `Modal` carries `modality`, and `anchor` since the 2026-09-09 residue
-        // sweep), which is unadopted work of a different kind but unadopted work all the same.
-        // Exempting them would turn the gate green over a capability nobody has adopted, which is
-        // the one thing this whole mechanism exists to prevent.
+        // is a permanent reasoned answer. What stays in the residue is unanswered because nobody
+        // has written the checker — the slots themselves are modelled (`FileUpload` carries
+        // capture, destination and the ceilings), which is unadopted work of a different kind but
+        // unadopted work all the same. Exempting it would turn the gate green over a capability
+        // nobody has adopted, which is the one thing this whole mechanism exists to prevent.
+        //
+        // `Modal/aria-modal-only-when-blocking` LEFT the residue at Phase 1855, as an exemption and
+        // not by reclassification-for-green: working the checker out showed it has nothing to
+        // observe on this floor. Both modalities render in flow (3.6.11 rule 7's shape), so no
+        // inertness claim is ever emitted, and the claim's tokens (`aria-modal`, role `dialog`) are
+        // ones this surface's own accessibility projection already records as having no Compose
+        // counterpart — the structural test an exemption has to meet, on Embed's `sandbox` terms.
         //
         // What the residue buys is the second direction. Before it, this gate was RED BY DESIGN,
         // and a run everyone expects to be red is a run nobody reads: a NEW unanswered claim landed

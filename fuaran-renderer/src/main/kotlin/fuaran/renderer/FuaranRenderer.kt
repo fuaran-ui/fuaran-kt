@@ -40,6 +40,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -1291,8 +1292,14 @@ private fun RenderDataGrid(k: DataGrid, nodeId: String, ctx: BindingContext) {
         HorizontalDivider()
         val static = k.staticRows
         if (static != null) {
-            static.rows.forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            // Phase 1855 (3.6.24 rule 2) — a static grid marks no row, whatever it declares; the
+            // projection is consulted anyway so the rule has ONE statement rather than two.
+            val markers = gridRowInteractivity(k, ResolvedRows.NotResolved).markers
+            static.rows.forEachIndexed { i, row ->
+                Row(
+                    Modifier.interactiveRowMarker(markers[i]),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                     row.forEach { cell -> Text(ctx.resolveText(cell), fontSize = 12.sp) }
                 }
             }
@@ -1306,8 +1313,14 @@ private fun RenderDataGrid(k: DataGrid, nodeId: String, ctx: BindingContext) {
                     if (resolved.rows.isEmpty()) {
                         Text("No rows", fontSize = 11.sp, color = Color.Gray)
                     } else {
-                        resolved.rows.forEach { row ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        // Phase 1855 (3.6.24 rule 1) — every bound row is marked iff the grid
+                        // declares a row action.
+                        val markers = gridRowInteractivity(k, resolved).markers
+                        resolved.rows.forEachIndexed { i, row ->
+                            Row(
+                                Modifier.interactiveRowMarker(markers[i]),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
                                 k.columns.forEach { col -> RenderGridCell(col, row, ctx) }
                             }
                         }
@@ -1318,6 +1331,16 @@ private fun RenderDataGrid(k: DataGrid, nodeId: String, ctx: BindingContext) {
         }
     }
 }
+
+/**
+ * The interactive-row marker (WIRE_FORMAT.md 3.6.24, Phase 1855): a click action in the row's
+ * semantics, which is how this surface says "this row can be activated". The action has NO handler
+ * — the closure the document declared never crosses the wire — so it reports itself unhandled rather
+ * than pretending to run one; what the marker states is the document's declaration, which is all
+ * 3.6.24 has it claim. Which rows carry it is decided by [gridRowInteractivity], never here.
+ */
+private fun Modifier.interactiveRowMarker(marked: Boolean): Modifier =
+    if (marked) this.semantics { onClick(label = null, action = null) } else this
 
 /**
  * One grid cell: the column's kind decides the rendering, the row supplies the datum. An

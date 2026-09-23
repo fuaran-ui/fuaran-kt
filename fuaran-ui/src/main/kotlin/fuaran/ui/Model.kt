@@ -778,6 +778,14 @@ data class DataGrid(
      */
     val transferInKey: String? = null,
     val transferOutKey: String? = null,
+    /**
+     * Phase 1855 — WIRE_FORMAT.md 3.6.24. `onRowClick` is a closure-bearing slot, so it rides the
+     * wire as the `"<closure>"` sentinel and carries exactly ONE readable fact: this grid declares
+     * a row action. That fact — and only that fact — is what decides whether a rendered row is
+     * marked interactive, so it is carried as a presence flag rather than dropped. Presence is the
+     * reference decoder's test (any value declares), and the closure itself never crosses.
+     */
+    val rowActionDeclared: Boolean = false,
 ) : NodeKind
 
 data class GridColumn(

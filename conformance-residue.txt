@@ -7,7 +7,7 @@
 #   * a line on this list that now PASSES is STALE    -> red, named, delete it.
 #
 # WHY IT EXISTS. This surface's gates were red BY DESIGN: the render-obligation gate
-# fails because two declared claims are owed and unanswered, which is the correct
+# fails because declared claims are owed and unanswered, which is the correct
 # answer and is also indistinguishable, in a CI run, from a new regression landing
 # beside them. A red run that is expected to be red is a run nobody reads, so a new
 # failure lands inside it and is never seen. Naming the residue makes the expected
@@ -35,7 +35,7 @@
 # this surface did not model the slots the claims are about; it models them now —
 # `FileUpload` carries `capture`, `destination`, `dropTarget`, `acceptPaste` and
 # (Phase 1548) `maxBytes` / `maxFiles`, and `Modal` carries `modality` — so what
-# remains is exactly what these two lines say on their face: nobody has written the
+# remains is exactly what the two lines then said on their face: nobody had written the
 # checker. That is still unadopted work and still not an exemption. (`Modal.anchor`
 # is a separate slot, decoded and carried since the 2026-09-09 residue sweep; what
 # stays unadopted there is anchored PLACEMENT, which 3.6.11 rule 7 makes the
@@ -71,8 +71,19 @@
 # failing to model a slot: a bare string lifted into a token list, and a raw C0
 # control character admitted inside a string.
 #
-# Verified against wire-format-fixtures/render-fidelity.json (20 declared
-# obligations), PLAIN_JVM_CHECKERS (1) + COMPOSE_CHECKER_KEYS (8) and
-# DECLARED_EXEMPTIONS (10): 20 - 8 distinct asserted - 10 exempt = these two.
+# THE SET SHRANK AT PHASE 1855, and not by growth elsewhere. The corpus had gained
+# three claims this file never named (`DataGrid/interactive-row-only-with-action`,
+# 3.6.24; `Sparkline/float-seq-reads-element-wise` and `.../float-seq-accept-set-closed`,
+# 24.7), which reddened the gate at the new pin. The grid claim is ASSERTED — the
+# row-action declaration is decoded and the grid arm marks rows from it — and the two
+# sparkline claims are DECLARED EXEMPTIONS: both are about a resolver of a host-fed
+# series, and this surface resolves none (the lowering it declined, pinned as a
+# contract). `Modal/aria-modal-only-when-blocking` left this file in the same change as
+# an exemption: both modalities render in flow, so no inertness claim is ever emitted,
+# and its tokens have no Compose counterpart — the reason is written out in full in
+# DECLARED_EXEMPTIONS rather than here.
+#
+# Verified against wire-format-fixtures/render-fidelity.json (23 declared
+# obligations), PLAIN_JVM_CHECKERS (2) + COMPOSE_CHECKER_KEYS (8) and
+# DECLARED_EXEMPTIONS (13): 23 - 9 distinct asserted - 13 exempt = this one.
 [obligation] FileUpload/picker-always-present
-[obligation] Modal/aria-modal-only-when-blocking

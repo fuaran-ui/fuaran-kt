@@ -4,6 +4,7 @@ package fuaran.renderer
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
 import fuaran.ui.CurrencyValueFormat
@@ -178,4 +179,44 @@ class GridCellWalkTest {
             waitForIdle()
             onNodeWithText("Loading…").assertIsDisplayed()
         }
+
+    // ── Phase 1855 — the interactive-row marker reaches the rows (3.6.24) ────
+    //
+    // WHICH rows are marked is asserted in the plain-JVM obligation gate, over
+    // `gridRowInteractivity`. What only a composition can answer is that the grid arm APPLIES that
+    // projection: a marked row carries a click action in its semantics and an unmarked one does
+    // not. Counted over the unmerged tree, so a marker cannot hide inside a merged parent.
+
+    private fun clickActionsIn(node: String, ctx: BindingContext): Int {
+        var count = -1
+        runComposeUiTest {
+            setContent { FuaranTheme(darkTheme = false) { FuaranNode(decodeNode(node), ctx) } }
+            waitForIdle()
+            count = onAllNodes(hasClickAction(), useUnmergedTree = true).fetchSemanticsNodes().size
+        }
+        return count
+    }
+
+    @Test
+    fun theInteractiveRowMarkerReachesExactlyTheRowsTheProjectionMarks() {
+        val declaring = tonedGrid.replace("\"rowKeyField\"", "\"onRowClick\":\"<closure>\",\"rowKeyField\"")
+        check(declaring != tonedGrid) { "the substitution declared nothing" }
+        val threeRows = seeded(rowsOf("On time", "Delayed", "Unknown"))
+
+        // Rule 1, both halves: every bound row where the grid declares a row action, none where it
+        // does not. The silent grid is the probe's control — were the cells themselves clickable,
+        // it would count them and the declaring count below would be wrong for the same reason.
+        assertEquals("a grid declaring no row action carries no marker", 0, clickActionsIn(tonedGrid, threeRows))
+        assertEquals("every bound row of a declaring grid is marked", 3, clickActionsIn(declaring, threeRows))
+
+        // Rule 3: no row on screen, so no marker, however the grid declares.
+        assertEquals(0, clickActionsIn(declaring, seeded(ResolvedRows.NotResolved)))
+
+        // Rule 2: a staticRows grid marks no row whatever it declares.
+        val staticDeclaring =
+            """
+            {"id":"table-clickable","kind":{"${'$'}type":"DataGrid","columns":[],"onRowClick":"<closure>","source":{"${'$'}type":"Static","value":[]},"staticRows":{"headers":["Term","Definition"],"rows":[["MVU","Model-View-Update"],["DSL","Domain-specific language"]]}}}
+            """.trimIndent()
+        assertEquals("a staticRows grid is never marked", 0, clickActionsIn(staticDeclaring, BindingContext.Empty))
+    }
 }

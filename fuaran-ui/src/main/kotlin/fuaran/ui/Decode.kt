@@ -1086,6 +1086,9 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 // own path.
                 transferInKey = o.optStr("transferInKey", path),
                 transferOutKey = o.optStr("transferOutKey", path),
+                // Phase 1855 (3.6.24) — presence-only, as the reference reads it: the sentinel's
+                // one fact is that a row action was declared.
+                rowActionDeclared = o["onRowClick"] != null,
             )
         }
         "Chart" ->
@@ -1400,6 +1403,10 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
         "Transform" -> {
             val source = unwrapTransformSource(o.req("source", path), "$path.source")
             val pipeline = o.req("pipeline", path)
+            // Phase 1855 — the column-naming aliases given BOTH ways are refused before anything
+            // else reads the pipeline, because the reference decodes the whole pipeline (and fails
+            // on the ambiguity) before it applies the expression bound below.
+            checkPipelineAliasAmbiguity(pipeline, path)
             // Phase 1662 (21.8) — the expressions this pipeline EMBEDS, bounded at DECODE and not
             // at validation: a document that decodes must not be able to name an unbounded
             // evaluation, since a host may decode, store and forward a tree without ever running a
@@ -2771,6 +2778,58 @@ private fun checkPipelineExprBound(pipeline: JsonValue, path: String) {
                 else -> return@forEachIndexed
             }
         if (expr != null) refuseOversizedExpr(expr, "$path.pipeline[$i].$slot")
+    }
+}
+
+/**
+ * The two column-naming alias pairs a raw pipeline can carry, refused when an author gives BOTH
+ * (Phase 1855, porting Phase 1821's rule to this surface).
+ *
+ * `0.28.0` (D48) made `columns` the canonical spelling of a `project` step's rename list and
+ * `column` the canonical spelling of a sort key's column, keeping `cols` and `col` as decode
+ * aliases. A step carrying both spellings names two lists (or two columns) and says nothing about
+ * which one it meant, so the reference decoder refuses it as ambiguous rather than picking one —
+ * the same refusal it makes for every other aliased member — and two hosts reading identical bytes
+ * cannot then disagree about which column a pipeline projects or sorts by.
+ *
+ * Decided as the reference decides it, code AND path: the reference maps every pipeline decode
+ * failure to `WRONG_TYPE` at the pipeline itself (`$path.pipeline`), not at the offending step,
+ * so this does too. The key rule is ONE definition there across a `sort` key and a `window`'s
+ * `orderBy` entry, so both positions are checked here; the pipeline is otherwise held RAW on this
+ * surface (the algebra is owned by the core), so this only refuses — it normalises nothing.
+ */
+private fun checkPipelineAliasAmbiguity(pipeline: JsonValue, path: String) {
+    val steps = (pipeline as? JsonArray)?.items ?: return
+    fun refuse(detail: String): Nothing =
+        throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, "$path.pipeline", detail)
+    fun checkKeys(keys: JsonValue?, i: Int, slot: String) {
+        (keys as? JsonArray)?.items?.forEachIndexed { k, key ->
+            val o = key as? JsonObject ?: return@forEachIndexed
+            if (o["column"] != null && o["col"] != null) {
+                refuse(
+                    "step $i ($slot[$k]): give \"column\" (canonical) or \"col\" (alias), not both — " +
+                        "a key naming two columns does not say which one it orders by",
+                )
+            }
+        }
+    }
+    steps.forEachIndexed { i, step ->
+        val o = step as? JsonObject ?: return@forEachIndexed
+        when (exprTag(o)) {
+            "project" ->
+                if (o["columns"] != null && o["cols"] != null) {
+                    refuse(
+                        "step $i (project): give \"columns\" (canonical) or \"cols\" (alias), not both — " +
+                            "a step carrying two rename lists does not say which one it projects",
+                    )
+                }
+            "sort" -> {
+                checkKeys(o["by"], i, "sort.by")
+                checkKeys(o["keys"], i, "sort.keys")
+            }
+            "window" -> checkKeys(o["orderBy"], i, "window.orderBy")
+            else -> {}
+        }
     }
 }
 

@@ -36,7 +36,8 @@ build or test it; Android enters only for the **Compose renderer** (`fuaran-rend
 shipped in Phases 544/545 — this line said "a later phase" until Phase 1654) and the
 cargo-ndk `.so` packaging leg (Phase 543, Android-only). Note the split within that
 module: the renderer's *decisions* — the accessibility projection, the trend-sentiment
-composition, the number formatting, the write-back queue — are platform-neutral files
+composition, the number formatting, the write-back queue, the upload-ceiling markers and the
+grid's interactive-row markers — are platform-neutral files
 `run.ps1` compiles by name into the plain-JVM build, precisely so they are re-checked on
 a box with no SDK; only what needs a composition stays behind Robolectric.
 
@@ -431,13 +432,16 @@ gap.
 | `Embed/accessible-name-always` | **asserted** — the required `title` lands as the tile's `contentDescription` |
 | `Tree/accessible-name-always` | **asserted** — a row states its OWN label, never one computed from its branch |
 | `Custom/unregistered-custom-labelled` | **asserted for the uncarded path**, which is the whole of the path here |
+| `DataGrid/interactive-row-only-with-action` | **asserted** (Phase 1855) — `onRowClick`'s one readable fact is decoded as `DataGrid.rowActionDeclared`; `gridRowInteractivity` (platform-neutral, plain-JVM gate) marks every bound row iff declared, no `staticRows` row ever, and no row where none is on screen; the grid arm applies it as a handler-less click action in the row's semantics — a declaration, never a promise that a click reaches the closure, which never crosses the wire |
 | `Media/autoplay-muted-pairing` | exempt — nothing plays, so no attribute is emitted; the tile *states* the declaration |
 | `Media/refused-source-dropped` | exempt — no `poster` and no track destination is emitted, so nothing exists to drop |
 | `Embed/sandbox-always-exactly-declared` | exempt — no frame, so no `sandbox` attribute and no token-vs-`allow` split; the tile states the SET instead |
 | `Embed/refused-embed-source-omitted` | exempt — no source is emitted at all; the 19.1 class itself IS implemented, as `Embed.sanitizedSrc` |
 | the five `Image` claims | exempt — no image element, no anchor, no `srcSet` and no caption structure is emitted |
 | `FileUpload/ceiling-recorded-never-enforced` | exempt — the claim is about a `data-` MARKER ATTRIBUTE on the static tier, and no attribute bag is emitted; the floor follows the same obligation's REASONING instead, recording that a ceiling was declared and never its value |
-| `FileUpload/picker-always-present`, `Modal/aria-modal-only-when-blocking` | **owed and unanswered** — the ingress and modality slots (Phases 1115 / 1119) are not modelled on this surface yet, so each is reported UNCHECKED, by name, on every run. Corrected 2026-09-10 (Phase 1654): this row said the gate was RED on the two by design, and it is not — the leg's bar is "asserted or declared EXEMPT with a reason", and an UNCHECKED claim is neither. That is the honest state and it is a weaker one than a red: nothing fails while these are owed, so the run's own output is the only thing that says so. Answer them, or declare an exemption; do not let the report substitute for either |
+| `Modal/aria-modal-only-when-blocking` | exempt (Phase 1855; was owed) — both modalities render IN FLOW (3.6.11 rule 7's shape), so no scrim, no inertness and no inertness claim is ever emitted under either; `aria-modal` and role `dialog` have no Compose counterpart (the accessibility projection already reports `dialog` unmapped). A real overlay arm owes a blocking window for `Modal` alone, in the same change |
+| the two `Sparkline` float-seq claims (24.7) | exempt (Phase 1855) — both are about RESOLVING a host-fed series, and nothing here resolves one: the arm is handed no `Sparkline` (the declined lowering above). The decode half of the accept set is met — `FLOAT_SENTINELS` admits by set membership, so `"3.5"` is refused at decode |
+| `FileUpload/picker-always-present` | **owed and unanswered** — the one residue line left; the ingress slots (Phase 1115) are modelled but nobody has written the checker, so it is reported UNCHECKED, by name, on every run. Corrected 2026-09-10 (Phase 1654): this row said the gate was RED on it by design, and it is not — the leg's bar is "asserted or declared EXEMPT with a reason", and an UNCHECKED claim is neither. That is the honest state and it is a weaker one than a red: nothing fails while it is owed, so the run's own output is the only thing that says so. Answer it, or declare an exemption; do not let the report substitute for either |
 
 The reasons are written out in full in `DECLARED_EXEMPTIONS`, one sentence each, because the reason
 is what a reader of the run has to judge. `unregistered-custom-labelled` is conditional on a

@@ -72,8 +72,9 @@ $Corpus = Resolve-Path (Join-Path $Repo "..\wire-format-fixtures") -ErrorAction 
 #
 # **A note on that instance, because the record should not overstate it.** The obligation leg
 # is GREEN today: its bar is "every declared obligation is asserted or declared exempt with a
-# reason", and the two obligations this repo still owes (`FileUpload/picker-always-present`,
-# `Modal/aria-modal-only-when-blocking`) report UNCHECKED without failing it. So the specific
+# reason", and the obligation this repo still owes (`FileUpload/picker-always-present`; the
+# `Modal` claim beside it became a declared exemption at Phase 1855) reports UNCHECKED without
+# failing it. So the specific
 # masking that prompted this is not currently happening. The shape that allowed it is
 # unchanged, and it is not hypothetical: on the first run of this rewrite, in a worktree where
 # the corpus was not resolvable, the corpus leg failed — and under the old shape that single
@@ -285,7 +286,10 @@ $RendererNeutralKt = @(
     # ceiling is recorded, and that its VALUE is withheld from a tier that cannot enforce it, is
     # ordinary logic over the decoded model; in Compose vocabulary it would be provable only on a box
     # carrying the Android SDK.
-    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\UploadCeilings.kt")
+    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\UploadCeilings.kt"),
+    # Phase 1855 — the interactive-row marker projection (3.6.24). Same split and the same reason: which
+    # grid rows are marked is ordinary logic over the decoded grid; the Compose arm applies it row for row.
+    (Join-Path $Repo "fuaran-renderer\src\main\kotlin\fuaran\renderer\GridRowInteractivity.kt")
 ) | Where-Object { Test-Path $_ }
 # The direct kotlinc build runs the two `main()`-driven harnesses (`CorpusDecodeTest`, `SessionTest`)
 # via `java`; it deliberately compiles ONLY those, not every test file. The Gradle-only JUnit gates
@@ -432,8 +436,8 @@ Invoke-Leg "write-back queue harness" {
 # obligation arrives here as a claim with no checker and turns this leg red.
 #
 # THIS is the leg whose failure prompted the collection above. It PASSES today — its bar is
-# "asserted or declared exempt with a reason", and the two obligations this repo still owes
-# (`FileUpload/picker-always-present`, `Modal/aria-modal-only-when-blocking`) report UNCHECKED
+# "asserted or declared exempt with a reason", and the one obligation this repo still owes
+# (`FileUpload/picker-always-present`, named in conformance-residue.txt) reports UNCHECKED
 # without failing it. Under the old abort-on-first-failure shape, a red here made every leg
 # below unreachable, the 576-check corpus decode harness included.
 Invoke-Leg "render-obligation conformance gate" {
