@@ -1038,23 +1038,15 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             val source = decodeBinding(o.reqAliased("source", path, "options", "data"), "$path.source")
             val multiple = o.optBool("multiple", path) ?: false
             // Phase 1962 (3.2) — single-select carries `value`, multi-select carries `values` and
-            // NO `value`. A single-select without `value` is refused as before; a multi-select's
-            // `value` is absent, or the empty-Static placeholder older emitters wrote (a lenient
-            // accept, normalised to absent), and anything else is refused — a bound `value` beside
-            // `multiple` is a binding no multi-select reads.
+            // NO `value`. A single-select without `value` is refused as before. A `value` on a
+            // multi-select (the empty-Static placeholder older emitters wrote, or a real binding)
+            // is decoded — so a malformed one still refuses like any malformed binding — and then
+            // DROPPED: a lenient accept, normalised to absent, since no multi-select reads it.
             val value =
                 if (multiple) {
                     o["value"]?.let { raw ->
-                        val b = decodeBinding(raw, "$path.value")
-                        if (b is StaticBinding && b.value == JsonNull) {
-                            null
-                        } else {
-                            throw FuaranDecodeException(
-                                FuaranDecodeException.WRONG_TYPE,
-                                "$path.value",
-                                "a multi-select (\"multiple\": true) carries `values`, not `value`",
-                            )
-                        }
+                        decodeBinding(raw, "$path.value")
+                        null
                     }
                 } else {
                     decodeBinding(o.req("value", path), "$path.value")

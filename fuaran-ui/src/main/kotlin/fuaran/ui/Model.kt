@@ -723,8 +723,8 @@ data class FileUpload(
 /**
  * A choice control. Single-select carries [value] (required on the wire); multi-select
  * (`multiple`) carries [values] and NO [value] — Phase 1962 (3.2). [value] is therefore null
- * exactly on a multi-select; the empty-Static placeholder an older emitter wrote there decodes
- * to null as well.
+ * exactly on a multi-select; a `value` an older emitter wrote there (the empty-Static
+ * placeholder or a real binding) is decoded, so a malformed one still refuses, then dropped.
  */
 data class Select(
     val label: TextSource,

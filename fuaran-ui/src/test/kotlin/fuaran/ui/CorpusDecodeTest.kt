@@ -1446,29 +1446,40 @@ fun main() {
     }
 
     // Phase 1962 (3.2) — single-select carries `value`, multi-select carries `values` and no
-    // `value`. Each refusal gets a twin repairing exactly the presence rule: the bound `value`
-    // removed from the multi-select, and a `value` supplied to the single-select.
-    twin(
-        "select-multiselect-bound-value",
-        "reject/reject-1962-multiselect-bound-value.json",
-        ",\"value\":{\"\$type\":\"State\",\"key\":\"tag\"}" to "",
-    )
+    // `value`. The one refusal gets a twin repairing exactly the presence rule: a `value` supplied
+    // to the single-select.
     twin(
         "select-missing-value",
         "reject/reject-1962-select-missing-value.json",
         "\"label\":\"Region\"," to "\"label\":\"Region\",\"value\":{\"\$type\":\"State\",\"key\":\"region\"},",
     )
-    runner.check("refusal-by-class/select-multiselect-placeholder-value-normalised") {
-        // The lenient half: the empty-Static placeholder an older emitter wrote beside `multiple`
-        // (bare, and with `"value":null`) decodes, and decodes to NO value — the same model the
-        // clean form produces, so nothing downstream can read a binding no multi-select carries.
-        val root = decodeNode(corpusText("lenient/lenient-1962-multiselect-placeholder-value.json"))
+    val multiValueDoc = "lenient/lenient-1962-multiselect-value-dropped.json"
+    runner.check("refusal-by-class/select-multiselect-value-dropped") {
+        // The lenient half: a `value` beside `multiple` — the empty-Static placeholder older
+        // emitters wrote (bare, and with `"value":null`) or a real binding — decodes, and decodes
+        // to NO value: the same model the clean form produces, so nothing downstream can read a
+        // binding no multi-select carries.
+        val root = decodeNode(corpusText(multiValueDoc))
         val selects = (root.kind as Box).children.map { it.kind as Select }
-        if (selects.size != 2) error("expected the two multi-selects, got ${selects.size}")
+        if (selects.size != 3) error("expected the three multi-selects, got ${selects.size}")
         for (s in selects) {
             if (!s.multiple) error("a multi-select decoded as single-select")
-            if (s.value != null) error("the placeholder `value` survived decode: ${s.value}")
+            if (s.value != null) error("the multi-select's `value` survived decode: ${s.value}")
             if (s.values == null) error("the multi-select's `values` was lost")
+        }
+    }
+    runner.check("refusal-by-class/select-multiselect-malformed-value-still-refused") {
+        // Dropped AFTER decode, never instead of it: a malformed binding in a multi-select's
+        // `value` refuses exactly as any malformed binding does.
+        val doc = corpusText(multiValueDoc)
+        val bound = "\"value\":{\"\$type\":\"State\",\"defaultValue\":\"Auth\",\"key\":\"category-primary\"}"
+        if (!doc.contains(bound)) error("the lenient vector no longer carries the binding this probe rewrites")
+        val e =
+            runCatching { decodeNode(doc.replace(bound, "\"value\":{\"\$type\":\"Nope\"}")) }
+                .exceptionOrNull() as? FuaranDecodeException
+                ?: error("a malformed `value` on a multi-select was ACCEPTED")
+        if (!e.path.startsWith("\$.kind.children[2].kind.value")) {
+            error("expected a refusal under \$.kind.children[2].kind.value, got ${e.code} at ${e.path}")
         }
     }
 
