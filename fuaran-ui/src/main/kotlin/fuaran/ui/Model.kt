@@ -720,6 +720,12 @@ data class FileUpload(
     val maxFiles: Int? = null,
 ) : NodeKind
 
+/**
+ * A choice control. Single-select carries [value] (required on the wire); multi-select
+ * (`multiple`) carries [values] and NO [value] — Phase 1962 (3.2). [value] is therefore null
+ * exactly on a multi-select; the empty-Static placeholder an older emitter wrote there decodes
+ * to null as well.
+ */
 data class Select(
     val label: TextSource,
     val source: Binding,

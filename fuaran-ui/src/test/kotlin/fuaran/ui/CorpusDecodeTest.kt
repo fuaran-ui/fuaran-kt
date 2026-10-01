@@ -1445,6 +1445,33 @@ fun main() {
         decodeNode(windowDoc("{\"col\":\"dept\",\"dir\":\"asc\"}"))
     }
 
+    // Phase 1962 (3.2) — single-select carries `value`, multi-select carries `values` and no
+    // `value`. Each refusal gets a twin repairing exactly the presence rule: the bound `value`
+    // removed from the multi-select, and a `value` supplied to the single-select.
+    twin(
+        "select-multiselect-bound-value",
+        "reject/reject-1962-multiselect-bound-value.json",
+        ",\"value\":{\"\$type\":\"State\",\"key\":\"tag\"}" to "",
+    )
+    twin(
+        "select-missing-value",
+        "reject/reject-1962-select-missing-value.json",
+        "\"label\":\"Region\"," to "\"label\":\"Region\",\"value\":{\"\$type\":\"State\",\"key\":\"region\"},",
+    )
+    runner.check("refusal-by-class/select-multiselect-placeholder-value-normalised") {
+        // The lenient half: the empty-Static placeholder an older emitter wrote beside `multiple`
+        // (bare, and with `"value":null`) decodes, and decodes to NO value — the same model the
+        // clean form produces, so nothing downstream can read a binding no multi-select carries.
+        val root = decodeNode(corpusText("lenient/lenient-1962-multiselect-placeholder-value.json"))
+        val selects = (root.kind as Box).children.map { it.kind as Select }
+        if (selects.size != 2) error("expected the two multi-selects, got ${selects.size}")
+        for (s in selects) {
+            if (!s.multiple) error("a multi-select decoded as single-select")
+            if (s.value != null) error("the placeholder `value` survived decode: ${s.value}")
+            if (s.values == null) error("the multi-select's `values` was lost")
+        }
+    }
+
     runner.check("refusal-by-class/tree-item-depth-is-bounded-on-its-own-axis") {
         // 21.5. The at-max fixture and its past-the-bound twin are BOTH in the corpus, which
         // makes this the one pair needing no substitution — and the strongest form of the claim,

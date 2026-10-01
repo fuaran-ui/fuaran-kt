@@ -1032,17 +1032,43 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                     ),
             )
         }
-        "Select" ->
+        "Select" -> {
+            val label = decodeTextSource(o.req("label", path), "$path.label")
+            // Field aliases: options → source (the HTML `<select>` prior), data → source.
+            val source = decodeBinding(o.reqAliased("source", path, "options", "data"), "$path.source")
+            val multiple = o.optBool("multiple", path) ?: false
+            // Phase 1962 (3.2) — single-select carries `value`, multi-select carries `values` and
+            // NO `value`. A single-select without `value` is refused as before; a multi-select's
+            // `value` is absent, or the empty-Static placeholder older emitters wrote (a lenient
+            // accept, normalised to absent), and anything else is refused — a bound `value` beside
+            // `multiple` is a binding no multi-select reads.
+            val value =
+                if (multiple) {
+                    o["value"]?.let { raw ->
+                        val b = decodeBinding(raw, "$path.value")
+                        if (b is StaticBinding && b.value == JsonNull) {
+                            null
+                        } else {
+                            throw FuaranDecodeException(
+                                FuaranDecodeException.WRONG_TYPE,
+                                "$path.value",
+                                "a multi-select (\"multiple\": true) carries `values`, not `value`",
+                            )
+                        }
+                    }
+                } else {
+                    decodeBinding(o.req("value", path), "$path.value")
+                }
             Select(
-                label = decodeTextSource(o.req("label", path), "$path.label"),
-                // Field aliases: options → source (the HTML `<select>` prior), data → source.
-                source = decodeBinding(o.reqAliased("source", path, "options", "data"), "$path.source"),
-                multiple = o.optBool("multiple", path) ?: false,
-                value = o["value"]?.let { decodeBinding(it, "$path.value") },
+                label = label,
+                source = source,
+                multiple = multiple,
+                value = value,
                 values = o["values"]?.let { decodeBinding(it, "$path.values") },
                 placeholder = o["placeholder"]?.let { decodeTextSource(it, "$path.placeholder") },
                 disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
             )
+        }
         "Filters" ->
             Filters(
                 items = o.req("items", path).array("$path.items").mapIndexed { i, v -> decodeFilterItem(v, "$path.items[$i]") },
