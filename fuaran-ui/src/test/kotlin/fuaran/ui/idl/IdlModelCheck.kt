@@ -72,15 +72,23 @@ fun generateFrom(idlFile: File): Map<String, String> {
     return generateModel(readIdl(String(bytes, Charsets.UTF_8)), sha256Hex(bytes), DIALECT, MODEL_DOCS)
 }
 
+/**
+ * The first line that differs, skipping the header's recorded hash — which differs whenever the IDL
+ * moved at all, and so says nothing about WHAT moved.
+ */
 private fun firstDifference(want: String, got: String): String {
     val w = want.split("\n")
     val g = got.split("\n")
+    val hashMoved = w.firstOrNull { "idl.json sha256" in it } != g.firstOrNull { "idl.json sha256" in it }
     for (i in 0 until maxOf(w.size, g.size)) {
         val a = w.getOrNull(i)
         val b = g.getOrNull(i)
-        if (a != b) return "line ${i + 1}:\n      generated: ${a ?: "<end of file>"}\n      on disk:   ${b ?: "<end of file>"}"
+        if (a != b && !(a != null && b != null && "idl.json sha256" in a && "idl.json sha256" in b)) {
+            return "${if (hashMoved) "idl.json moved; " else ""}first difference at line ${i + 1}:\n" +
+                "      generated: ${a ?: "<end of file>"}\n      on disk:   ${b ?: "<end of file>"}"
+        }
     }
-    return "identical"
+    return "only the recorded idl.json hash differs (the IDL's bytes moved, the vocabulary did not)"
 }
 
 fun main() {
