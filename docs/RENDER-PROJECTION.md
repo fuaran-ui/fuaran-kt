@@ -88,8 +88,9 @@ which is the guarantee this design exists to give; an `else` arm converts that
 into a silent runtime fallback you find out about much later.
 
 Two dispatch spines in the library are written that way deliberately and must
-stay so: `NodeKind.category()` and `NodeKind.discriminator()` in
-`NodeCategory.kt`, and the renderer's own `RenderNodeKind`.
+stay so: `NodeKind.category()` and `NodeKind.discriminator()` (generated, with the
+rest of the model, from the corpus's `idl.json` into `NodeCategory.generated.kt`),
+and the renderer's own `RenderNodeKind`.
 
 Two Kotlin names differ from their wire spelling, because `List` and `Map` are
 taken: the cases are `ListNode` and `MapNode`, and `discriminator()` maps them

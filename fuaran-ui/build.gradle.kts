@@ -51,6 +51,22 @@ tasks.register<JavaExec>("corpusCheck") {
     // means to GATE on it must therefore pass one of them (CI does, and asserts
     // the run was not a skip).
     System.getProperty("fuaran.corpus")?.let { systemProperty("fuaran.corpus", it) }
+    // The decode gate certifies the GENERATED model, so it first proves that model is the one
+    // `idl.json` says it is.
+    dependsOn("idlModelCheck")
+}
+
+// Phase 2299 — the sealed tree model is generated from the corpus's `idl.json` by this module's own
+// generator (`src/test/kotlin/fuaran/ui/idl/`). This compares the generated files with what the IDL
+// produces and fails naming the regenerate command; `FUARAN_IDL_REGENERATE=1` rewrites them instead.
+// The corpus is found through FUARAN_WIRE_FIXTURES, -Dfuaran.corpus, FUARAN_CORPUS or a sibling
+// checkout, under the same skip-on-standalone / fail-on-cross-host posture as the decode harness.
+tasks.register<JavaExec>("idlModelCheck") {
+    group = "verification"
+    description = "Fail when the generated model no longer matches the corpus idl.json (FUARAN_IDL_REGENERATE=1 rewrites it)."
+    mainClass.set("fuaran.ui.idl.IdlModelCheckKt")
+    classpath = sourceSets["test"].runtimeClasspath
+    System.getProperty("fuaran.corpus")?.let { systemProperty("fuaran.corpus", it) }
 }
 
 // Maven Central — the artifact shape only; identity, licence and SCM are configured once in the

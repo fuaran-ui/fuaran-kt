@@ -1,0 +1,201 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Diametrical Ltd.
+//
+// GENERATED from the wire corpus's idl.json — do not edit.
+//   generator: fuaran-ui/src/test/kotlin/fuaran/ui/idl/ModelGenerator.kt
+//   idl.json sha256: c0ca90a68de458ae90cc369c5afe6e75cf0a1b36d8383579a0f48073ef8157d8
+// Regenerate with FUARAN_IDL_REGENERATE=1 (see IdlModelCheck.kt); the drift check fails while this is stale.
+package fuaran.ui
+
+enum class BadgeVariant { Neutral, Brand, Success, Warning, Critical, Info }
+
+enum class BoxRole { Group, Card, Dashboard, Separator }
+
+enum class ButtonVariant { Primary, Secondary, Tertiary, Destructive }
+
+/**
+ * Phase 1116 — the recording device a `FileUpload` asks the platform for (3.6.18). There is
+ * deliberately no display-capture case and there will not be one by widening this member: a screen
+ * capture reaches every window the reader has open rather than one device behind the picker.
+ */
+enum class CaptureSource { Camera, Microphone }
+
+enum class MountDirection { OutOnly, InOnly, TwoWay }
+
+enum class ChartKind { Line, Bar, Area, Pie, Scatter, Heatmap }
+
+/** `CompareRule.op` — the cross-field comparison operator. */
+enum class CompareOp(override val wire: String) : WireEnum {
+    Eq("eq"),
+    Neq("neq"),
+    Lt("lt"),
+    Lte("lte"),
+    Gt("gt"),
+    Gte("gte"),
+}
+
+enum class DateStyle { Short, Medium, Long, Full }
+
+/**
+ * Phase 1811 — `DateTimeVariant` on the wire (was `DateVariant`): the temporal breadth of a
+ * [DateTimeField] / [DateTimeRangeField]. The three cases did not move.
+ */
+enum class DateTimeFieldVariant { Date, Time, DateTime }
+
+enum class Determinism { Deterministic, Clock, Random, Network }
+
+enum class DurationStyle { Compact, Clock, Long }
+
+enum class DurationUnit { Seconds, Minutes, Hours }
+
+/**
+ * An `Embed.permissions` element — one sandbox relaxation a document asks for (3.6.8). A BARE enum,
+ * so an unrecognised token reports at `$.kind.permissions[i]` with no `$type` suffix.
+ *
+ * **The empty list is TOTAL DENIAL, and that polarity is the design**: the wire-cheapest document
+ * is the most locked-down one, so the default a careless emitter produces is the safe one.
+ *
+ * **Two relaxations are excluded rather than defaulted off, and are not reserved either** —
+ * top-level navigation (the drive-by redirect) and downloads (a file-save prompt in a third
+ * party's hands). Both are names a later phase must NOT take. Popups, modals, pointer lock,
+ * presentation and orientation lock have no recorded demand and ARE reserved, which is the whole
+ * reason the slot is an enum rather than a record of booleans: a fifth case is a bare-string
+ * addition rather than a type replacement.
+ *
+ * A decoder MUST NOT silently drop an unrecognised token: that would turn a document asking for
+ * something this vocabulary has no name for into a document asking for LESS, which reads as
+ * success. [enumOf]'s refusal is what keeps that honest.
+ */
+enum class EmbedPermission { AllowScripts, AllowSameOrigin, AllowForms, AllowFullscreen }
+
+enum class Emphasis { Quiet, Normal, Loud }
+
+enum class FileReadEncoding { Text, Base64, DataUrl }
+
+enum class HashStrictness { StrictReplay, AdvisoryWarning, Enforced }
+
+enum class HeadingVariant { Standard, Eyebrow, Caption, Lead }
+
+enum class HostEffect { Pure, ReadsHost, WritesHost }
+
+enum class IconSize { Small, Medium, Large }
+
+/**
+ * `Image.aspectRatio` — the box the element reserves BEFORE the image arrives (3.6.2). Absent
+ * means [Natural].
+ *
+ * These are TOKENS, never CSS values: the slot names one of four ratios and never carries a number,
+ * a pair, or a stylesheet spelling (`"16 / 9"`, `"16:9"`, `1.7778`). Admitting an arbitrary ratio
+ * would put an author-supplied value in a style attribute, which is the free-form escape this format
+ * does not have — so `"16/9"` is `UNKNOWN_DU_CASE`, not a second spelling of [SixteenNine].
+ *
+ * It is a LAYOUT reservation, not a crop: what happens to pixels that do not match the box is
+ * [ImageFit]'s statement, and a host derives neither from the other.
+ */
+enum class ImageAspect { Natural, Square, FourThree, ThreeTwo, SixteenNine }
+
+/**
+ * `Image.fit` — how the decoded pixels fill the box the layout gives the element
+ * (WIRE_FORMAT.md 3.6.2). Absent means [Natural].
+ */
+enum class ImageFit { Natural, Cover, Contain }
+
+/**
+ * `Image.loading` — whether the client fetches during initial load or defers (3.6.2). Absent means
+ * [Eager], and that default is deliberate rather than the "unoptimised" value: deferring an
+ * above-the-fold image delays the largest contentful paint, and only the author knows where the
+ * image sits. A host MUST NOT infer laziness from position, viewport, or anything else the tree
+ * does not say.
+ */
+enum class ImageLoading { Eager, Lazy }
+
+enum class ImageVariant { Default, Avatar, Rounded }
+
+/** `Link.protection` — the obfuscation the host applies to a rendered `mailto:` href. */
+enum class LinkProtection(override val wire: String) : WireEnum { Email("email") }
+
+enum class MathDisplay { Inline, Block }
+
+/**
+ * WIRE_FORMAT.md 3.6.11 — the modality a `Modal` declares. Omitted at `Modal`, which is the
+ * blocking modality every pre-modality document meant.
+ */
+enum class ModalityKind { Modal, Popover }
+
+/**
+ * Phase 1536 — `NavigateAction`'s destination window (3.6.21). A CLOSED enum of two, deliberately
+ * not HTML's `target` attribute: that vocabulary also carries `_parent` and `_top`, which are
+ * frame-busting gestures a hosted tree must not be able to ask for, so `_blank` is refused rather
+ * than aliased — accepting any of it would teach an emitter the wrong vocabulary.
+ */
+enum class NavigateTarget { Self, Blank }
+
+enum class Orientation { Vertical, Horizontal }
+
+enum class RelativeTimeUnit { Second, Minute, Hour, Day, Week, Month, Year }
+
+enum class ScrollOrientation { Vertical, Horizontal, Both }
+
+/** `staticRows.defaultSort.direction` / a grid's `defaultSort.direction` — a closed pair. */
+enum class SortDirection(override val wire: String) : WireEnum { Asc("asc"), Desc("desc") }
+
+enum class StyleWeight { Compact, Standard, Spacious }
+
+/**
+ * Phase 1472 — the node-level declared text direction (3.1). Lower-case on the wire, like
+ * `LiveRegionKind` and `SortDirection`, because these are the HTML `dir` tokens themselves. Omitted
+ * at `auto`, which leaves the inherited direction in place — the pre-1472 rendering.
+ */
+@Suppress("EnumEntryName")
+enum class TextDirection { auto, ltr, rtl }
+
+/** `FieldRule.format` — the closed named-format set a text field's value is held to. */
+enum class TextFormat(override val wire: String) : WireEnum { Email("email"), Url("url"), Tel("tel") }
+
+/**
+ * Phase 1533 — the resolution a `NowBinding` declares for the host-furnished instant. FOUR members
+ * and not `RelativeTimeUnit`'s seven, deliberately: this is a TRUNCATION of a calendar instant, and
+ * a week, a month or a year has no truncation every host agrees on (which weekday starts a week;
+ * which calendar). The four here truncate the canonical ISO-8601 form by prefix.
+ */
+enum class TimeGrain { Second, Minute, Hour, Day }
+
+/**
+ * Phase 1810 — the time-of-day half of `Format.DateTime`'s `dateStyle` / `timeStyle` pair. The
+ * same four cases as [DateStyle], deliberately a SEPARATE enum: the two name breadths of different
+ * things.
+ */
+enum class TimeStyle { Short, Medium, Long, Full }
+
+enum class ToneVariant { Default, Subdued, Brand, Success, Warning, Critical, Info }
+
+/**
+ * A `TrackEntry.kind` — which timed-text channel a media track carries (WIRE_FORMAT.md 3.6.6).
+ * A BARE enum (3.5), so an unrecognised token reports at the entry's own `kind` path with no
+ * `$type` suffix.
+ *
+ * **`Metadata` is absent by design and is not a spelling to guess at.** Its cues are rendered by
+ * no user agent and read only by script, so a declarative document naming it would state an intent
+ * no conformant host could honour without leaving the vocabulary. The set is closed at four; a
+ * fifth is an addition to the format, which is exactly what an `UNKNOWN_DU_CASE` here says.
+ */
+enum class TrackKind { Subtitles, Captions, Descriptions, Chapters }
+
+/**
+ * `Metric.trendPolarity` — which way the measured quantity IMPROVES (WIRE_FORMAT.md 3.6.1).
+ * Distinct from `tone`, which says how the reading STANDS: a host derives neither from the other,
+ * and nothing ever writes back to `tone`.
+ *
+ * **`Neutral` is reserved by the specification and is deliberately NOT a case here.** The case set
+ * IS the accepted wire set, so omitting it means `"Neutral"` fails `UNKNOWN_DU_CASE` naming the two
+ * legal spellings, rather than this surface quietly deciding a question the reservation holds open
+ * — and no `when` carries a dead arm waiting for a case the wire will not produce. That is the same
+ * modelling choice the Rust reference core made for the same slot, and it is why the wire slot is
+ * an enum rather than an `inverted` bool: admitting the third case later is one added constant plus
+ * an exhaustiveness ERROR at every site that must then decide what it means.
+ *
+ * No alias arm is registered, and that omission is deliberate: the obvious candidates are precisely
+ * the spellings that must not be accepted — `Neutral` would pre-empt the reservation, and
+ * `Inverted` / `Descending` would reinstate the boolean spelling 3.6.1 refuses.
+ */
+enum class TrendPolarity { HigherIsBetter, LowerIsBetter }

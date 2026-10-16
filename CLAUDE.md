@@ -49,13 +49,15 @@ fuaran-kt/
 │   └── src/main/kotlin/fuaran/ui/
 │       ├── Json.kt                  # hand-rolled JSON reader (JsonValue tree)
 │       ├── Errors.kt                # FuaranDecodeException + the six canonical codes
-│       ├── Enums.kt                 # bare-string wire enums + enumOf()
-│       ├── Model.kt                 # the sealed tree: Node / NodeKind / Binding / Action / Shape / ...
-│       ├── NodeCategory.kt          # the exhaustive (else-free) dispatch spines
+│       ├── Model.generated.kt       # GENERATED from idl.json: the sealed tree (Node / NodeKind / Binding / ...)
+│       ├── Enums.generated.kt       # GENERATED from idl.json: the bare-string wire enums
+│       ├── NodeCategory.generated.kt # GENERATED from idl.json: the exhaustive (else-free) dispatch spines
+│       ├── Model.kt / Enums.kt      # the hand-written remainder: SwitchCase, FragmentArg, enumOf(), WireEnum
 │       ├── Decode.kt                # the render-projection decoder
 │       └── Session.kt               # (Phase 543) the confined FuaranSession wrapper
 │   └── src/test/kotlin/fuaran/ui/
-│       └── CorpusDecodeTest.kt      # corpus render-coverage harness (main-driven runner)
+│       ├── CorpusDecodeTest.kt      # corpus render-coverage harness (main-driven runner)
+│       └── idl/                     # (Phase 2299) the model generator, its Dialect.kt, and the drift check
 ├── fuaran-core/                     # (Phase 543) C-ABI JNI binding
 │   ├── src/main/java/fuaran/core/   # FuaranNative — the JNI `native` bridge (javac -h generates the header)
 │   ├── src/main/jni/                # the hand-written JNI C shim + generated/ header
@@ -64,6 +66,35 @@ fuaran-kt/
 ├── *.gradle.kts                     # forward-looking Gradle scaffold (no wrapper yet — see below)
 ├── LICENSE / README.md / CLAUDE.md
 ```
+
+## The generated model (Phase 2299)
+
+The sealed tree model — the node envelope, one `NodeKind` class per kind, every record and union,
+the bare-string enums, `NodeCategory` with the `category()` / `discriminator()` spines, and the
+kind-tag set the decoder dispatches on — is **generated from the corpus's `idl.json`** into
+`Model.generated.kt`, `Enums.generated.kt` and `NodeCategory.generated.kt`. Never edit those three;
+regenerate. The generator is this repository's own, in Kotlin, in the `fuaran-ui` TEST source set
+(`src/test/kotlin/fuaran/ui/idl/`), so it ships in no artefact.
+
+- **Rules + dialect.** `ModelGenerator.kt` states the uniform mapping rules (names, types,
+  optionality and declared defaults, closure and host-only slots, IDL order). Every place the public
+  model diverges from them is ONE entry in `Dialect.kt` with its reason — a shipped name, a shipped
+  constructor order, a raw-held slot, a presence flag, a field not carried. The generator REFUSES an
+  entry naming something the IDL no longer has and one restating what the rules already produce, so
+  the dialect is complete or generation fails. A host representation quirk goes in the dialect,
+  never into the IDL.
+- **Hand-written over it.** `SwitchCase` and `FragmentArg` stay in `Model.kt` (their shape is not a
+  function of their IDL type) and are pinned by generated exhaustive checks; `enumOf` / `wireEnumOf`
+  / `WireEnum` stay in `Enums.kt`; the KDoc the generated declarations carry lives in
+  `ModelDocs.kt`. Decode policy (leniency, aliases, refusal wording, limits, the JSON reader) stays
+  hand-written in `Decode.kt`.
+- **Drift.** `./gradlew :fuaran-ui:idlModelCheck` (also run before `corpusCheck`) regenerates in
+  memory and fails naming the regenerate command when the files are stale;
+  `FUARAN_IDL_REGENERATE=1` rewrites them. The corpus is found through `FUARAN_WIRE_FIXTURES`, then
+  the decode harness's own locator. A kind added to `idl.json` and regenerated is a compile error in
+  the decoder's dispatch and in the renderer's `RenderNodeKind` until its arm is written.
+- **The pin.** The model is generated from the corpus the pin names, so moving `corpus-pin.json`
+  and regenerating are one reviewed change.
 
 ## Build / verify pipeline
 
