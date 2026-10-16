@@ -595,9 +595,20 @@ private fun decodeAccessibility(value: JsonValue, path: String): Accessibility {
 
 private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
     val o = value.obj(path)
-    return when (val t = o.discriminator(path)) {
+    val t = o.discriminator(path)
+    // The tag set is GENERATED from idl.json (NodeKindTag), and this `when` over it has no `else`: a kind
+    // added to the vocabulary and regenerated is a compile error here until its arm is written. A tag the
+    // vocabulary does not have is refused before the dispatch, so nothing falls through to a generic node.
+    val tag =
+        NodeKindTag.ofWire(t)
+            ?: throw FuaranDecodeException(
+                FuaranDecodeException.WRONG_NODE_KIND,
+                "$path.\$type",
+                "'$t' is not a recognised node kind",
+            )
+    return when (tag) {
         // Layout
-        "Box" ->
+        NodeKindTag.Box ->
             Box(
                 children = decodeNodeList(o.req("children", path), "$path.children"),
                 layout = decodeBoxLayout(o.req("layout", path), "$path.layout"),
@@ -609,12 +620,12 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 breakBefore = o.optBool("breakBefore", path) ?: false,
                 keepTogether = o.optBool("keepTogether", path) ?: false,
             )
-        "SplitPanel" ->
+        NodeKindTag.SplitPanel ->
             SplitPanel(
                 children = decodeNodeList(o.req("children", path), "$path.children"),
                 weight = o.req("weight", path).double("$path.weight"),
             )
-        "Tabs" ->
+        NodeKindTag.Tabs ->
             Tabs(
                 // `activeIndex` round-trips; absent (legacy wire) defaults to Static 0.
                 activeIndex = o["activeIndex"]?.let { decodeBindingInt(it, "$path.activeIndex") }
@@ -629,25 +640,25 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                     decodeTabHeader(v, "$path.tabHeaders[$i]")
                 },
             )
-        "Stepper" ->
+        NodeKindTag.Stepper ->
             Stepper(
                 activeStep = decodeBindingInt(o.req("activeStep", path), "$path.activeStep"),
                 children = decodeNodeList(o.req("children", path), "$path.children"),
             )
-        "SummaryList" ->
+        NodeKindTag.SummaryList ->
             SummaryList(
                 children = decodeNodeList(o.req("children", path), "$path.children"),
                 // Field alias: title → heading (the universal card/modal prior).
                 heading = o.getAliased("heading", "title")?.let { decodeTextSource(it, "$path.heading") },
             )
-        "Disclosure" ->
+        NodeKindTag.Disclosure ->
             Disclosure(
                 children = decodeNodeList(o.req("children", path), "$path.children"),
                 heading = decodeTextSource(o.reqAliased("heading", path, "title"), "$path.heading"),
                 open = decodeBindingBool(o.req("open", path), "$path.open"),
                 defaultOpen = o.req("defaultOpen", path).bool("$path.defaultOpen"),
             )
-        "Modal" ->
+        NodeKindTag.Modal ->
             Modal(
                 children = decodeNodeList(o.req("children", path), "$path.children"),
                 dismissable = o.req("dismissable", path).bool("$path.dismissable"),
@@ -668,21 +679,21 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 // host that cannot say which node its popover belongs to.
                 anchor = o.optStr("anchor", path),
             )
-        "ScrollArea" ->
+        NodeKindTag.ScrollArea ->
             ScrollArea(
                 children = decodeNodeList(o.req("children", path), "$path.children"),
                 orientation = enumOf<ScrollOrientation>(o.req("orientation", path).str("$path.orientation"), "$path.orientation"),
                 maxHeight = o.optInt("maxHeight", path),
                 maxWidth = o.optInt("maxWidth", path),
             )
-        "Mount" ->
+        NodeKindTag.Mount ->
             Mount(
                 scopeId = o.req("scopeId", path).str("$path.scopeId"),
                 capabilities = o.strList("capabilities", path),
                 channel = decodeMountChannel(o.req("channel", path), "$path.channel"),
                 inputs = o["inputs"]?.let { decodeFragmentArgs(it, "$path.inputs") },
             )
-        "Switch" -> {
+        NodeKindTag.Switch -> {
             // The selector widened: `on` takes any Binding (a `Selection` makes the branch follow
             // the clicked row), so `stateKey` is no longer required on its own. The schema states
             // the obligation as `anyOf: [required stateKey, required on]` - at least one, and the
@@ -753,14 +764,14 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             )
         }
         // Display
-        "Heading" ->
+        NodeKindTag.Heading ->
             Heading(
                 level = o.req("level", path).int("$path.level"),
                 text = decodeTextSource(o.req("text", path), "$path.text"),
                 variant = headingVariantOf(o.req("variant", path).str("$path.variant"), "$path.variant"),
             )
-        "Markdown" -> Markdown(text = decodeTextSource(o.req("text", path), "$path.text"))
-        "Metric" ->
+        NodeKindTag.Markdown -> Markdown(text = decodeTextSource(o.req("text", path), "$path.text"))
+        NodeKindTag.Metric ->
             Metric(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 // 0.2.0 rename law — scalar displayed value ⇒ `value` (`data` alias kept;
@@ -784,15 +795,15 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                     o.optStr("trendPolarity", path)?.let { enumOf<TrendPolarity>(it, "$path.trendPolarity") }
                         ?: TrendPolarity.HigherIsBetter,
             )
-        "Badge" ->
+        NodeKindTag.Badge ->
             Badge(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 variant = badgeVariantOf(o.req("variant", path).str("$path.variant"), "$path.variant"),
             )
         // Field alias: data → source (the chart-library prior).
         // 5 + Phase 1099 — a typed float SEQUENCE slot, so the elements are typed too.
-        "Sparkline" -> Sparkline(source = decodeBindingFloatSeq(o.reqAliased("source", path, "data"), "$path.source"))
-        "Callout" ->
+        NodeKindTag.Sparkline -> Sparkline(source = decodeBindingFloatSeq(o.reqAliased("source", path, "data"), "$path.source"))
+        NodeKindTag.Callout ->
             Callout(
                 body = decodeTextSource(o.req("body", path), "$path.body"),
                 // 0.2.0 — omitted-when-false; heading is optional.
@@ -802,7 +813,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 heading = o.getAliased("heading", "title")?.let { decodeTextSource(it, "$path.heading") },
                 icon = o.optStr("icon", path),
             )
-        "Progress" ->
+        NodeKindTag.Progress ->
             Progress(
                 fraction = decodeBindingFloat(o.req("fraction", path), "$path.fraction"),
                 // 0.2.0 — omitted-when-false; label is optional; `caveat` added.
@@ -813,8 +824,8 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             )
         // 21.9 — `rows` is a count the renderer EXPANDS, so the slot's own bound is read here
         // (after 7.1's integer rule, never instead of it). See [decodeSkeletonRows].
-        "Skeleton" -> Skeleton(rows = decodeSkeletonRows(o.req("rows", path), "$path.rows"))
-        "LabelValueRow" ->
+        NodeKindTag.Skeleton -> Skeleton(rows = decodeSkeletonRows(o.req("rows", path), "$path.rows"))
+        NodeKindTag.LabelValueRow ->
             LabelValueRow(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 // 0.2.0 rename law — scalar displayed value ⇒ `value` (`data` alias kept).
@@ -824,7 +835,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 emphasis = o["emphasis"]?.let { decodeEmphasisFlag(it, "$path.emphasis") } ?: false,
                 help = o["help"]?.let { decodeTextSource(it, "$path.help") },
             )
-        "Fact" ->
+        NodeKindTag.Fact ->
             Fact(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 value = decodeTextSource(o.req("value", path), "$path.value"),
@@ -833,14 +844,14 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 help = o["help"]?.let { decodeTextSource(it, "$path.help") },
                 icon = o.optStr("icon", path),
             )
-        "Icon" ->
+        NodeKindTag.Icon ->
             Icon(
                 icon = o.req("icon", path).str("$path.icon"),
                 label = o.optStr("label", path),
                 size = o.optStr("size", path)?.let { enumOf<IconSize>(it, "$path.size") } ?: IconSize.Medium,
                 tone = o.optStr("tone", path)?.let { toneVariantOf(it, "$path.tone") } ?: ToneVariant.Default,
             )
-        "Link" ->
+        NodeKindTag.Link ->
             Link(
                 href = decodeBindingString(o.req("href", path), "$path.href"),
                 label = decodeTextSource(o.req("label", path), "$path.label"),
@@ -849,7 +860,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 target = o.optStr("target", path),
                 protection = o.optStr("protection", path)?.let { wireEnumOf<LinkProtection>(it, "$path.protection") },
             )
-        "Image" ->
+        NodeKindTag.Image ->
             Image(
                 alt = decodeTextSource(o.req("alt", path), "$path.alt"),
                 src = decodeBindingString(o.req("src", path), "$path.src"),
@@ -876,7 +887,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 // 3.6.5 — omitted at false; the stringified boolean is refused, not coerced.
                 expandable = o.optBool("expandable", path) ?: false,
             )
-        "Media" ->
+        NodeKindTag.Media ->
             Media(
                 // 3.6.6 — REQUIRED. A transport has no decorative case, and there is no value to
                 // default to that would not be a fabricated name for someone else's recording.
@@ -900,7 +911,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             )
         // 3.6.8 (Phase 1111). `title` is required — a browsing context has no decorative case —
         // and the permission list omits at EMPTY, which means total denial.
-        "Embed" ->
+        NodeKindTag.Embed ->
             Embed(
                 src = decodeBindingString(o.req("src", path), "$path.src"),
                 title = decodeTextSource(o.req("title", path), "$path.title"),
@@ -922,7 +933,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             )
         // 3.6.12 (Phase 1120) — the format's first self-referential shape. `onSelect` is a
         // closure and is dropped, as every other handler slot in this projection is.
-        "Tree" ->
+        NodeKindTag.Tree ->
             Tree(
                 items =
                     o.req("items", path).array("$path.items").mapIndexed { i, v ->
@@ -931,12 +942,12 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 expandedStateKey = o.optStr("expandedStateKey", path),
                 selectionStateKey = o.optStr("selectionStateKey", path),
             )
-        "List" ->
+        NodeKindTag.List ->
             ListNode(
                 items = o.req("items", path).array("$path.items").mapIndexed { i, v -> decodeTextSource(v, "$path.items[$i]") },
                 ordered = o.req("ordered", path).bool("$path.ordered"),
             )
-        "Toast" ->
+        NodeKindTag.Toast ->
             Toast(
                 message = decodeTextSource(o.req("message", path), "$path.message"),
                 open = decodeBindingBool(o.req("open", path), "$path.open"),
@@ -944,7 +955,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 // 0.2.0 — omitted-when-TRUE (the one inverted default).
                 dismissable = o.optBool("dismissable", path) ?: true,
             )
-        "CodeBlock" ->
+        NodeKindTag.CodeBlock ->
             CodeBlock(
                 code = o.req("code", path).str("$path.code"),
                 copyable = o.req("copyable", path).bool("$path.copyable"),
@@ -952,12 +963,12 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 language = o.req("language", path).str("$path.language"),
                 lineNumbers = o.req("lineNumbers", path).bool("$path.lineNumbers"),
             )
-        "Math" ->
+        NodeKindTag.Math ->
             Math(
                 display = enumOf<MathDisplay>(o.req("display", path).str("$path.display"), "$path.display"),
                 source = o.req("source", path).str("$path.source"),
             )
-        "Drawing" ->
+        NodeKindTag.Drawing ->
             Drawing(
                 shapes = o.req("shapes", path).array("$path.shapes").mapIndexed { i, v -> decodeShape(v, "$path.shapes[$i]") },
                 style = o["style"]?.let { decodeDrawStyle(it, "$path.style") } ?: DrawStyle(),
@@ -966,14 +977,14 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 description = o["description"]?.let { decodeTextSource(it, "$path.description") },
             )
         // Input
-        "Form" ->
+        NodeKindTag.Form ->
             Form(
                 fields = o.req("fields", path).array("$path.fields").mapIndexed { i, v -> decodeFormField(v, "$path.fields[$i]") },
                 onSubmit = decodeAction(o.req("onSubmit", path), "$path.onSubmit"),
                 submitLabel = decodeTextSource(o.req("submitLabel", path), "$path.submitLabel"),
                 disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
             )
-        "Button" ->
+        NodeKindTag.Button ->
             Button(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 onClick = decodeAction(o.req("onClick", path), "$path.onClick"),
@@ -981,7 +992,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
                 icon = o.optStr("icon", path),
             )
-        "FileUpload" -> {
+        NodeKindTag.FileUpload -> {
             // Phase 1117 — the empty string is a name no host registers, so a document carrying it
             // describes an upload that can never stream. Refused rather than read as absence: that
             // coercion silently turns an upload the author meant to stream into a client-only one,
@@ -1032,7 +1043,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                     ),
             )
         }
-        "Select" ->
+        NodeKindTag.Select ->
             Select(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 // Field aliases: options → source (the HTML `<select>` prior), data → source.
@@ -1043,12 +1054,12 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 placeholder = o["placeholder"]?.let { decodeTextSource(it, "$path.placeholder") },
                 disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
             )
-        "Filters" ->
+        NodeKindTag.Filters ->
             Filters(
                 items = o.req("items", path).array("$path.items").mapIndexed { i, v -> decodeFilterItem(v, "$path.items[$i]") },
             )
         // Visualisation
-        "DataGrid" -> {
+        NodeKindTag.DataGrid -> {
             o.refuseNearMiss(
                 path,
                 mapOf(
@@ -1091,7 +1102,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 rowActionDeclared = o["onRowClick"] != null,
             )
         }
-        "Chart" ->
+        NodeKindTag.Chart ->
             Chart(
                 kind = enumOf<ChartKind>(o.req("kind", path).str("$path.kind"), "$path.kind"),
                 source = decodeBinding(o.reqAliased("source", path, "data"), "$path.source"),
@@ -1105,7 +1116,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                     decodeChartAnnotation(v, "$path.annotations[$i]")
                 },
             )
-        "Map" ->
+        NodeKindTag.Map ->
             MapNode(
                 centreLatitude = o.req("centreLatitude", path).double("$path.centreLatitude"),
                 centreLongitude = o.req("centreLongitude", path).double("$path.centreLongitude"),
@@ -1113,7 +1124,7 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 zoom = o.req("zoom", path).int("$path.zoom"),
             )
         // Structural
-        "Custom" ->
+        NodeKindTag.Custom ->
             Custom(
                 moduleId = o.req("moduleId", path).str("$path.moduleId"),
                 componentId = o.req("componentId", path).str("$path.componentId"),
@@ -1121,28 +1132,22 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                 contentHash = o["contentHash"]?.let { decodeContentHash(it, "$path.contentHash") },
                 exposedNodeIds = o.optStrList("exposedNodeIds", path),
             )
-        "ErrorBoundary" ->
+        NodeKindTag.ErrorBoundary ->
             ErrorBoundary(
                 child = decodeNode(o.req("child", path), "$path.child"),
                 fallback = decodeNode(o.req("fallback", path), "$path.fallback"),
             )
-        "FragmentDecl" ->
+        NodeKindTag.FragmentDecl ->
             FragmentDecl(
                 name = o.req("name", path).str("$path.name"),
                 body = decodeNode(o.req("body", path), "$path.body"),
                 holes = o["holes"]?.array("$path.holes")?.mapIndexed { i, v -> decodeHoleDecl(v, "$path.holes[$i]") },
                 effect = o["effect"]?.let { decodeEffect(it, "$path.effect") },
             )
-        "FragmentRef" ->
+        NodeKindTag.FragmentRef ->
             FragmentRef(
                 name = o.req("name", path).str("$path.name"),
                 args = o["args"]?.let { decodeFragmentArgs(it, "$path.args") },
-            )
-        else ->
-            throw FuaranDecodeException(
-                FuaranDecodeException.WRONG_NODE_KIND,
-                "$path.\$type",
-                "'$t' is not a recognised node kind",
             )
     }
 }
