@@ -6,6 +6,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.runComposeUiTest
+import fuaran.testing.WireCorpus
 import fuaran.ui.Json
 import fuaran.ui.JsonArray
 import fuaran.ui.JsonObject
@@ -28,7 +29,7 @@ import java.io.File
  * headlessly** through [FuaranNode] under Robolectric (JVM, no emulator). The bar: every fixture
  * composes without throwing and with **zero fallback-arm hits** ([RenderCoverage.fallbacks] empty);
  * per-kind coverage is reported. Any corpus kind not exercised is enumerated as an explicit TODO —
- * never a silent gap. Skips cleanly when the corpus is absent.
+ * never a silent gap. The corpus is required: an absent one fails the gate.
  */
 @OptIn(ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -36,33 +37,9 @@ import java.io.File
 class RenderCoverageTest {
     @Test
     fun everyCorpusNodeFixtureRendersThroughTheFloorWithZeroFallbacks() {
-        val corpus = locateCorpus()
-        if (corpus == null) {
-            // A missing corpus has two very different meanings and collapsing them into one clean
-            // `return` is a VACUOUS GREEN. On a standalone clone the skip is honest. In CI it means
-            // this gate certified NOTHING while the job reported success — and that is not
-            // hypothetical here: the Gradle test JVM is a separate process that does not inherit
-            // FUARAN_CORPUS, and the derived `fuaran.corpus` default points at
-            // <repo>/../wire-format-fixtures, which is not where CI puts it. So the gate that
-            // exists precisely because it cannot be run on the reference dev box was returning
-            // green in the one environment that can run it.
-            //
-            // FUARAN_REQUIRE_CORPUS is how a caller says "a corpus is present here, so its absence
-            // is a defect, not a platform fact". CI sets it. `return` stays the answer everywhere
-            // else, so a standalone clone is unaffected.
-            val required = System.getenv("FUARAN_REQUIRE_CORPUS")
-            if (!required.isNullOrBlank() && required != "0") {
-                throw AssertionError(
-                    "FUARAN_REQUIRE_CORPUS is set, so a corpus is expected here — but none was found, " +
-                        "and this gate therefore certified NOTHING. " +
-                        "FUARAN_CORPUS=${System.getenv("FUARAN_CORPUS") ?: "<unset>"}; " +
-                        "-Dfuaran.corpus=${System.getProperty("fuaran.corpus") ?: "<unset>"}. " +
-                        "Correct the locator or the caller rather than letting the harness skip.",
-                )
-            }
-            println("SKIP: wire-format-fixtures corpus not found (set -Dfuaran.corpus). Nothing to certify.")
-            return
-        }
+        // The corpus is REQUIRED (Phase 2301): the one locator throws, naming what it tried, when there
+        // is none. A clean `return` here once reported green in CI having certified nothing.
+        val corpus = WireCorpus.root()
         println("Corpus: ${corpus.absolutePath}")
         val manifestJson = File(corpus, "manifest.json").readText()
         val fixtures = manifestNodeFixtures(manifestJson)
@@ -123,31 +100,8 @@ class RenderCoverageTest {
 }
 
 // --------------------------------------------------------------------------- //
-// Corpus helpers (mirror the Phase 542 CorpusDecodeTest locate/parse logic)
+// Corpus helpers (mirror the Phase 542 CorpusDecodeTest parse logic)
 // --------------------------------------------------------------------------- //
-
-private fun locateCorpus(): File? {
-    System.getProperty("fuaran.corpus")?.let {
-        val f = File(it)
-        if (File(f, "manifest.json").isFile) return f
-    }
-    System.getenv("FUARAN_CORPUS")?.let {
-        val f = File(it)
-        if (File(f, "manifest.json").isFile) return f
-    }
-    val candidates =
-        listOf(
-            "../../wire-format-fixtures",
-            "../wire-format-fixtures",
-            "../../../wire-format-fixtures",
-            "wire-format-fixtures",
-        )
-    for (c in candidates) {
-        val f = File(c)
-        if (File(f, "manifest.json").isFile) return f
-    }
-    return null
-}
 
 private fun manifestNodeFixtures(manifestJson: String): List<Pair<String, String>> {
     val root = Json.parse(manifestJson) as JsonObject

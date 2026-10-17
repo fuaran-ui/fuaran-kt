@@ -9,6 +9,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.runComposeUiTest
 // `onAllNodes` / `waitForIdle` / `setContent` are MEMBERS of the `ComposeUiTest` receiver, not
 // top-level extensions like `hasText` above — importing them is an unresolved reference.
+import fuaran.testing.WireCorpus
 import fuaran.ui.Audio
 import fuaran.ui.Binding
 import fuaran.ui.Custom
@@ -219,13 +220,6 @@ class RenderObligationTest {
     @Test
     fun theObligationGateHoldsUnderThisGateToo() {
         val artifact = locateRenderFidelityArtifact()
-        if (artifact == null) {
-            // Honest on a standalone clone with no corpus; impossible in CI, which asserts the
-            // corpus is present before running either gate precisely so a skip cannot read as a
-            // pass. Printed rather than swallowed.
-            println("SKIP: render-fidelity.json not found (set FUARAN_CORPUS). Nothing to certify.")
-            return
-        }
         val report = mutableListOf<ObligationReport>()
         val failures = renderObligationFailures(artifact, report)
         for (line in unassertedObligations(report)) {
@@ -328,7 +322,7 @@ class RenderObligationTest {
 
     /** Decode a corpus fixture by name; the corpus is the oracle for these five, never a hand model. */
     private fun fixture(id: String): Node {
-        val corpus = locateA11yCorpus() ?: error("the corpus is absent — this leg would certify nothing")
+        val corpus = WireCorpus.root()
         return decodeNode(File(corpus, "nodes/$id.json").readText())
     }
 

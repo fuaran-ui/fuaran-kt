@@ -90,11 +90,21 @@ regenerate. The generator is this repository's own, in Kotlin, in the `fuaran-ui
   hand-written in `Decode.kt`.
 - **Drift.** `./gradlew :fuaran-ui:idlModelCheck` (also run before `corpusCheck`) regenerates in
   memory and fails naming the regenerate command when the files are stale;
-  `FUARAN_IDL_REGENERATE=1` rewrites them. The corpus is found through `FUARAN_WIRE_FIXTURES`, then
-  the decode harness's own locator. A kind added to `idl.json` and regenerated is a compile error in
+  `FUARAN_IDL_REGENERATE=1` rewrites them. The corpus is found through the one locator every harness
+  shares (below). A kind added to `idl.json` and regenerated is a compile error in
   the decoder's dispatch and in the renderer's `RenderNodeKind` until its arm is written.
 - **The pin.** The model is generated from the corpus the pin names, so moving `corpus-pin.json`
   and regenerating are one reviewed change.
+
+## The corpus locator (Phase 2301)
+
+Every harness — Gradle test workers, the Gradle `JavaExec` harnesses and the plain-JVM `kotlinc`
+legs — resolves the corpus through ONE file, `test-support/kotlin/fuaran/testing/WireCorpus.kt`,
+added to each module's test source set by its `build.gradle.kts` and compiled by name onto
+`run.ps1`'s `kotlinc` line. Order: `FUARAN_WIRE_FIXTURES`, then `-Dfuaran.corpus`, then
+`FUARAN_CORPUS`, then the side-by-side candidates. A declared root that is not the corpus is
+REFUSED, never fallen back from, and an absent corpus FAILS — it is required, not skipped. The
+corpus harness asserts that no other Kotlin source spells the corpus directory as a path literal.
 
 ## Build / verify pipeline
 

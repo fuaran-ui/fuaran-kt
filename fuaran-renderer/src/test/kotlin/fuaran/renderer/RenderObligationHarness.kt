@@ -596,17 +596,6 @@ fun renderObligationFailures(
 fun main() {
     println("== render-obligation conformance (WIRE_FORMAT.md 13) ==")
     val artifact = locateRenderFidelityArtifact()
-    if (artifact == null) {
-        // A standalone clone of this repo alone legitimately has no corpus, and the skip is honest
-        // there. The dishonest case — a cross-host checkout whose corpus has moved, where a skip
-        // would mean this gate certified NOTHING while reporting success — is discriminated and
-        // failed loudly by the `:fuaran-ui` decode harness later in the same run, naming every path
-        // it tried. One copy of that discrimination is enough; two would drift.
-        println(
-            "SKIP: render-fidelity.json not found (set $RENDER_FIDELITY_ENV or FUARAN_CORPUS). Nothing to certify.",
-        )
-        return
-    }
     println("Artefact: ${artifact.absolutePath}")
 
     val report = mutableListOf<ObligationReport>()

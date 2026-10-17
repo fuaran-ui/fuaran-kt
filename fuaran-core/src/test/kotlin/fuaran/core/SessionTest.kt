@@ -2,6 +2,7 @@
 // Copyright Diametrical Ltd.
 package fuaran.core
 
+import fuaran.testing.WireCorpus
 import fuaran.ui.Badge
 import fuaran.ui.BoundText
 import fuaran.ui.Box
@@ -128,19 +129,6 @@ private fun findNode(node: Node, id: String): Node? {
     return null
 }
 
-/** Locate the shared corpus `nodes/` dir, or null on a standalone checkout. */
-private fun locateCorpusNodes(): File? {
-    System.getenv("FUARAN_CORPUS")?.let {
-        val f = File(it, "nodes")
-        if (f.isDirectory) return f
-    }
-    for (c in listOf("../wire-format-fixtures", "../../wire-format-fixtures", "wire-format-fixtures")) {
-        val f = File(File(c), "nodes")
-        if (File(c, "manifest.json").isFile && f.isDirectory) return f
-    }
-    return null
-}
-
 fun main() {
     val libPath = System.getProperty("fuaran.lib")
     if (libPath.isNullOrBlank()) {
@@ -238,99 +226,96 @@ fun main() {
     }
 
     // --- Render-coverage-shaped: the two corpus fixtures project resolved scalar values ---
-    val corpusNodes = locateCorpusNodes()
-    if (corpusNodes == null) {
-        println("  skip project-resolved/corpus-fixtures (wire-format-fixtures corpus not found)")
-    } else {
-        runner.check("project-resolved/scalar-transform-composition") {
-            val raw = File(corpusNodes, "scalar-transform-composition.json").readText()
-            FuaranSession.create(NativeBridge, raw).use { session ->
-                val tree = decodeNode(session.projectResolved())
-                // Badge label — a global-aggregate scalar Transform → the count 2.
-                val badge = findNode(tree, "critical-count-badge") ?: error("critical-count-badge missing")
-                val bk = badge.kind
-                require(bk is Badge) { "expected a Badge, was ${bk::class.simpleName}" }
-                val bl = bk.label
-                require(bl is LiteralText && bl.text == "2") { "Badge must resolve the critical count 2, was $bl" }
-                // Callout body — a param-defaulted row-field lookup → the defaulted alert text.
-                val callout = findNode(tree, "sla-warning") ?: error("sla-warning missing")
-                val ck = callout.kind
-                require(ck is Callout) { "expected a Callout, was ${ck::class.simpleName}" }
-                val cb = ck.body
-                require(cb is LiteralText && cb.text == "TCK-2041 breaches SLA in 2 hours") {
-                    "Callout body must resolve the defaulted row's alert text, was $cb"
-                }
+    // The corpus is REQUIRED (Phase 2301): the one locator throws, naming what it tried, when there is none.
+    val corpusNodes = File(WireCorpus.root(), "nodes")
+    runner.check("project-resolved/scalar-transform-composition") {
+        val raw = File(corpusNodes, "scalar-transform-composition.json").readText()
+        FuaranSession.create(NativeBridge, raw).use { session ->
+            val tree = decodeNode(session.projectResolved())
+            // Badge label — a global-aggregate scalar Transform → the count 2.
+            val badge = findNode(tree, "critical-count-badge") ?: error("critical-count-badge missing")
+            val bk = badge.kind
+            require(bk is Badge) { "expected a Badge, was ${bk::class.simpleName}" }
+            val bl = bk.label
+            require(bl is LiteralText && bl.text == "2") { "Badge must resolve the critical count 2, was $bl" }
+            // Callout body — a param-defaulted row-field lookup → the defaulted alert text.
+            val callout = findNode(tree, "sla-warning") ?: error("sla-warning missing")
+            val ck = callout.kind
+            require(ck is Callout) { "expected a Callout, was ${ck::class.simpleName}" }
+            val cb = ck.body
+            require(cb is LiteralText && cb.text == "TCK-2041 breaches SLA in 2 hours") {
+                "Callout body must resolve the defaulted row's alert text, was $cb"
             }
         }
+    }
 
-        runner.check("project-resolved/master-detail-preselected") {
-            val raw = File(corpusNodes, "master-detail-preselected.json").readText()
-            FuaranSession.create(NativeBridge, raw).use { session ->
-                val tree = decodeNode(session.projectResolved())
-                // The detail Fact value is a Selection(defaultValue 'TCK-2041') — NOT a Transform —
-                // so the projection leaves it intact; the surface's BindingContext resolves the
-                // seeded default to TCK-2041 at render time.
-                val fact = findNode(tree, "detail-ticket") ?: error("detail-ticket missing")
-                val fk = fact.kind
-                require(fk is Fact) { "expected a Fact, was ${fk::class.simpleName}" }
-                val value = fk.value
-                require(value is BoundText && value.binding is SelectionBinding) {
-                    "the Fact value stays a Selection binding, was $value"
-                }
-                val sel = value.binding as SelectionBinding
-                require(sel.defaultValue != null) { "the Selection default (TCK-2041) survives the projection" }
+    runner.check("project-resolved/master-detail-preselected") {
+        val raw = File(corpusNodes, "master-detail-preselected.json").readText()
+        FuaranSession.create(NativeBridge, raw).use { session ->
+            val tree = decodeNode(session.projectResolved())
+            // The detail Fact value is a Selection(defaultValue 'TCK-2041') — NOT a Transform —
+            // so the projection leaves it intact; the surface's BindingContext resolves the
+            // seeded default to TCK-2041 at render time.
+            val fact = findNode(tree, "detail-ticket") ?: error("detail-ticket missing")
+            val fk = fact.kind
+            require(fk is Fact) { "expected a Fact, was ${fk::class.simpleName}" }
+            val value = fk.value
+            require(value is BoundText && value.binding is SelectionBinding) {
+                "the Fact value stays a Selection binding, was $value"
+            }
+            val sel = value.binding as SelectionBinding
+            require(sel.defaultValue != null) { "the Selection default (TCK-2041) survives the projection" }
+        }
+    }
+
+    // WIRE_FORMAT.md 24.4 - slot SEEDING, and the answer to this surface's
+    // adoption question: the derived value is INHERITED from the core.
+    //
+    // This surface carries no evaluator. A scalar Transform reaches it
+    // already folded by the core's project_resolved, and a row-context one
+    // arrives out of band through resolved_rows - both read the core's own
+    // binding sources, so the core's seeding pass is what fills the slot.
+    // There is deliberately no seeding pass on this side and there must not
+    // be one: a second pass over the same tree would be a second opinion
+    // about a value the core has already decided.
+    //
+    // The fixture declares two rows under $state.members on a grid's source,
+    // beside a badge whose Transform derives over the same key and carries
+    // no data of its own. 2 is what the reference tiers render. Observed RED
+    // with the core's seeding pass disabled (the badge label folds to the
+    // empty string), so this is a measurement rather than an assumption.
+    runner.check("project-resolved/state-seeded-pair") {
+        val raw = File(corpusNodes, "shared-source-seeded-pair.json").readText()
+        FuaranSession.create(NativeBridge, raw).use { session ->
+            val tree = decodeNode(session.projectResolved())
+            val badge = findNode(tree, "member-count") ?: error("member-count missing")
+            val bk = badge.kind
+            require(bk is Badge) { "expected a Badge, was ${bk::class.simpleName}" }
+            val bl = bk.label
+            require(bl is LiteralText && bl.text == "2") {
+                "the badge must derive the SIBLING grid's two declared rows, was $bl"
+            }
+            // The grid's rows come from the SAME slot, out of band.
+            val rows = session.resolvedRows("member-grid")
+            require(rows is ResolvedRows.Rows && rows.rows.size == 2) {
+                "the grid must resolve the two declared rows, was $rows"
             }
         }
+    }
 
-        // WIRE_FORMAT.md 24.4 - slot SEEDING, and the answer to this surface's
-        // adoption question: the derived value is INHERITED from the core.
-        //
-        // This surface carries no evaluator. A scalar Transform reaches it
-        // already folded by the core's project_resolved, and a row-context one
-        // arrives out of band through resolved_rows - both read the core's own
-        // binding sources, so the core's seeding pass is what fills the slot.
-        // There is deliberately no seeding pass on this side and there must not
-        // be one: a second pass over the same tree would be a second opinion
-        // about a value the core has already decided.
-        //
-        // The fixture declares two rows under $state.members on a grid's source,
-        // beside a badge whose Transform derives over the same key and carries
-        // no data of its own. 2 is what the reference tiers render. Observed RED
-        // with the core's seeding pass disabled (the badge label folds to the
-        // empty string), so this is a measurement rather than an assumption.
-        runner.check("project-resolved/state-seeded-pair") {
-            val raw = File(corpusNodes, "shared-source-seeded-pair.json").readText()
-            FuaranSession.create(NativeBridge, raw).use { session ->
-                val tree = decodeNode(session.projectResolved())
-                val badge = findNode(tree, "member-count") ?: error("member-count missing")
-                val bk = badge.kind
-                require(bk is Badge) { "expected a Badge, was ${bk::class.simpleName}" }
-                val bl = bk.label
-                require(bl is LiteralText && bl.text == "2") {
-                    "the badge must derive the SIBLING grid's two declared rows, was $bl"
-                }
-                // The grid's rows come from the SAME slot, out of band.
-                val rows = session.resolvedRows("member-grid")
-                require(rows is ResolvedRows.Rows && rows.rows.size == 2) {
-                    "the grid must resolve the two declared rows, was $rows"
-                }
-            }
-        }
-
-        // The go-red half. An assertion nobody has watched fail is a claim about
-        // the author's confidence, not about the seam - so a WRITE through the
-        // session's own channel must move the derived value, which also pins
-        // 24.4's precedence (a written value wins over a seed) from this side.
-        runner.check("project-resolved/a-write-overrides-the-seed") {
-            val raw = File(corpusNodes, "shared-source-seeded-pair.json").readText()
-            FuaranSession.create(NativeBridge, raw).use { session ->
-                session.setState("members", """[{"team":"Only"}]""")
-                val tree = decodeNode(session.projectResolved())
-                val badge = findNode(tree, "member-count") ?: error("member-count missing")
-                val bl = (badge.kind as Badge).label
-                require(bl is LiteralText && bl.text == "1") {
-                    "a written value did not override the seed, was $bl"
-                }
+    // The go-red half. An assertion nobody has watched fail is a claim about
+    // the author's confidence, not about the seam - so a WRITE through the
+    // session's own channel must move the derived value, which also pins
+    // 24.4's precedence (a written value wins over a seed) from this side.
+    runner.check("project-resolved/a-write-overrides-the-seed") {
+        val raw = File(corpusNodes, "shared-source-seeded-pair.json").readText()
+        FuaranSession.create(NativeBridge, raw).use { session ->
+            session.setState("members", """[{"team":"Only"}]""")
+            val tree = decodeNode(session.projectResolved())
+            val badge = findNode(tree, "member-count") ?: error("member-count missing")
+            val bl = (badge.kind as Badge).label
+            require(bl is LiteralText && bl.text == "1") {
+                "a written value did not override the seed, was $bl"
             }
         }
     }

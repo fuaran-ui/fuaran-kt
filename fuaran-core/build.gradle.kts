@@ -19,6 +19,8 @@ plugins {
 
 kotlin {
     jvmToolchain(21)
+    // Phase 2301 — the ONE corpus locator (`SessionTest` resolves the corpus through it).
+    sourceSets.named("test") { kotlin.srcDir(rootProject.file("test-support/kotlin")) }
 }
 
 dependencies {
@@ -58,6 +60,9 @@ tasks.test {
     if (requireNative.isPresent) {
         systemProperty("fuaran.requireNative", requireNative.get())
     }
+    // The corpus, forwarded explicitly for the reason `fuaran.requireNative` is above.
+    System.getenv("FUARAN_WIRE_FIXTURES")?.let { environment("FUARAN_WIRE_FIXTURES", it) }
+    System.getProperty("fuaran.corpus")?.let { systemProperty("fuaran.corpus", it) }
     testLogging {
         showStandardStreams = true
         events("passed", "skipped", "failed")

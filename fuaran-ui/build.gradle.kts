@@ -23,6 +23,9 @@ kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
     }
+    // Phase 2301 — the ONE corpus locator every harness resolves through, shared by every module's
+    // test source set (and compiled by name onto run.ps1's direct kotlinc line).
+    sourceSets.named("test") { kotlin.srcDir(rootProject.file("test-support/kotlin")) }
 }
 
 // Keep the (source-free) Java compile task's target in lockstep with Kotlin's 17 so Gradle's
@@ -46,11 +49,11 @@ tasks.register<JavaExec>("corpusCheck") {
     description = "Decode every node-round-trip fixture in the shared wire-format corpus."
     mainClass.set("fuaran.ui.CorpusDecodeTestKt")
     classpath = sourceSets["test"].runtimeClasspath
-    // The harness finds the corpus via -Dfuaran.corpus, $FUARAN_CORPUS, or a
-    // sibling checkout — and SKIPS cleanly when it finds none. A caller that
-    // means to GATE on it must therefore pass one of them (CI does, and asserts
-    // the run was not a skip).
+    // The harness finds the corpus through `WireCorpus` (test-support/): $FUARAN_WIRE_FIXTURES,
+    // -Dfuaran.corpus, $FUARAN_CORPUS, then a sibling checkout — and FAILS when it finds none.
+    // Forwarded explicitly rather than trusted to reach the harness JVM ambiently.
     System.getProperty("fuaran.corpus")?.let { systemProperty("fuaran.corpus", it) }
+    System.getenv("FUARAN_WIRE_FIXTURES")?.let { environment("FUARAN_WIRE_FIXTURES", it) }
     // The decode gate certifies the GENERATED model, so it first proves that model is the one
     // `idl.json` says it is.
     dependsOn("idlModelCheck")
@@ -59,14 +62,14 @@ tasks.register<JavaExec>("corpusCheck") {
 // Phase 2299 — the sealed tree model is generated from the corpus's `idl.json` by this module's own
 // generator (`src/test/kotlin/fuaran/ui/idl/`). This compares the generated files with what the IDL
 // produces and fails naming the regenerate command; `FUARAN_IDL_REGENERATE=1` rewrites them instead.
-// The corpus is found through FUARAN_WIRE_FIXTURES, -Dfuaran.corpus, FUARAN_CORPUS or a sibling
-// checkout, under the same skip-on-standalone / fail-on-cross-host posture as the decode harness.
+// The corpus is found through the same `WireCorpus` locator as the decode harness, and is required.
 tasks.register<JavaExec>("idlModelCheck") {
     group = "verification"
     description = "Fail when the generated model no longer matches the corpus idl.json (FUARAN_IDL_REGENERATE=1 rewrites it)."
     mainClass.set("fuaran.ui.idl.IdlModelCheckKt")
     classpath = sourceSets["test"].runtimeClasspath
     System.getProperty("fuaran.corpus")?.let { systemProperty("fuaran.corpus", it) }
+    System.getenv("FUARAN_WIRE_FIXTURES")?.let { environment("FUARAN_WIRE_FIXTURES", it) }
 }
 
 // Maven Central — the artifact shape only; identity, licence and SCM are configured once in the

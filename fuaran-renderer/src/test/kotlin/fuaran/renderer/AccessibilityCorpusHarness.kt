@@ -2,6 +2,7 @@
 // Copyright Diametrical Ltd.
 package fuaran.renderer
 
+import fuaran.testing.WireCorpus
 import fuaran.ui.decodeNode
 import java.io.File
 
@@ -40,65 +41,9 @@ private val A11Y_FAMILY =
         "a11y-image-decorative",
     )
 
-private val CORPUS_CANDIDATES =
-    listOf(
-        "../wire-format-fixtures",
-        "../../wire-format-fixtures",
-        "wire-format-fixtures",
-        "fuaran-kt/../wire-format-fixtures",
-    )
-
 /**
- * The markers that identify THIS corpus, as opposed to any other corpus in the estate.
- *
- * `manifest.json` alone does not identify anything: the wire corpus's own `sanitization/`,
- * `dag/` and `merge-conformance/` sub-corpora each carry one, and so does every other
- * specification corpus in the estate. A predicate that accepts any directory containing a
- * `manifest.json` therefore ACCEPTS a wrong corpus and fails downstream with "fixture X is
- * absent" — loud, and about the wrong thing. These two files sit only at the root of the wire
- * corpus, and the manifest names the second itself.
- */
-private val CORPUS_IDENTITY_MARKERS = listOf("manifest.json", "idl.json", "WIRE_FORMAT.md")
-
-private fun isWireCorpus(dir: File): Boolean = CORPUS_IDENTITY_MARKERS.all { File(dir, it).isFile }
-
-/**
- * Locate the corpus. `FUARAN_CORPUS` is what the repo's own driver sets; `fuaran.corpus` is what
- * the Gradle unit-test task sets, so the same leg runs under either gate without a second copy of
- * the expectations.
- *
- * **A DECLARED root is refused BY NAME rather than fallen back from** (Phase 1654, the 2026-08-29
- * resolver sweep's item 5). The fixed candidate list below is safe by construction — those paths
- * can only be this corpus — so the hazard is entirely on the declared leg: an operator who points
- * the variable at a sibling corpus, or at a stale path, previously got either silent acceptance of
- * the wrong tree or a silent fall-through to the right one. Both are misdiagnoses. Falling back is
- * the worse of the two, because it makes the override unfalsifiable: a typo'd path produces a run
- * that looks exactly like a working one, so nobody learns the variable was never read.
- */
-internal fun locateA11yCorpus(): File? {
-    val declared = listOfNotNull(System.getenv("FUARAN_CORPUS"), System.getProperty("fuaran.corpus"))
-    for (d in declared) {
-        val f = File(d)
-        if (isWireCorpus(f)) return f
-        val missing = CORPUS_IDENTITY_MARKERS.filterNot { File(f, it).isFile }
-        error(
-            "the declared corpus root '$d' (${f.absolutePath}) is not the Fuaran UI wire-format corpus: " +
-                "$missing absent. It is REFUSED rather than ignored — falling back to the search below " +
-                "would run this gate against a corpus you did not name, and a typo would look identical " +
-                "to a working run. Point FUARAN_CORPUS / -Dfuaran.corpus at the wire-format corpus root, " +
-                "or unset it and let the search find it.",
-        )
-    }
-    for (c in CORPUS_CANDIDATES) {
-        val f = File(c)
-        if (isWireCorpus(f)) return f
-    }
-    return null
-}
-
-/**
- * Run the corpus-driven projection leg, returning the failures. Empty means green; a null corpus is
- * reported by the caller rather than silently read as success.
+ * Run the corpus-driven projection leg, returning the failures. Empty means green; a missing corpus
+ * never reaches here, because [WireCorpus.root] throws first.
  */
 fun a11yCorpusFailures(corpus: File): List<String> {
     val ctx = BindingContext.Empty
@@ -223,16 +168,8 @@ var a11yCorpusChecksRun = 0
 
 fun main() {
     println("== accessibility projection :: corpus-driven (value AND drop set, asserted exactly) ==")
-    val corpus = locateA11yCorpus()
-    if (corpus == null) {
-        // A standalone clone of this repo alone legitimately has no corpus, and the skip is honest
-        // there. The dishonest case — a cross-host checkout whose corpus has moved, where a skip
-        // would mean this gate certified NOTHING while reporting success — is discriminated and
-        // failed loudly by the `:fuaran-ui` decode harness later in the same run, naming every
-        // path it tried. One copy of that discrimination is enough; two would drift.
-        println("SKIP: wire-format-fixtures corpus not found (set FUARAN_CORPUS). Nothing to certify.")
-        return
-    }
+    // The corpus is REQUIRED (Phase 2301): the one locator throws, naming what it tried, when there is none.
+    val corpus = WireCorpus.root()
     println("Corpus: ${corpus.absolutePath}")
     val failures = a11yCorpusFailures(corpus)
     if (failures.isEmpty()) {

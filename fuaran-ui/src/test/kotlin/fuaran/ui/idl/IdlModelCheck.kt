@@ -2,6 +2,7 @@
 // Copyright Diametrical Ltd.
 package fuaran.ui.idl
 
+import fuaran.testing.WireCorpus
 import java.io.File
 import java.security.MessageDigest
 import kotlin.system.exitProcess
@@ -20,49 +21,16 @@ import kotlin.system.exitProcess
  * A dialect refusal (an entry naming something the IDL no longer has, or restating a rule) fails
  * either mode before anything is written.
  *
- * **Locating the corpus.** `FUARAN_WIRE_FIXTURES` first, then `-Dfuaran.corpus`, then
- * `FUARAN_CORPUS`, then the side-by-side candidates the decode harness also tries. Missing on a
- * standalone clone of this repository is a SKIP; missing on a checkout that plainly has sibling
- * surfaces beside it (or with `FUARAN_REQUIRE_CORPUS=1`) is a FAILURE — a drift check that quietly
- * compared nothing is the vacuous green this posture exists to refuse.
+ * **Locating the corpus.** Through the one locator every harness here shares, [WireCorpus]:
+ * `FUARAN_WIRE_FIXTURES` first, then `-Dfuaran.corpus`, then `FUARAN_CORPUS`, then the side-by-side
+ * candidates. The corpus is REQUIRED — a drift check that quietly compared nothing is the vacuous
+ * green this posture exists to refuse.
  *
  * Plain `main()`-driven, like the corpus decode harness: the exit code is the gate.
  */
 private const val REGENERATE_HINT =
     "regenerate: FUARAN_IDL_REGENERATE=1 ./gradlew :fuaran-ui:idlModelCheck   " +
         "(PowerShell: \$env:FUARAN_IDL_REGENERATE='1'; ./gradlew.bat :fuaran-ui:idlModelCheck)"
-
-private val CANDIDATES = listOf("../wire-format-fixtures", "../../wire-format-fixtures", "wire-format-fixtures")
-
-private val SIBLING_HOST_NAMES =
-    listOf("fuaran-dotnet", "fuaran", "fuaran-ts", "fuaran-py", "fuaran-go", "fuaran-rs", "fuaran-swift")
-
-/** The repository root: the nearest ancestor of the working directory holding the `fuaran-ui` module. */
-private fun repoRoot(): File {
-    var dir: File? = File(".").absoluteFile
-    while (dir != null) {
-        if (File(dir, "fuaran-ui/src/main/kotlin/fuaran/ui").isDirectory) return dir
-        dir = dir.parentFile
-    }
-    error("cannot find the repository root (no fuaran-ui/src/main/kotlin/fuaran/ui above ${File(".").absolutePath})")
-}
-
-private fun locateIdl(root: File): File? {
-    val explicit =
-        listOfNotNull(System.getenv("FUARAN_WIRE_FIXTURES"), System.getProperty("fuaran.corpus"), System.getenv("FUARAN_CORPUS"))
-    for (e in explicit) File(e, "idl.json").takeIf { it.isFile }?.let { return it }
-    for (c in CANDIDATES) File(root, c).resolve("idl.json").takeIf { it.isFile }?.let { return it.canonicalFile }
-    return null
-}
-
-private fun crossHostSibling(root: File): File? {
-    var dir: File? = root.parentFile
-    while (dir != null) {
-        for (name in SIBLING_HOST_NAMES) File(dir, name).takeIf { it.isDirectory }?.let { return it }
-        dir = dir.parentFile
-    }
-    return null
-}
 
 fun sha256Hex(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
@@ -92,21 +60,9 @@ private fun firstDifference(want: String, got: String): String {
 }
 
 fun main() {
-    val root = repoRoot()
-    val idlFile = locateIdl(root)
-    if (idlFile == null) {
-        val sibling = crossHostSibling(root)
-        if (sibling != null || System.getenv("FUARAN_REQUIRE_CORPUS") == "1") {
-            println("FAIL: no corpus idl.json found, on a checkout that should have one (${sibling ?: "FUARAN_REQUIRE_CORPUS=1"}).")
-            println("  FUARAN_WIRE_FIXTURES=${System.getenv("FUARAN_WIRE_FIXTURES") ?: "<unset>"}")
-            println("  FUARAN_CORPUS=${System.getenv("FUARAN_CORPUS") ?: "<unset>"}")
-            for (c in CANDIDATES) println("  tried: ${File(root, c).absolutePath}")
-            println("The model drift check compared NOTHING.")
-            exitProcess(1)
-        }
-        println("SKIP: no wire corpus beside this checkout (set FUARAN_WIRE_FIXTURES). The model was not compared.")
-        return
-    }
+    val root = WireCorpus.repoRoot()
+    // The corpus is REQUIRED (Phase 2301): the one locator throws, naming what it tried, when there is none.
+    val idlFile = File(WireCorpus.root(), "idl.json")
     println("idl.json: ${idlFile.path}")
     val generated =
         try {

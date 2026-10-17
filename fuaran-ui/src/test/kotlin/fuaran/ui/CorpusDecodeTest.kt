@@ -2,6 +2,7 @@
 // Copyright Diametrical Ltd.
 package fuaran.ui
 
+import fuaran.testing.WireCorpus
 import java.io.File
 
 /**
@@ -18,10 +19,10 @@ import java.io.File
  *  * **reject** — every malformed fixture must fail with the canonical code and a `$`-rooted
  *    path prefix. A decode that SUCCEEDS is the hard failure.
  *
- * The harness locates the corpus via `manifest.json` — the authoritative fixture enumeration
- * — and **skips cleanly** when the corpus is absent, so `fuaran-ui` stays standalone-testable.
- * When it does find one, a family that enumerates zero fixtures fails the run: a leg that
- * quietly checked nothing is the failure shape worth catching explicitly.
+ * The harness locates the corpus through the one locator, [WireCorpus] (Phase 2301), and reads
+ * `manifest.json` — the authoritative fixture enumeration. The corpus is REQUIRED: an absent one
+ * fails the run naming every path tried, and so does a family that enumerates zero fixtures — a
+ * leg that quietly checked nothing is the failure shape worth catching explicitly.
  *
  * This is a plain-JVM `main`-driven runner rather than a Gradle/JUnit launch: the repo
  * builds with a bare `kotlinc`, no artefact resolution, and the exit code is the gate.
@@ -47,51 +48,6 @@ private class Runner {
             failures.add("$name — ${e::class.simpleName}: ${e.message}")
         }
     }
-}
-
-private val CORPUS_CANDIDATES =
-    listOf(
-        "../wire-format-fixtures",
-        "../../wire-format-fixtures",
-        "wire-format-fixtures",
-        "fuaran-kt/../wire-format-fixtures",
-    )
-
-/**
- * Sibling hosts whose presence proves this is a CROSS-HOST checkout — the shape the
- * conformance gate is built from — rather than a standalone clone of this repo alone.
- * Excludes this host.
- */
-private val SIBLING_HOST_NAMES =
-    listOf("fuaran-dotnet", "fuaran", "fuaran-ts", "fuaran-py", "fuaran-go", "fuaran-rs", "fuaran-swift")
-
-private fun locateCorpus(): File? {
-    System.getenv("FUARAN_CORPUS")?.let {
-        val f = File(it)
-        if (File(f, "manifest.json").isFile) return f
-    }
-    for (c in CORPUS_CANDIDATES) {
-        val f = File(c)
-        if (File(f, "manifest.json").isFile) return f
-    }
-    return null
-}
-
-/**
- * Walks up from the working directory looking for a sibling host. A hit means the corpus
- * is absent from a checkout that plainly HAS one — it moved, was renamed, or the harness's
- * candidate list went stale — and the right answer is to fail, not to skip.
- */
-private fun crossHostSibling(): Pair<String, File>? {
-    var dir: File? = File(".").absoluteFile
-    while (dir != null) {
-        for (name in SIBLING_HOST_NAMES) {
-            val candidate = File(dir, name)
-            if (candidate.isDirectory) return name to dir
-        }
-        dir = dir.parentFile
-    }
-    return null
 }
 
 private data class Fixture(
@@ -124,32 +80,8 @@ private fun manifestFixtures(manifestJson: String): List<Fixture> {
 }
 
 fun main() {
-    val corpus = locateCorpus()
-    if (corpus == null) {
-        // A missing corpus has two very different meanings, and collapsing them into one
-        // clean `SKIP` + exit 0 is a vacuous green: on a standalone clone the skip is
-        // honest, but on a cross-host checkout it means the conformance gate silently
-        // certified NOTHING while reporting success. Discriminate, and fail loudly in
-        // the second case — naming every path that was tried, so the fix is to correct
-        // the candidate list rather than to let the harness keep skipping.
-        val sibling = crossHostSibling()
-        if (sibling != null) {
-            val (name, at) = sibling
-            println(
-                "FAIL: cross-host checkout detected ($name/ is present under ${at.path}) but the " +
-                    "wire-format-fixtures corpus is at none of the paths tried — this gate certified NOTHING.",
-            )
-            println("  FUARAN_CORPUS=${System.getenv("FUARAN_CORPUS") ?: "<unset>"}")
-            for (c in CORPUS_CANDIDATES) println("  tried: ${File(c).absolutePath}")
-            println(
-                "  If the corpus moved or was renamed, add the new location to CORPUS_CANDIDATES " +
-                    "rather than letting the harness skip.",
-            )
-            kotlin.system.exitProcess(1)
-        }
-        println("SKIP: wire-format-fixtures corpus not found (set FUARAN_CORPUS or run from the repo). Nothing to certify.")
-        return
-    }
+    // The corpus is REQUIRED: the one locator throws, naming what it tried, when there is none.
+    val corpus = WireCorpus.root()
     println("Corpus: ${corpus.absolutePath}")
     val manifest = File(corpus, "manifest.json").readText()
     val all = manifestFixtures(manifest)
@@ -1701,6 +1633,19 @@ fun main() {
             } catch (e: Throwable) {
                 error("decodeNode threw an untyped ${e::class.simpleName} on '${input.take(40)}': ${e.message}")
             }
+        }
+    }
+
+    // Phase 2301 — ONE corpus locator. Every harness resolves the corpus through `WireCorpus`, so a
+    // Kotlin source spelling the corpus directory as a path literal is a second locator in the making:
+    // the six that existed before it disagreed about which variables they honoured.
+    runner.check("locator/one-corpus-locator") {
+        val offenders = WireCorpus.literalPathOffenders(WireCorpus.repoRoot())
+        if (offenders.isNotEmpty()) {
+            error(
+                "the corpus directory is spelled as a path outside WireCorpus.kt; resolve it through " +
+                    "WireCorpus.root():\n    " + offenders.joinToString("\n    "),
+            )
         }
     }
 

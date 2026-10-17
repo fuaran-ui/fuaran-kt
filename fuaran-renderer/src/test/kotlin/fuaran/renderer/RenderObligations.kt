@@ -2,6 +2,7 @@
 // Copyright Diametrical Ltd.
 package fuaran.renderer
 
+import fuaran.testing.WireCorpus
 import fuaran.ui.Json
 import fuaran.ui.JsonArray
 import fuaran.ui.JsonObject
@@ -161,7 +162,7 @@ internal fun loadResidue(section: String): Set<String> {
  * corpus: a fall-back would make the go-red proof unfalsifiable, because a mistyped path would
  * produce the same green run as an unperturbed one.
  */
-internal fun locateRenderFidelityArtifact(): File? {
+internal fun locateRenderFidelityArtifact(): File {
     System.getenv(RENDER_FIDELITY_ENV)?.let { declared ->
         val f = File(declared)
         if (f.isFile) return f
@@ -170,9 +171,11 @@ internal fun locateRenderFidelityArtifact(): File? {
                 "the corpus copy: a silent fall-back would make an override-driven proof unfalsifiable.",
         )
     }
-    val corpus = locateA11yCorpus() ?: return null
-    val artifact = File(corpus, "render-fidelity.json")
-    return if (artifact.isFile) artifact else null
+    // The corpus is REQUIRED (Phase 2301), and so is the artefact it carries: the one locator throws
+    // when there is no corpus, and a corpus without the artefact is a corpus this gate cannot read.
+    val artifact = File(WireCorpus.root(), "render-fidelity.json")
+    if (!artifact.isFile) error("the corpus carries no render-fidelity.json at ${artifact.absolutePath}")
+    return artifact
 }
 
 // --------------------------------------------------------------------------- //

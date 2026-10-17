@@ -2,6 +2,7 @@
 // Copyright Diametrical Ltd.
 package fuaran.ui
 
+import fuaran.testing.WireCorpus
 import java.io.File
 
 /**
@@ -71,7 +72,7 @@ import java.io.File
  * FUARAN_FUZZ_SEED=<n>          replay a specific stream (default 1023)
  * FUARAN_FUZZ_ITERATIONS=<n>    inputs per entry point (default 50000 bounded, 250000 long)
  * FUARAN_FUZZ_LONG=1            the long profile: larger payloads, more pathological inputs
- * FUARAN_CORPUS=<dir>           the shared fixture corpus, used as the seed pool
+ * FUARAN_WIRE_FIXTURES=<dir>    the shared fixture corpus, used as the seed pool (REQUIRED; see WireCorpus)
  * ```
  *
  * A counterexample is reported with its MINIMISED input and the escaping throwable's class. The
@@ -141,46 +142,6 @@ private const val WELL_FORMED_NODE =
     "{\"id\":\"markdown-1\",\"kind\":{\"\$type\":\"Markdown\",\"text\":\"Updated hourly.\"}}"
 
 /**
- * Corpus candidates, and the cross-host discrimination beside them, are a deliberate SECOND COPY of
- * the ones in `CorpusDecodeTest`. Kotlin top-level `private` is file-scoped, so sharing them would
- * mean widening that file's declarations - an edit to a file this change has no other reason to
- * touch, for a nine-line list. The duplication is cheap and visible; the coupling would not be.
- */
-private val FUZZ_CORPUS_CANDIDATES =
-    listOf(
-        "../wire-format-fixtures",
-        "../../wire-format-fixtures",
-        "wire-format-fixtures",
-        "fuaran-kt/../wire-format-fixtures",
-    )
-
-private val FUZZ_SIBLING_HOST_NAMES =
-    listOf("fuaran-dotnet", "fuaran", "fuaran-ts", "fuaran-py", "fuaran-go", "fuaran-rs", "fuaran-swift")
-
-private fun locateFuzzCorpus(): File? {
-    System.getenv("FUARAN_CORPUS")?.let {
-        val f = File(it)
-        if (File(f, "manifest.json").isFile) return f
-    }
-    for (c in FUZZ_CORPUS_CANDIDATES) {
-        val f = File(c)
-        if (File(f, "manifest.json").isFile) return f
-    }
-    return null
-}
-
-private fun fuzzCrossHostSibling(): Pair<String, File>? {
-    var dir: File? = File(".").absoluteFile
-    while (dir != null) {
-        for (name in FUZZ_SIBLING_HOST_NAMES) {
-            if (File(dir, name).isDirectory) return name to dir
-        }
-        dir = dir.parentFile
-    }
-    return null
-}
-
-/**
  * Every corpus payload this harness can find, as raw text. READ-ONLY by construction: the fuzz
  * never writes into the corpus. A REJECT fixture is the most productive seed there is, since it
  * already sits one edit away from the refusal boundary the fuzz is probing.
@@ -190,9 +151,8 @@ private fun fuzzCrossHostSibling(): Pair<String, File>? {
  * document is simply not a node, every mutation of one lands in the same shallow envelope refusal,
  * and including them would displace mutations that reach a typed slot with mutations that cannot.
  */
-private fun loadFuzzSeeds(corpus: File?): List<String> {
+private fun loadFuzzSeeds(corpus: File): List<String> {
     val seeds = BUILTIN_SEEDS.toMutableList()
-    if (corpus == null) return seeds
     for (family in listOf("nodes", "lenient", "reject")) {
         val files = File(corpus, family).listFiles() ?: continue
         for (f in files.sortedBy { it.name }) {
@@ -211,16 +171,13 @@ private val FALLBACK_VOCAB =
  * newly-admitted kind is fuzzed the day it lands rather than whenever someone remembers to extend a
  * literal list here. Parsed with this host's own reader, which is the only one it has.
  */
-private fun loadFuzzVocabulary(corpus: File?): List<String> {
-    if (corpus != null) {
-        val names =
-            runCatching {
-                val root = Json.parse(File(corpus, "manifest.json").readText()) as JsonObject
-                (root["kinds"] as? JsonArray)?.items.orEmpty().mapNotNull { (it as? JsonString)?.value }
-            }.getOrDefault(emptyList())
-        if (names.isNotEmpty()) return names
-    }
-    return FALLBACK_VOCAB
+private fun loadFuzzVocabulary(corpus: File): List<String> {
+    val names =
+        runCatching {
+            val root = Json.parse(File(corpus, "manifest.json").readText()) as JsonObject
+            (root["kinds"] as? JsonArray)?.items.orEmpty().mapNotNull { (it as? JsonString)?.value }
+        }.getOrDefault(emptyList())
+    return names.ifEmpty { FALLBACK_VOCAB }
 }
 
 // --------------------------------------------------------------------------- //
@@ -1251,23 +1208,9 @@ private fun envInt(name: String, fallback: Int): Int {
 }
 
 fun main() {
-    val corpus = locateFuzzCorpus()
-    if (corpus == null) {
-        // A missing corpus has two very different meanings, and collapsing them into one clean
-        // SKIP would be a vacuous green on a checkout that plainly HAS a corpus. The same
-        // discrimination the corpus harness makes, for the same reason.
-        val sibling = fuzzCrossHostSibling()
-        if (sibling != null) {
-            val (name, at) = sibling
-            println(
-                "FAIL: cross-host checkout detected ($name/ is present under ${at.path}) but the " +
-                    "wire-format-fixtures corpus is at none of the paths tried.",
-            )
-            println("  FUARAN_CORPUS=${System.getenv("FUARAN_CORPUS") ?: "<unset>"}")
-            for (c in FUZZ_CORPUS_CANDIDATES) println("  tried: ${File(c).absolutePath}")
-            kotlin.system.exitProcess(1)
-        }
-    }
+    // The corpus is REQUIRED (Phase 2301): the one locator throws, naming what it tried, when there
+    // is none. The built-in seeds still make the go-red self-tests independent of its content.
+    val corpus = WireCorpus.root()
 
     val seeds = loadFuzzSeeds(corpus)
     val vocab = loadFuzzVocabulary(corpus)
@@ -1276,7 +1219,7 @@ fun main() {
     val seed = envLong("FUARAN_FUZZ_SEED", DEFAULT_SEED)
     val iterations = envInt("FUARAN_FUZZ_ITERATIONS", if (long) 250_000 else 50_000)
 
-    println("Corpus: ${corpus?.absolutePath ?: "<absent - built-in seeds only>"}")
+    println("Corpus: ${corpus.absolutePath}")
     println("Seeds: ${seeds.size} (${BUILTIN_SEEDS.size} built in); vocabulary: ${vocab.size} kinds")
 
     // ORDER: the harness proves itself, then the targeted vectors, then the fuzz. A broken harness
@@ -1286,12 +1229,8 @@ fun main() {
     val self = goRedSelfTests(seeds, vocab, seed)
 
     println("")
-    if (corpus != null) {
-        println("-- the corpus reject-binding-int vectors, asserted directly --")
-        assertRejectBindingIntVectors(corpus, self)
-    } else {
-        println("NOT CHECKED: the reject-binding-int vectors need the corpus; it is absent here.")
-    }
+    println("-- the corpus reject-binding-int vectors, asserted directly --")
+    assertRejectBindingIntVectors(corpus, self)
 
     if (self.failures.isNotEmpty()) {
         println("")
