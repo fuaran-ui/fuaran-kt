@@ -112,7 +112,7 @@ jobs:
           echo "FUARAN_REQUIRE_CORPUS=1" >> "$GITHUB_ENV"
           echo "corpus fixtures declared: $(grep -o '"id"' _corpus/manifest.json | wc -l)"
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -323,7 +323,7 @@ jobs:
           fi
           echo "fuaran.h byte-identical to the reference."
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
