@@ -13,8 +13,8 @@
   There is no Gradle binary on the reference dev box, so this driver compiles directly
   with `kotlinc` / `javac` / `java`; the committed `build.gradle.kts` files are a
   forward-looking scaffold for a future Gradle build. The harnesses skip cleanly when a
-  prerequisite (JDK, corpus, Rust toolchain, C compiler) is absent, so the repo stays
-  green on any machine.
+  prerequisite (JDK, Rust toolchain, C compiler) is absent, so the repo stays
+  green on any machine. The wire corpus is not such a prerequisite: it is required (Phase 2301).
 
 .PARAMETER SkipBuild
   Reuse the existing compiled jar; only run the test harnesses.
@@ -58,7 +58,19 @@ $BuildDir = Join-Path $Repo "build"
 $ClassesDir = Join-Path $BuildDir "classes"
 $JniGenDir = Join-Path $Repo "fuaran-core\src\main\jni\generated"
 $Jar = Join-Path $BuildDir "fuaran-kt.jar"
-$Corpus = Resolve-Path (Join-Path $Repo "..\wire-format-fixtures") -ErrorAction SilentlyContinue
+# Phase 2301 — the corpus: FUARAN_WIRE_FIXTURES first, and a set-but-missing one FAILS rather than
+# falling back (a probe pointing this run at a perturbed copy would otherwise certify the original);
+# then FUARAN_CORPUS; then the side-by-side layout. The harnesses resolve through `WireCorpus` in the
+# same order, and $env:FUARAN_CORPUS / -Dfuaran.corpus below hand them this one answer.
+if ($env:FUARAN_WIRE_FIXTURES) {
+    $Corpus = Resolve-Path $env:FUARAN_WIRE_FIXTURES -ErrorAction SilentlyContinue
+    if (-not $Corpus -or -not (Test-Path (Join-Path $Corpus "manifest.json"))) {
+        Write-Error "FUARAN_WIRE_FIXTURES names '$($env:FUARAN_WIRE_FIXTURES)', which holds no manifest.json. Refusing to fall back to another corpus." -ErrorAction Continue
+        exit 1
+    }
+}
+elseif ($env:FUARAN_CORPUS) { $Corpus = Resolve-Path $env:FUARAN_CORPUS -ErrorAction SilentlyContinue }
+else { $Corpus = Resolve-Path (Join-Path $Repo "..\wire-format-fixtures") -ErrorAction SilentlyContinue }
 
 # --- Failure COLLECTION across the verification legs -------------------------------- #
 #
@@ -296,6 +308,8 @@ $RendererNeutralKt = @(
 # (e.g. `:fuaran-core` `InteractionRoundTripTest`, which pulls JUnit + `:fuaran-driver`) are built and
 # run by Gradle — they are absent from this no-Gradle-binary classpath by design.
 $TestKt = @(
+    # Phase 2301 — the ONE corpus locator every harness below resolves through.
+    (Join-Path $Repo "test-support/kotlin/fuaran/testing/WireCorpus.kt")
     Get-ChildItem -Recurse -Path (Join-Path $Repo "fuaran-ui\src\test\kotlin") -Filter "CorpusDecodeTest.kt" -ErrorAction SilentlyContinue |
         ForEach-Object FullName
     # The decoder-robustness fuzz leg (Phase 1023's family, extended here by Phase 1540 H-30). Named
@@ -494,7 +508,7 @@ if ($HasSessionTest) {
     # LAST native command set, so this test read a stale code from an unrelated
     # step. On the first run of a fresh session it is $null, and `$null -ne 0` is
     # TRUE — so a perfectly good native build was discarded as a failure.
-    $LASTEXITCODE = 0
+    $global:LASTEXITCODE = 0
     $nativeDll = & (Join-Path $Repo "dev-scripts/build-native-desktop.ps1") -Repo $Repo -ClassesDir $ClassesDir -JniGenDir $JniGenDir
     if ($LASTEXITCODE -ne 0 -or -not $nativeDll) {
         Write-Host "SKIP: desktop JNI leg — Rust toolchain / C compiler unavailable (see message above)." -ForegroundColor Yellow
@@ -645,7 +659,7 @@ if ($Package) {
     if ($LASTEXITCODE -ne 0) { throw "kotlinc (aar classes) failed" }
 
     # Seeded for the same reason as the desktop leg above.
-    $LASTEXITCODE = 0
+    $global:LASTEXITCODE = 0
     $aar = & (Join-Path $Repo "dev-scripts/build-android-aar.ps1") -Repo $Repo -ClassesDir $AarClasses
     if ($LASTEXITCODE -ne 0) { throw "Android AAR packaging failed" }
     if (-not $aar) {
