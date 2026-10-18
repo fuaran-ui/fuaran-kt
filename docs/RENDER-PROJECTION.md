@@ -110,7 +110,9 @@ class FuaranDecodeException(
 These are the canonical codes every conformant host reports at the same paths, so
 a malformed tree reasons the same way here as anywhere else. An unrecognised
 discriminator raises `UNKNOWN_DU_CASE` — there is no catch-all arm producing a
-generic node.
+generic node. Every union dispatch reads its `$type` through that union's
+generated case-tag set and is a `when` with no `else` (Phase 2331), so a case
+the vocabulary gains is a compile error in the decoder until its arm is written.
 
 `LIMIT_EXCEEDED` is deliberately distinct from `INVALID_JSON`: it means the
 document is well formed and merely too large to walk. The reader raises two
@@ -153,6 +155,23 @@ closure is dropped. Host-opaque payloads stay raw `JsonValue`
 
 There is also **no `TreeOp` decoder at all**, and that is the boundary again: the
 core owns apply, so a render projection never sees an op.
+
+### Carried but not rendered
+
+Since Phase 2331 every wire data field the vocabulary declares is carried by the
+model; none is dropped at decode. Some are carried and not yet SHOWN by the
+Compose renderer, whose chart, grid and drawing arms are informational cards
+rather than plotted, paged or painted output:
+
+| Member | Why the renderer does not show it |
+|---|---|
+| `Chart.valueFormat`, `xTitle`, `yTitle`, `subtitle`, `legendPosition`, `dataLabels`, `xScale` | the chart arm is a summary card (title, kind, fields); no axis, legend or label is drawn for these to configure |
+| `DataGrid.reorderable` | the grid arm offers no column interaction to reorder |
+| `DataGrid.windowStateKey`, `rowTotal` | the grid arm renders the rows it holds; it neither writes a window nor states a page count |
+| `GridColumn.sortable`, `editable` | the grid arm has no sort or edit affordance for a column to narrow |
+| `DrawStyle.rotation`, `tip` | the drawing arm paints no geometry; it lists label texts, so there is no mark to rotate or to carry a tip |
+
+Each becomes owed in the same change that gives its arm the matching output.
 
 ## The safety floor
 

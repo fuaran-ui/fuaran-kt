@@ -52,6 +52,7 @@ fuaran-kt/
 │       ├── Model.generated.kt       # GENERATED from idl.json: the sealed tree (Node / NodeKind / Binding / ...)
 │       ├── Enums.generated.kt       # GENERATED from idl.json: the bare-string wire enums
 │       ├── NodeCategory.generated.kt # GENERATED from idl.json: the exhaustive (else-free) dispatch spines
+│       ├── UnionTags.generated.kt   # GENERATED from idl.json: one case-tag set per union (Phase 2331)
 │       ├── Model.kt / Enums.kt      # the hand-written remainder: SwitchCase, FragmentArg, enumOf(), WireEnum
 │       ├── Decode.kt                # the render-projection decoder
 │       └── Session.kt               # (Phase 543) the confined FuaranSession wrapper
@@ -70,19 +71,26 @@ fuaran-kt/
 ## The generated model (Phase 2299)
 
 The sealed tree model — the node envelope, one `NodeKind` class per kind, every record and union,
-the bare-string enums, `NodeCategory` with the `category()` / `discriminator()` spines, and the
-kind-tag set the decoder dispatches on — is **generated from the corpus's `idl.json`** into
-`Model.generated.kt`, `Enums.generated.kt` and `NodeCategory.generated.kt`. Never edit those three;
-regenerate. The generator is this repository's own, in Kotlin, in the `fuaran-ui` TEST source set
+the bare-string enums, `NodeCategory` with the `category()` / `discriminator()` spines, the
+kind-tag set the decoder dispatches on, and the per-union case-tag sets — is **generated from the
+corpus's `idl.json`** into `Model.generated.kt`, `Enums.generated.kt`, `NodeCategory.generated.kt` and
+`UnionTags.generated.kt`. Never edit those four; regenerate. The generator is this repository's own, in Kotlin, in the `fuaran-ui` TEST source set
 (`src/test/kotlin/fuaran/ui/idl/`), so it ships in no artefact.
 
 - **Rules + dialect.** `ModelGenerator.kt` states the uniform mapping rules (names, types,
   optionality and declared defaults, closure and host-only slots, IDL order). Every place the public
   model diverges from them is ONE entry in `Dialect.kt` with its reason — a shipped name, a shipped
-  constructor order, a raw-held slot, a presence flag, a field not carried. The generator REFUSES an
-  entry naming something the IDL no longer has and one restating what the rules already produce, so
-  the dialect is complete or generation fails. A host representation quirk goes in the dialect,
-  never into the IDL.
+  constructor order, a raw-held slot, a presence flag. The generator REFUSES an entry naming
+  something the IDL no longer has and one restating what the rules already produce, so the dialect is
+  complete or generation fails. A host representation quirk goes in the dialect, never into the IDL.
+- **Every data field is carried (Phase 2331).** The dialect has no entry for dropping a wire data
+  field. A field the IDL gains is generated as a property; on a type whose constructor order is pinned
+  by a `FieldOrder` entry, generation REFUSES naming the field until it is appended to that order.
+  The drift check proves both by perturbing the IDL (`GeneratorRuleChecks.kt`).
+- **Union tag sets (Phase 2331).** `UnionTags.generated.kt` holds one `<Union>Tag` enum per IDL union;
+  every union dispatch in `Decode.kt` is an `else`-free `when` over `tagOf<…Tag>(…)`, so a union case
+  added to the IDL is a compile error in the decoder until its arm is written. A legacy spelling is
+  mapped to its tag before the lookup.
 - **Hand-written over it.** `SwitchCase` and `FragmentArg` stay in `Model.kt` (their shape is not a
   function of their IDL type) and are pinned by generated exhaustive checks; `enumOf` / `wireEnumOf`
   / `WireEnum` stay in `Enums.kt`; the KDoc the generated declarations carry lives in
