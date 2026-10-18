@@ -237,15 +237,14 @@ val DIALECT: List<DialectEntry> =
             "false",
             "absent reads as single-select; the projection hands out the resolved flag rather than a third state",
         ),
-        Optionality(
-            "Select",
-            "value",
-            true,
-            "null",
-            "a multi-select carries `values` and no `value`; the shipped shape already holds the optional value " +
-                "Phase 1962 asks the IDL for, where the IDL still declares it required",
-        ),
         FieldOrder("Select", listOf("label", "source", "multiple", "value", "values", "placeholder", "disabled"), ORDER),
+        Optionality(
+            "Stepper",
+            "activeStep",
+            false,
+            null,
+            "the decoder restores the declared Static 0 itself (Phase 2300, the Tabs.activeIndex shape), so the shipped shape takes the binding without a default",
+        ),
         Optionality(
             "Switch",
             "stateKey",
@@ -285,13 +284,6 @@ val DIALECT: List<DialectEntry> =
         FieldOrder("FormFieldKind.Combobox", listOf("options", "value", "allowFreeText"), ORDER),
         FieldOrder("FormFieldKind.Rating", listOf("value", "max", "allowHalf"), ORDER),
         FieldOrder("FormFieldKind.Tokens", listOf("value", "suggestions", "allowFreeText"), ORDER),
-        Optionality(
-            "FormFieldKind.SegmentedChoice",
-            "orientation",
-            false,
-            "Orientation.Horizontal",
-            "decode-optional since 0.2.0: absent restores the language default Horizontal",
-        ),
         FieldType("FormFieldKind.Range", "value", "Binding", RAW_STATIC_PAIR),
         FieldType("FormFieldKind.DateTimeRange", "value", "Binding", RAW_STATIC_PAIR),
         Optionality("FormFieldKind.Text", "value", false, null, AUTO_BOUND),

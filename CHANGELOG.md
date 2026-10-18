@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Changed (Phase 2300, rule 1; Phase 1962)
+
+- A field holding its declared default is omitted from the canonical form on every kind. Fifteen
+  vocabulary rows moved to omit-at-default and the decoder restores each default when the member is
+  absent: `Flex.wrap`, `Link.download`, `List.ordered`, `CodeBlock.lineNumbers`, `FormField.required`,
+  `FileUpload.multiple` (`false`); `CodeBlock.copyable`, `Modal.dismissable` (`true`);
+  `CodeBlock.highlightLines` (empty); `Heading.variant` (`Standard`), `Image.variant` (`Default`),
+  `Badge.variant` (`Neutral`), `Button.variant` (`Secondary`), `SegmentedChoice.orientation`
+  (`Horizontal`); `Stepper.activeStep` (`Static 0`, the `Tabs.activeIndex` shape, declared in the
+  dialect). An explicit default on the wire is still read. The generated model, enums, union tags and
+  categories were regenerated from the corpus IDL; `corpus-pin.json` moves to the corpus commit that
+  carries the change.
+- A multi-select `Select` carries `values` and no `value`: `Select.value` is nullable, a single-select
+  document without it is refused (`MISSING_FIELD` at `$.kind.value`), and a multi-select document
+  carrying one is read with the `value` dropped. `Select.multiple` is an ordinary optional member read
+  as authored (`nodes/select-multiple-false.json`). A consumer that read `value` as non-null handles
+  `null`.
+
 ### Added (Phase 2331)
 
 The model now carries every wire data field the vocabulary declares. New properties, each appended

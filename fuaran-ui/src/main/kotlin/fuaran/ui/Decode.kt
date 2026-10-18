@@ -642,7 +642,10 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             )
         NodeKindTag.Stepper ->
             Stepper(
-                activeStep = decodeBindingInt(o.req("activeStep", path), "$path.activeStep"),
+                // Phase 2300 — omitted at its declared default, the literal binding 0 (the
+                // `Tabs.activeIndex` shape); absent restores it.
+                activeStep = o["activeStep"]?.let { decodeBindingInt(it, "$path.activeStep") }
+                    ?: StaticBinding(JsonNumber("0")),
                 children = decodeNodeList(o.req("children", path), "$path.children"),
             )
         NodeKindTag.SummaryList ->
@@ -661,7 +664,9 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         NodeKindTag.Modal ->
             Modal(
                 children = decodeNodeList(o.req("children", path), "$path.children"),
-                dismissable = o.req("dismissable", path).bool("$path.dismissable"),
+                // Phase 2300 — omitted when TRUE: an overlay is dismissable unless it says otherwise
+                // (the `Toast` polarity).
+                dismissable = o.optBool("dismissable", path) ?: true,
                 open = decodeBindingBool(o.req("open", path), "$path.open"),
                 // Field alias: title → heading (the universal card/modal prior).
                 heading = o.getAliased("heading", "title")?.let { decodeTextSource(it, "$path.heading") },
@@ -768,7 +773,8 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             Heading(
                 level = o.req("level", path).int("$path.level"),
                 text = decodeTextSource(o.req("text", path), "$path.text"),
-                variant = headingVariantOf(o.req("variant", path).str("$path.variant"), "$path.variant"),
+                // Phase 2300 — omitted at its declared default `Standard`.
+                variant = o.optStr("variant", path)?.let { headingVariantOf(it, "$path.variant") } ?: HeadingVariant.Standard,
             )
         NodeKindTag.Markdown -> Markdown(text = decodeTextSource(o.req("text", path), "$path.text"))
         NodeKindTag.Metric ->
@@ -798,7 +804,8 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         NodeKindTag.Badge ->
             Badge(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
-                variant = badgeVariantOf(o.req("variant", path).str("$path.variant"), "$path.variant"),
+                // Phase 2300 — omitted at its declared default `Neutral`.
+                variant = o.optStr("variant", path)?.let { badgeVariantOf(it, "$path.variant") } ?: BadgeVariant.Neutral,
             )
         // Field alias: data → source (the chart-library prior).
         // 5 + Phase 1099 — a typed float SEQUENCE slot, so the elements are typed too.
@@ -855,7 +862,8 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             Link(
                 href = decodeBindingString(o.req("href", path), "$path.href"),
                 label = decodeTextSource(o.req("label", path), "$path.label"),
-                download = o.req("download", path).bool("$path.download"),
+                // Phase 2300 — omitted at its declared default `false`.
+                download = o.optBool("download", path) ?: false,
                 rel = o.optStr("rel", path),
                 target = o.optStr("target", path),
                 protection = o.optStr("protection", path)?.let { wireEnumOf<LinkProtection>(it, "$path.protection") },
@@ -864,7 +872,8 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             Image(
                 alt = decodeTextSource(o.req("alt", path), "$path.alt"),
                 src = decodeBindingString(o.req("src", path), "$path.src"),
-                variant = enumOf<ImageVariant>(o.req("variant", path).str("$path.variant"), "$path.variant"),
+                // Phase 2300 — omitted at its declared default `Default`.
+                variant = o.optStr("variant", path)?.let { enumOf<ImageVariant>(it, "$path.variant") } ?: ImageVariant.Default,
                 // 3.6.2 — three identity-defaulted presentation tokens. Absent restores the
                 // pre-phase behaviour exactly, which is what makes the untouched `image-1` fixture
                 // proof of the claim rather than a restatement of it.
@@ -945,7 +954,8 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         NodeKindTag.List ->
             ListNode(
                 items = o.req("items", path).array("$path.items").mapIndexed { i, v -> decodeTextSource(v, "$path.items[$i]") },
-                ordered = o.req("ordered", path).bool("$path.ordered"),
+                // Phase 2300 — omitted at its declared default `false`.
+                ordered = o.optBool("ordered", path) ?: false,
             )
         NodeKindTag.Toast ->
             Toast(
@@ -958,10 +968,12 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
         NodeKindTag.CodeBlock ->
             CodeBlock(
                 code = o.req("code", path).str("$path.code"),
-                copyable = o.req("copyable", path).bool("$path.copyable"),
-                highlightLines = o.req("highlightLines", path).array("$path.highlightLines").mapIndexed { i, v -> v.int("$path.highlightLines[$i]") },
+                // Phase 2300 — the three flags omit at their declared defaults. NOTE the polarity of
+                // `copyable`: it omits when TRUE (a code block is copyable unless it says otherwise).
+                copyable = o.optBool("copyable", path) ?: true,
+                highlightLines = o["highlightLines"]?.array("$path.highlightLines")?.mapIndexed { i, v -> v.int("$path.highlightLines[$i]") } ?: emptyList(),
                 language = o.req("language", path).str("$path.language"),
-                lineNumbers = o.req("lineNumbers", path).bool("$path.lineNumbers"),
+                lineNumbers = o.optBool("lineNumbers", path) ?: false,
             )
         NodeKindTag.Math ->
             Math(
@@ -988,7 +1000,8 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             Button(
                 label = decodeTextSource(o.req("label", path), "$path.label"),
                 onClick = decodeAction(o.req("onClick", path), "$path.onClick"),
-                variant = buttonVariantOf(o.req("variant", path).str("$path.variant"), "$path.variant"),
+                // Phase 2300 — omitted at its declared default `Secondary`.
+                variant = o.optStr("variant", path)?.let { buttonVariantOf(it, "$path.variant") } ?: ButtonVariant.Secondary,
                 disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
                 icon = o.optStr("icon", path),
             )
@@ -1009,7 +1022,8 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
             FileUpload(
                 accept = o.strList("accept", path),
                 label = decodeTextSource(o.req("label", path), "$path.label"),
-                multiple = o.req("multiple", path).bool("$path.multiple"),
+                // Phase 2300 — omitted at its declared default `false`.
+                multiple = o.optBool("multiple", path) ?: false,
                 disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
                 // Phase 1115 — read through the STRICT bool reader: each slot decides whether a
                 // whole ingress route exists, and a truthiness read would open a drop target on
@@ -1043,17 +1057,36 @@ private fun decodeNodeKind(value: JsonValue, path: String): NodeKind {
                     ),
             )
         }
-        NodeKindTag.Select ->
+        NodeKindTag.Select -> {
+            val label = decodeTextSource(o.req("label", path), "$path.label")
+            // Field aliases: options → source (the HTML `<select>` prior), data → source.
+            val source = decodeBinding(o.reqAliased("source", path, "options", "data"), "$path.source")
+            val multiple = o.optBool("multiple", path) ?: false
+            // Phase 1962 (3.2) — single-select carries `value`, multi-select carries `values` and
+            // NO `value`. A single-select without `value` is refused (the IDL row reads optional
+            // because the relation is between two siblings). A `value` on a multi-select (the
+            // empty-Static placeholder older emitters wrote, or a real binding) is decoded — so a
+            // malformed one still refuses like any malformed binding — and then DROPPED: a lenient
+            // accept, normalised to absent, since no multi-select reads it.
+            val value =
+                if (multiple) {
+                    o["value"]?.let { raw ->
+                        decodeBinding(raw, "$path.value")
+                        null
+                    }
+                } else {
+                    decodeBinding(o.req("value", path), "$path.value")
+                }
             Select(
-                label = decodeTextSource(o.req("label", path), "$path.label"),
-                // Field aliases: options → source (the HTML `<select>` prior), data → source.
-                source = decodeBinding(o.reqAliased("source", path, "options", "data"), "$path.source"),
-                multiple = o.optBool("multiple", path) ?: false,
-                value = o["value"]?.let { decodeBinding(it, "$path.value") },
+                label = label,
+                source = source,
+                multiple = multiple,
+                value = value,
                 values = o["values"]?.let { decodeBinding(it, "$path.values") },
                 placeholder = o["placeholder"]?.let { decodeTextSource(it, "$path.placeholder") },
                 disabled = o["disabled"]?.let { decodeBindingBool(it, "$path.disabled") },
             )
+        }
         NodeKindTag.Filters ->
             Filters(
                 items = o.req("items", path).array("$path.items").mapIndexed { i, v -> decodeFilterItem(v, "$path.items[$i]") },
@@ -1705,7 +1738,8 @@ private fun decodeBoxLayout(value: JsonValue, path: String): BoxLayout {
         BoxLayoutTag.Flex ->
             FlexLayout(
                 direction = orientationOf(o.req("direction", path).str("$path.direction"), "$path.direction"),
-                wrap = o.req("wrap", path).bool("$path.wrap"),
+                // Phase 2300 — omitted at its declared default `false`.
+                wrap = o.optBool("wrap", path) ?: false,
                 gap = o.optInt("gap", path),
             )
         // Field alias: columns → cols (the CSS/Tailwind prior). Lenient (3.6): NO column
@@ -1907,7 +1941,8 @@ private fun decodeFormField(value: JsonValue, path: String): FormField {
         id = id,
         kind = decodeFormFieldKind(o.req("kind", path), "$path.kind", ControlAutoBind.FormFieldId(id)),
         label = decodeTextSource(o.req("label", path), "$path.label"),
-        required = o.req("required", path).bool("$path.required"),
+        // Phase 2300 — omitted at its declared default `false`.
+        required = o.optBool("required", path) ?: false,
         help = o["help"]?.let { decodeTextSource(it, "$path.help") },
         rule = o["rule"]?.let { decodeFieldRule(it, "$path.rule") },
     )

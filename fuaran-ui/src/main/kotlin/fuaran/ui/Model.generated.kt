@@ -3,7 +3,7 @@
 //
 // GENERATED from the wire corpus's idl.json — do not edit.
 //   generator: fuaran-ui/src/test/kotlin/fuaran/ui/idl/ModelGenerator.kt
-//   idl.json sha256: 857888fc68ecc881b6a11e7f141e32f04ba07fd5d21d6ff47ed16538bad2d2d2
+//   idl.json sha256: e9ff0a22d727111d3d847a689655149081bdd1203f66ea2417905e13cd1791c7
 // Regenerate with FUARAN_IDL_REGENERATE=1 (see IdlModelCheck.kt); the drift check fails while this is stale.
 package fuaran.ui
 
@@ -67,7 +67,7 @@ data class Node(
  */
 sealed interface NodeKind
 
-data class Badge(val label: TextSource, val variant: BadgeVariant) : NodeKind
+data class Badge(val label: TextSource, val variant: BadgeVariant = BadgeVariant.Neutral) : NodeKind
 
 data class Box(
     val children: List<Node>,
@@ -85,7 +85,7 @@ data class Box(
 data class Button(
     val label: TextSource,
     val onClick: Action,
-    val variant: ButtonVariant,
+    val variant: ButtonVariant = ButtonVariant.Secondary,
     val disabled: Binding? = null,
     val icon: String? = null,
 ) : NodeKind
@@ -127,10 +127,10 @@ data class Chart(
 
 data class CodeBlock(
     val code: String,
-    val copyable: Boolean,
-    val highlightLines: List<Int>,
+    val copyable: Boolean = true,
+    val highlightLines: List<Int> = emptyList(),
     val language: String,
-    val lineNumbers: Boolean,
+    val lineNumbers: Boolean = false,
 ) : NodeKind
 
 data class Custom(
@@ -255,7 +255,7 @@ data class Fact(
 data class FileUpload(
     val accept: List<String>,
     val label: TextSource,
-    val multiple: Boolean,
+    val multiple: Boolean = false,
     val disabled: Binding? = null,
     /**
      * Phase 1115 — two ADDITIONAL ingress routes, never replacements for the picker. Both omit at
@@ -320,7 +320,11 @@ data class FragmentDecl(
 
 data class FragmentRef(val name: String, val args: Map<String, FragmentArg>? = null) : NodeKind
 
-data class Heading(val level: Int, val text: TextSource, val variant: HeadingVariant) : NodeKind
+data class Heading(
+    val level: Int,
+    val text: TextSource,
+    val variant: HeadingVariant = HeadingVariant.Standard,
+) : NodeKind
 
 /** A named glyph from the host's icon set. `icon` is the name; the host owns the mapping. */
 data class Icon(
@@ -349,7 +353,7 @@ data class Icon(
 data class Image(
     val alt: TextSource,
     val src: Binding,
-    val variant: ImageVariant,
+    val variant: ImageVariant = ImageVariant.Default,
     val fit: ImageFit = ImageFit.Natural,
     val aspectRatio: ImageAspect = ImageAspect.Natural,
     val loading: ImageLoading = ImageLoading.Eager,
@@ -372,13 +376,13 @@ data class LabelValueRow(
 data class Link(
     val href: Binding,
     val label: TextSource,
-    val download: Boolean,
+    val download: Boolean = false,
     val rel: String? = null,
     val target: String? = null,
     val protection: LinkProtection? = null,
 ) : NodeKind
 
-data class ListNode(val items: List<TextSource>, val ordered: Boolean) : NodeKind
+data class ListNode(val items: List<TextSource>, val ordered: Boolean = false) : NodeKind
 
 data class MapNode(
     val centreLatitude: Double,
@@ -462,7 +466,7 @@ data class Metric(
 
 data class Modal(
     val children: List<Node>,
-    val dismissable: Boolean,
+    val dismissable: Boolean = true,
     val open: Binding,
     val heading: TextSource? = null,
     val onDismiss: Action? = null,
@@ -704,7 +708,7 @@ data class FormField(
     val id: String,
     val kind: FormFieldKind,
     val label: TextSource,
-    val required: Boolean,
+    val required: Boolean = false,
     val help: TextSource? = null,
     val rule: FieldRule? = null,
 )
@@ -970,7 +974,7 @@ sealed interface BoxLayout
 
 data object AutoLayout : BoxLayout
 
-data class FlexLayout(val direction: Orientation, val wrap: Boolean, val gap: Int? = null) : BoxLayout
+data class FlexLayout(val direction: Orientation, val wrap: Boolean = false, val gap: Int? = null) : BoxLayout
 
 data class GridLayout(val cols: Int, val gap: Int? = null, val templateColumns: String? = null) : BoxLayout
 
