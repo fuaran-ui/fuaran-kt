@@ -19,7 +19,8 @@ import kotlin.system.exitProcess
  *    `when` over the kind set (the decoder's dispatch, the renderer's) names the arm that is owed.
  *
  * A dialect refusal (an entry naming something the IDL no longer has, or restating a rule) fails
- * either mode before anything is written.
+ * either mode before anything is written, and so do the generator's carry-rule checks
+ * ([generatorRuleChecks], Phase 2331).
  *
  * **Locating the corpus.** Through the one locator every harness here shares, [WireCorpus]:
  * `FUARAN_WIRE_FIXTURES` first, then `-Dfuaran.corpus`, then `FUARAN_CORPUS`, then the side-by-side
@@ -74,6 +75,13 @@ fun main() {
             println("FAIL: idl.json carries a shape this generator does not read — ${e.message}")
             exitProcess(1)
         }
+    // Phase 2331 — the carry rule, proven by perturbing this same IDL before anything is compared.
+    val ruleFailures = generatorRuleChecks(readIdl(idlFile.readText()))
+    if (ruleFailures.isNotEmpty()) {
+        ruleFailures.forEach { println("FAIL: generator rule — $it") }
+        exitProcess(1)
+    }
+    println("  generator rules: a new field is carried or refused by name; a new union case reaches its tag set")
     val regenerate = System.getenv("FUARAN_IDL_REGENERATE") == "1"
     var stale = 0
     for ((path, content) in generated) {

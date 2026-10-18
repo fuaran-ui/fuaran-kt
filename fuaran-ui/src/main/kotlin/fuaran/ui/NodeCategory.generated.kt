@@ -3,7 +3,7 @@
 //
 // GENERATED from the wire corpus's idl.json — do not edit.
 //   generator: fuaran-ui/src/test/kotlin/fuaran/ui/idl/ModelGenerator.kt
-//   idl.json sha256: c0ca90a68de458ae90cc369c5afe6e75cf0a1b36d8383579a0f48073ef8157d8
+//   idl.json sha256: 857888fc68ecc881b6a11e7f141e32f04ba07fd5d21d6ff47ed16538bad2d2d2
 // Regenerate with FUARAN_IDL_REGENERATE=1 (see IdlModelCheck.kt); the drift check fails while this is stale.
 @file:JvmName("NodeCategoryKt")
 

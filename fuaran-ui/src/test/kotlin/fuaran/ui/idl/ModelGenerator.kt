@@ -6,7 +6,8 @@ package fuaran.ui.idl
  * The sealed tree model's generator (Phase 2299): the corpus's `idl.json` in, this surface's
  * public model out — the node envelope, the sealed `NodeKind` hierarchy with one class per kind,
  * every record and union the dialect does not keep by hand, the bare-string enums, the
- * `NodeCategory` spine and the kind-tag set the decoder dispatches on.
+ * `NodeCategory` spine, the kind-tag set the decoder dispatches on, and one case-tag set per IDL
+ * union (Phase 2331) that the decoder's union dispatches are exhaustive over.
  *
  * It is THIS repository's generator, written in Kotlin and reading a language-neutral data file. It
  * shares no code with any other surface and transpiles nothing: the IDL says what the vocabulary
@@ -48,6 +49,7 @@ val GENERATED_FILES =
         "fuaran-ui/src/main/kotlin/fuaran/ui/Model.generated.kt",
         "fuaran-ui/src/main/kotlin/fuaran/ui/Enums.generated.kt",
         "fuaran-ui/src/main/kotlin/fuaran/ui/NodeCategory.generated.kt",
+        "fuaran-ui/src/main/kotlin/fuaran/ui/UnionTags.generated.kt",
     )
 
 private const val MAX_LINE = 120
@@ -199,8 +201,7 @@ private class ModelGenerator(
             is IdlRef -> {
                 if (t.name in notModelled) {
                     refuse(
-                        "$at references ${t.name}, which the dialect does not model — give the field a FieldType or a " +
-                            "NotModelled entry",
+                        "$at references ${t.name}, which the dialect does not model — give the field a FieldType entry",
                     )
                 }
                 ktTypeName(t.name)
@@ -243,15 +244,8 @@ private class ModelGenerator(
         val out = ArrayList(prefix)
         for (f in fields) {
             val at = "$owner.${f.name}"
-            val notCarried = take<NotModelled> { it.owner == owner && it.field == f.name }
             val presence = take<PresenceFlag> { it.owner == owner && it.field == f.name }
             val ruleOmits = f.optionality == HostOnly || f.type == IdlFn
-            if (notCarried != null) {
-                if (ruleOmits) refuse("NotModelled $at: the rules already omit a host-only or closure field")
-                if (presence != null) refuse("$at is both NotModelled and a PresenceFlag")
-                rejectFieldOverrides(owner, f.name)
-                continue
-            }
             if (presence != null) {
                 if (f.type != IdlFn) refuse("PresenceFlag $at: the field is not a closure slot")
                 rejectFieldOverrides(owner, f.name)
@@ -295,6 +289,12 @@ private class ModelGenerator(
         val order = take<FieldOrder> { it.owner == owner } ?: return out
         val names = out.map { it.name }
         if (order.order == names) refuse("FieldOrder $owner states the rule's own (IDL) order")
+        // A field the IDL gained is never dropped to keep a pinned order: the order must place it (append it, so
+        // every positional call still binds), or generation fails naming it.
+        val unplaced = names.filter { it !in order.order }
+        if (unplaced.isNotEmpty()) {
+            refuse("FieldOrder $owner does not place the modelled field(s) $unplaced — append them to its order")
+        }
         if (order.order.sorted() != names.sorted()) {
             refuse("FieldOrder $owner is not a permutation of the modelled fields $names (got ${order.order})")
         }
@@ -376,6 +376,8 @@ private class ModelGenerator(
             }
         }
         val enumDecls = ArrayList<Pair<Decl, String?>>()
+        // An enum carrying dialect extras: (IDL name, Kotlin name, the constants the IDL declares).
+        val idlCaseSets = ArrayList<Triple<String, String, List<String>>>()
         for (e in idl.enums) {
             if (e.name in notModelled) continue
             val name = ktTypeName(e.name)
@@ -400,6 +402,7 @@ private class ModelGenerator(
                 }
             val orderedWires = wires?.let { w -> ordered.map { c -> w[constants.indexOf(c)] } }
             enumDecls.add(EnumDecl(name, ordered, orderedWires) to doc(name))
+            if (constants.size > constants0.size) idlCaseSets.add(Triple(e.name, name, constants0))
         }
 
         // Orphans: every enum-scoped entry must name an IDL enum the model carries.
@@ -479,6 +482,13 @@ private class ModelGenerator(
         for ((d, dc) in decls) model.append("\n").append(emit(d, dc))
         enums.append(header).append("package fuaran.ui\n")
         for ((d, dc) in enumDecls) enums.append("\n").append(emit(d, dc))
+        for ((idlName, kt, cases) in idlCaseSets) {
+            enums.append(
+                "\n/**\n * The [$kt] constants the IDL's `$idlName` declares — the only ones the decoder admits.\n" +
+                    " * The rest are dialect extras kept for source compatibility; a wire document naming one is refused.\n */\n",
+            )
+            enums.append("internal val idlCasesOf$kt: Set<$kt> = setOf(${cases.joinToString { "$kt.$it" }})\n")
+        }
 
         spine.append(header).append("@file:JvmName(\"NodeCategoryKt\")\n\npackage fuaran.ui\n\n")
         spine.append(emit(EnumDecl("NodeCategory", categoryOrder, null), doc("NodeCategory")))
@@ -503,6 +513,21 @@ private class ModelGenerator(
         spine.append("        fun ofWire(tag: String): NodeKindTag? = BY_WIRE[tag]\n    }\n}\n")
         spine.append(pins)
 
+        val tags = StringBuilder()
+        tags.append(header).append("package fuaran.ui\n")
+        for (u in idl.unions) {
+            val kt = ktTypeName(u.name)
+            val named = if (kt == u.name) "`${u.name}`" else "`${u.name}` (Kotlin `$kt`)"
+            tags.append(
+                "\n/**\n * The wire case tags of the IDL union $named, in IDL case order — what the decoder\n" +
+                    " * dispatches a `\$type` on. Its `when` over this set has no `else`, so a case added to the IDL and\n" +
+                    " * regenerated is a compile error in the decoder until its arm is written.\n */\n",
+            )
+            tags.append("internal enum class ${kt}Tag(override val wire: String) : WireEnum {\n")
+            for (c in u.cases) tags.append("    ${c.tag}(\"${c.tag}\"),\n")
+            tags.append("}\n")
+        }
+
         val strayDocs = docs.keys.filter { it !in usedDocs }
         if (strayDocs.isNotEmpty()) refuse("model docs name declarations the generator does not emit: $strayDocs")
 
@@ -510,6 +535,7 @@ private class ModelGenerator(
             GENERATED_FILES[0] to model.toString(),
             GENERATED_FILES[1] to enums.toString(),
             GENERATED_FILES[2] to spine.toString(),
+            GENERATED_FILES[3] to tags.toString(),
         )
     }
 

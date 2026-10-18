@@ -9,10 +9,11 @@ package fuaran.ui.idl
  *
  * **What belongs here.** Host REPRESENTATION choices: a public name that predates the IDL, a
  * constructor order consumers already call positionally, a slot this render projection holds raw
- * rather than typed, a closure slot carried as a presence fact, a wire field this projection does
- * not (yet) carry. **What never belongs here — nor in the IDL** — is a change to what the wire
- * means: a host representation quirk stays on this side of the boundary, and the IDL stays the
- * language's statement of the vocabulary.
+ * rather than typed, a closure slot carried as a presence fact. A DATA field cannot be dropped here:
+ * the vocabulary has no entry for it (Phase 2331), so every wire field the rules reach is carried.
+ * **What never belongs here — nor in the IDL** — is a change to what the wire means: a host
+ * representation quirk stays on this side of the boundary, and the IDL stays the language's
+ * statement of the vocabulary.
  *
  * **Why so many order entries.** A Kotlin data class's positional constructor and its `componentN`
  * functions are public API, so the order a type shipped with is kept even where the IDL lists the
@@ -102,9 +103,6 @@ val DIALECT: List<DialectEntry> =
         TypeNotModelled("SelectOption", "an option set arrives through a Binding the projection does not type element-wise"),
         TypeNotModelled("MapMarker", "a marker set arrives through a Binding the projection does not type element-wise"),
         TypeNotModelled("StyleDelta", "a style delta is an op payload, and a render projection decodes no op"),
-        TypeNotModelled("ChartDataLabels", "Chart.dataLabels is not carried by this projection"),
-        TypeNotModelled("ChartLegendPosition", "Chart.legendPosition is not carried by this projection"),
-        TypeNotModelled("ChartXScale", "Chart.xScale is not carried by this projection"),
         TypeNotModelled("FontVoice", "SemanticStyle.voice is held as its raw token (render-only)"),
         TypeNotModelled("StyleRole", "SemanticStyle.role is held as its raw token (render-only)"),
         TypeNotModelled("TextAnchor", "DrawStyle.textAnchor is held as its raw token (render-only)"),
@@ -117,8 +115,9 @@ val DIALECT: List<DialectEntry> =
         ExtraEnumCase(
             "ChannelDirection",
             "InOnly",
-            "the shipped constant; removing a public enum constant is a reshape. The IDL has no InOnly, so the decoder " +
-                "accepts a direction the language does not have — recorded as a finding, not fixed here",
+            "the shipped constant, kept only until Phase 2303's breaking cut (removing a public enum constant is a " +
+                "reshape). The IDL has no InOnly, so the decoder refuses it (UNKNOWN_DU_CASE): it admits only the " +
+                "constants the IDL's enum declares",
         ),
         EnumOrder("ChannelDirection", listOf("OutOnly", "InOnly", "TwoWay"), ENUM_ORDER),
         WireTokenConstants(
@@ -144,17 +143,16 @@ val DIALECT: List<DialectEntry> =
         FieldType("Accessibility", "liveRegion", "String", "held as its checked lower-case token"),
         FieldType("Accessibility", "role", "String", "the ARIA role token, held raw (the reference host's AriaRole is host-declared)"),
         FieldOrder("Accessibility", listOf("label", "labelledBy", "describedBy", "role", "liveRegion", "hidden", "speak"), ORDER),
-        NotModelled("ColumnErased", "sortable", "per-column sort narrowing is not carried by this projection"),
-        NotModelled("ColumnErased", "editable", "per-column edit narrowing is not carried by this projection"),
-        FieldOrder("ColumnErased", listOf("label", "kind", "format", "width", "field"), ORDER),
+        FieldOrder("ColumnErased", listOf("label", "kind", "format", "width", "field", "sortable", "editable"), ORDER),
         FieldOrder("CompareRule", listOf("op", "against"), ORDER),
         FieldType("DrawStyle", "emphasis", "String", "held as the raw token (render-only)"),
         FieldType("DrawStyle", "textAnchor", "String", "held as the raw token (render-only)"),
-        NotModelled("DrawStyle", "rotation", "not carried by this projection's drawing card"),
-        NotModelled("DrawStyle", "tip", "not carried by this projection's drawing card"),
         FieldOrder(
             "DrawStyle",
-            listOf("fill", "opacity", "stroke", "strokeWidth", "emphasis", "fontFamily", "fontSize", "textAnchor", "markId"),
+            listOf(
+                "fill", "opacity", "stroke", "strokeWidth", "emphasis", "fontFamily", "fontSize", "textAnchor", "markId", "rotation",
+                "tip",
+            ),
             ORDER,
         ),
         FieldOrder("EffectClass", listOf("hostEffect", "determinism"), ORDER),
@@ -170,23 +168,20 @@ val DIALECT: List<DialectEntry> =
         // ------------------------------------------------------------------------------------- //
         FieldOrder("Box", listOf("children", "layout", "role", "heading", "breakBefore", "keepTogether"), ORDER),
         FieldOrder("Button", listOf("label", "onClick", "variant", "disabled", "icon"), ORDER),
-        NotModelled("Chart", "valueFormat", "not carried by this projection's chart card"),
-        NotModelled("Chart", "xTitle", "not carried by this projection's chart card"),
-        NotModelled("Chart", "yTitle", "not carried by this projection's chart card"),
-        NotModelled("Chart", "subtitle", "not carried by this projection's chart card"),
-        NotModelled("Chart", "legendPosition", "not carried by this projection's chart card"),
-        NotModelled("Chart", "dataLabels", "not carried by this projection's chart card"),
-        NotModelled("Chart", "xScale", "not carried by this projection's chart card"),
-        FieldOrder("Chart", listOf("kind", "source", "xField", "yFields", "stacked", "title", "annotations"), ORDER),
+        FieldOrder(
+            "Chart",
+            listOf(
+                "kind", "source", "xField", "yFields", "stacked", "title", "annotations", "valueFormat", "xTitle", "yTitle",
+                "subtitle", "legendPosition", "dataLabels", "xScale",
+            ),
+            ORDER,
+        ),
         FieldType(
             "Custom",
             "props",
             "JsonValue",
             "a guest component's props are held as the raw object; the host does not own their shape",
         ),
-        NotModelled("DataGrid", "reorderable", "not carried by this projection's grid"),
-        NotModelled("DataGrid", "windowStateKey", "not carried by this projection's grid"),
-        NotModelled("DataGrid", "rowTotal", "not carried by this projection's grid"),
         PresenceFlag(
             "DataGrid",
             "onRowClick",
@@ -198,7 +193,7 @@ val DIALECT: List<DialectEntry> =
             listOf(
                 "columns", "source", "editable", "rowKeyField", "staticRows", "sortStateKey", "pageStateKey", "editStateKey",
                 "pageSize", "defaultSort", "keepRowsTogether", "repeatHeader", "exportable", "transferInKey", "transferOutKey",
-                "rowActionDeclared",
+                "rowActionDeclared", "reorderable", "windowStateKey", "rowTotal",
             ),
             ORDER,
         ),

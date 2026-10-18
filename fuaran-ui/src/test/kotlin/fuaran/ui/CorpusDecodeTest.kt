@@ -1639,6 +1639,78 @@ fun main() {
     // Phase 2301 — ONE corpus locator. Every harness resolves the corpus through `WireCorpus`, so a
     // Kotlin source spelling the corpus directory as a path literal is a second locator in the making:
     // the six that existed before it disagreed about which variables they honoured.
+    runner.check("mount/an-InOnly-direction-is-refused") {
+        // Phase 2331 — `InOnly` is a dialect extra of MountDirection (kept until Phase 2303's cut); the
+        // IDL's ChannelDirection has OutOnly | TwoWay only, so the decoder refuses it as the reference
+        // refuses any unknown direction. The document is reject-unknown-mount-direction with "InOnly".
+        val doc =
+            "{\"id\":\"x\",\"kind\":{\"\$type\":\"Mount\",\"scopeId\":\"g\",\"channel\":{\"direction\":\"InOnly\"}," +
+                "\"capabilities\":[],\"onBubble\":\"<closure>\"},\"state\":{}," +
+                "\"style\":{\"emphasis\":\"Normal\",\"tone\":\"Default\",\"weight\":\"Standard\"}}"
+        val e =
+            try {
+                decodeNode(doc)
+                error("an InOnly direction decoded")
+            } catch (e: FuaranDecodeException) {
+                e
+            }
+        if (e.code != FuaranDecodeException.UNKNOWN_DU_CASE || e.path != "\$.kind.channel.direction") {
+            error("expected UNKNOWN_DU_CASE at \$.kind.channel.direction, got ${e.code} at ${e.path}")
+        }
+        // The corrected twin: the same document with an IDL direction decodes.
+        val twin = decodeNode(doc.replace("\"InOnly\"", "\"TwoWay\""))
+        if ((twin.kind as Mount).channel.direction != MountDirection.TwoWay) error("the TwoWay twin did not decode to TwoWay")
+    }
+    runner.check("carried/phase-2331-members-decode") {
+        // Phase 2331 — the fourteen members the model now carries decode to typed values, and a wrong JSON
+        // type or an unknown token on one is refused at that member's own path.
+        val chart =
+            "{\"id\":\"c\",\"kind\":{\"\$type\":\"Chart\",\"kind\":\"Bar\",\"source\":[],\"xField\":\"x\",\"yFields\":[\"y\"]," +
+                "\"valueFormat\":{\"\$type\":\"Percent\"},\"xTitle\":\"Month\",\"yTitle\":\"Share\",\"subtitle\":\"2026\"," +
+                "\"legendPosition\":\"None\",\"dataLabels\":\"Ends\",\"xScale\":\"Temporal\"}}"
+        val c = decodeNode(chart).kind as Chart
+        if (c.valueFormat != PercentNumberFormat(null) || c.xTitle != LiteralText("Month") || c.yTitle != LiteralText("Share") ||
+            c.subtitle != LiteralText("2026") || c.legendPosition != ChartLegendPosition.None ||
+            c.dataLabels != ChartDataLabels.Ends || c.xScale != ChartXScale.Temporal
+        ) {
+            error("chart members not carried: $c")
+        }
+        val grid =
+            "{\"id\":\"g\",\"kind\":{\"\$type\":\"DataGrid\",\"source\":[],\"reorderable\":true,\"windowStateKey\":\"w\"," +
+                "\"rowTotal\":{\"\$type\":\"State\",\"key\":\"n\"},\"columns\":[{\"label\":\"A\",\"kind\":{\"\$type\":\"Text\"}," +
+                "\"sortable\":false,\"editable\":true}]}}"
+        val g = decodeNode(grid).kind as DataGrid
+        if (!g.reorderable || g.windowStateKey != "w" || (g.rowTotal as? StateBinding)?.key != "n" ||
+            g.columns[0].sortable != false || g.columns[0].editable != true
+        ) {
+            error("grid members not carried: $g")
+        }
+        val drawing =
+            "{\"id\":\"d\",\"kind\":{\"\$type\":\"Drawing\",\"viewBox\":{\"minX\":0,\"minY\":0,\"width\":1,\"height\":1}," +
+                "\"shapes\":[{\"\$type\":\"Label\",\"x\":0,\"y\":0,\"text\":\"t\",\"style\":{\"rotation\":45,\"tip\":\"hi\"}}]}}"
+        val shape = (decodeNode(drawing).kind as Drawing).shapes[0] as LabelShape
+        if (shape.style.rotation != 45.0 || shape.style.tip != LiteralText("hi")) error("draw style members not carried: $shape")
+        fun refusal(json: String): Pair<String, String> =
+            try {
+                decodeNode(json)
+                "ACCEPTED" to ""
+            } catch (e: FuaranDecodeException) {
+                e.code to e.path
+            }
+        val wrong =
+            listOf(
+                chart.replace("\"Ends\"", "\"Middle\"") to ("UNKNOWN_DU_CASE" to "\$.kind.dataLabels"),
+                chart.replace("\"legendPosition\":\"None\"", "\"legendPosition\":3") to ("WRONG_TYPE" to "\$.kind.legendPosition"),
+                grid.replace("\"reorderable\":true", "\"reorderable\":\"yes\"") to ("WRONG_TYPE" to "\$.kind.reorderable"),
+                grid.replace("\"windowStateKey\":\"w\"", "\"windowStateKey\":1") to ("WRONG_TYPE" to "\$.kind.windowStateKey"),
+                grid.replace("\"sortable\":false", "\"sortable\":0") to ("WRONG_TYPE" to "\$.kind.columns[0].sortable"),
+                drawing.replace("\"rotation\":45", "\"rotation\":true") to ("WRONG_TYPE" to "\$.kind.shapes[0].style.rotation"),
+            )
+        for ((doc, want) in wrong) {
+            val got = refusal(doc)
+            if (got != want) error("expected $want, got $got")
+        }
+    }
     runner.check("locator/one-corpus-locator") {
         val offenders = WireCorpus.literalPathOffenders(WireCorpus.repoRoot())
         if (offenders.isNotEmpty()) {

@@ -967,4 +967,20 @@ val MODEL_DOCS: Map<String, String> =
             """
             The wire discriminator name for a decoded [NodeKind] — used by the corpus coverage report.
             """.trimIndent(),
+        // Phase 2331 — the members carried since, each appended LAST so every positional call still binds. The
+        // Compose renderer does not show them yet; docs/RENDER-PROJECTION.md ("Carried but not rendered") says why.
+        "Chart.valueFormat" to "Phase 2331 — the number format of the chart's values; omitted when the chart declares none.",
+        "Chart.xTitle" to "Phase 2331 — the x-axis title; omitted when the chart declares none.",
+        "Chart.yTitle" to "Phase 2331 — the y-axis title; omitted when the chart declares none.",
+        "Chart.subtitle" to "Phase 2331 — the chart's subtitle; omitted when the chart declares none.",
+        "Chart.legendPosition" to "Phase 2331 — the declared legend placement; omitted when the chart declares none.",
+        "Chart.dataLabels" to "Phase 2331 — the declared data-label mode; omitted when the chart declares none.",
+        "Chart.xScale" to "Phase 2331 — the declared x-axis scale (category or temporal); omitted when the chart declares none.",
+        "DataGrid.reorderable" to "Phase 2331 — the grid declares its rows reorderable; omitted at `false`.",
+        "DataGrid.windowStateKey" to "Phase 2331 (WIRE_FORMAT Phase 1892) — the State key carrying the row window `{offset, count}`.",
+        "DataGrid.rowTotal" to "Phase 2331 (WIRE_FORMAT Phase 1892) — the declared size of the whole result set, an int slot.",
+        "GridColumn.sortable" to "Phase 2331 — per-column sort narrowing; absent inherits the grid's.",
+        "GridColumn.editable" to "Phase 2331 — per-column edit narrowing; absent inherits the grid's.",
+        "DrawStyle.rotation" to "Phase 2331 — the label rotation; it applies to `Label` only and is ignored on every other shape.",
+        "DrawStyle.tip" to "Phase 2331 — the mark's hover-readable text; unlike the label-only members it applies to EVERY shape.",
     )

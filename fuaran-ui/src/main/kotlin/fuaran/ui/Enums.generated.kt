@@ -3,7 +3,7 @@
 //
 // GENERATED from the wire corpus's idl.json — do not edit.
 //   generator: fuaran-ui/src/test/kotlin/fuaran/ui/idl/ModelGenerator.kt
-//   idl.json sha256: c0ca90a68de458ae90cc369c5afe6e75cf0a1b36d8383579a0f48073ef8157d8
+//   idl.json sha256: 857888fc68ecc881b6a11e7f141e32f04ba07fd5d21d6ff47ed16538bad2d2d2
 // Regenerate with FUARAN_IDL_REGENERATE=1 (see IdlModelCheck.kt); the drift check fails while this is stale.
 package fuaran.ui
 
@@ -22,7 +22,13 @@ enum class CaptureSource { Camera, Microphone }
 
 enum class MountDirection { OutOnly, InOnly, TwoWay }
 
+enum class ChartDataLabels { Off, Ends }
+
 enum class ChartKind { Line, Bar, Area, Pie, Scatter, Heatmap }
+
+enum class ChartLegendPosition { Top, Right, Bottom, None }
+
+enum class ChartXScale { Category, Temporal }
 
 /** `CompareRule.op` — the cross-field comparison operator. */
 enum class CompareOp(override val wire: String) : WireEnum {
@@ -199,3 +205,9 @@ enum class TrackKind { Subtitles, Captions, Descriptions, Chapters }
  * `Inverted` / `Descending` would reinstate the boolean spelling 3.6.1 refuses.
  */
 enum class TrendPolarity { HigherIsBetter, LowerIsBetter }
+
+/**
+ * The [MountDirection] constants the IDL's `ChannelDirection` declares — the only ones the decoder admits.
+ * The rest are dialect extras kept for source compatibility; a wire document naming one is refused.
+ */
+internal val idlCasesOfMountDirection: Set<MountDirection> = setOf(MountDirection.OutOnly, MountDirection.TwoWay)

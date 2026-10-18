@@ -12,6 +12,10 @@ package fuaran.ui.idl
  * produce anyway. A declaration that has stopped being true therefore cannot outlive its subject,
  * which is the whole value of an enumeration of divergences: it is complete, or generation fails.
  *
+ * There is deliberately NO entry for dropping a wire DATA field (Phase 2331): every field the rules
+ * reach is carried, and a type whose constructor order is pinned by [FieldOrder] REFUSES generation
+ * naming a field its order does not place, so the next field the IDL gains is carried or fails loudly.
+ *
  * Subjects ("owners") are spelled as the IDL spells them: a kind by its tag (`Box`), a record by
  * its name (`TabHeader`), a union case as `Union.Case` (`Binding.Static`), and the node envelope as
  * `Node`. Kotlin names in an entry are the PUBLIC names this surface ships.
@@ -50,9 +54,6 @@ data class Optionality(
     val default: String?,
     override val reason: String,
 ) : DialectEntry
-
-/** A wire field the rules would model and this projection does not carry. */
-data class NotModelled(val owner: String, val field: String, override val reason: String) : DialectEntry
 
 /**
  * A closure slot (which the rules omit — its wire form is at most the `"<closure>"` sentinel) is

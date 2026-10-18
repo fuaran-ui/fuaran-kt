@@ -3,7 +3,7 @@
 //
 // GENERATED from the wire corpus's idl.json — do not edit.
 //   generator: fuaran-ui/src/test/kotlin/fuaran/ui/idl/ModelGenerator.kt
-//   idl.json sha256: c0ca90a68de458ae90cc369c5afe6e75cf0a1b36d8383579a0f48073ef8157d8
+//   idl.json sha256: 857888fc68ecc881b6a11e7f141e32f04ba07fd5d21d6ff47ed16538bad2d2d2
 // Regenerate with FUARAN_IDL_REGENERATE=1 (see IdlModelCheck.kt); the drift check fails while this is stale.
 package fuaran.ui
 
@@ -109,6 +109,20 @@ data class Chart(
     val title: TextSource? = null,
     /** Phase 1490 — omitted when the chart declares none. */
     val annotations: List<ChartAnnotation>? = null,
+    /** Phase 2331 — the number format of the chart's values; omitted when the chart declares none. */
+    val valueFormat: NumberFormat? = null,
+    /** Phase 2331 — the x-axis title; omitted when the chart declares none. */
+    val xTitle: TextSource? = null,
+    /** Phase 2331 — the y-axis title; omitted when the chart declares none. */
+    val yTitle: TextSource? = null,
+    /** Phase 2331 — the chart's subtitle; omitted when the chart declares none. */
+    val subtitle: TextSource? = null,
+    /** Phase 2331 — the declared legend placement; omitted when the chart declares none. */
+    val legendPosition: ChartLegendPosition? = null,
+    /** Phase 2331 — the declared data-label mode; omitted when the chart declares none. */
+    val dataLabels: ChartDataLabels? = null,
+    /** Phase 2331 — the declared x-axis scale (category or temporal); omitted when the chart declares none. */
+    val xScale: ChartXScale? = null,
 ) : NodeKind
 
 data class CodeBlock(
@@ -169,6 +183,12 @@ data class DataGrid(
      * reference decoder's test (any value declares), and the closure itself never crosses.
      */
     val rowActionDeclared: Boolean = false,
+    /** Phase 2331 — the grid declares its rows reorderable; omitted at `false`. */
+    val reorderable: Boolean = false,
+    /** Phase 2331 (WIRE_FORMAT Phase 1892) — the State key carrying the row window `{offset, count}`. */
+    val windowStateKey: String? = null,
+    /** Phase 2331 (WIRE_FORMAT Phase 1892) — the declared size of the whole result set, an int slot. */
+    val rowTotal: Binding? = null,
 ) : NodeKind
 
 data class Disclosure(
@@ -609,6 +629,10 @@ data class GridColumn(
     val width: ColumnWidth = AutoWidth,
     /** The declarative row-field projection; `value` (a closure) is presence-only and dropped. */
     val field: String? = null,
+    /** Phase 2331 — per-column sort narrowing; absent inherits the grid's. */
+    val sortable: Boolean? = null,
+    /** Phase 2331 — per-column edit narrowing; absent inherits the grid's. */
+    val editable: Boolean? = null,
 )
 
 /**
@@ -645,6 +669,10 @@ data class DrawStyle(
      * (object constancy). Omitted when absent; chrome shapes stay unstamped.
      */
     val markId: String? = null,
+    /** Phase 2331 — the label rotation; it applies to `Label` only and is ignored on every other shape. */
+    val rotation: Double? = null,
+    /** Phase 2331 — the mark's hover-readable text; unlike the label-only members it applies to EVERY shape. */
+    val tip: TextSource? = null,
 )
 
 data class EffectClass(val hostEffect: HostEffect, val determinism: Determinism)
