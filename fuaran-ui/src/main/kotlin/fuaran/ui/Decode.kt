@@ -1550,23 +1550,163 @@ private fun decodeBinding(value: JsonValue, path: String): Binding {
  */
 private fun unwrapTransformSource(value: JsonValue, path: String): JsonValue {
     val o = value as? JsonObject ?: return value
-    val payloadKey =
-        when ((o["\$type"] as? JsonString)?.value) {
-            // 16 - the bare wrapper names the live slot, so it needs no payload.
-            "State" -> null
-            "Static" -> if (o["value"] != null) null else "value"
-            "Bound" -> if (o["binding"] != null) null else "binding"
-            // Not an envelope: the ordinary columnar table, passed through untouched.
-            else -> null
-        }
-    if (payloadKey != null) {
+    fun noPayload(key: String): Nothing =
         throw FuaranDecodeException(
             FuaranDecodeException.WRONG_TYPE,
             path,
-            "a Transform source envelope carries no `$payloadKey` to unwrap to, so the transform has no data",
+            "a Transform source envelope carries no `$key` to unwrap to, so the transform has no data",
         )
-    }
+    // The table the envelope unwraps to (or the source itself), for the column check below.
+    val table =
+        when ((o["\$type"] as? JsonString)?.value) {
+            // 16 - the bare wrapper names the live slot, so it needs no payload.
+            "State" -> o["defaultValue"]
+            "Static" -> o["value"] ?: noPayload("value")
+            // A Bound payload is a binding, not a table: nothing here to check.
+            "Bound" -> if (o["binding"] != null) null else noPayload("binding")
+            // Not an envelope: the ordinary columnar table, passed through untouched.
+            else -> o
+        }
+    (table as? JsonObject)?.let { checkColumnTypes(it, path) }
     return value
+}
+
+/**
+ * The column type tags a host knows (WIRE_FORMAT.md 3.6.25), in the order an unknown-type
+ * refusal enumerates them, each with the fraction digits its unit holds (null: not a timestamp).
+ */
+private val COLUMN_TYPE_DIGITS: List<Pair<String, Int?>> =
+    listOf(
+        "int" to null,
+        "float" to null,
+        "bool" to null,
+        "string" to null,
+        "date" to null,
+        "timestamp" to 0,
+        "timestamp_ms" to 3,
+        "timestamp_us" to 6,
+        "timestamp_ns" to 9,
+    )
+
+/**
+ * Phase 2206 (3.6.25) — the one part of a held-raw columnar source this projection checks: every
+ * declared column type is a known tag, and every present cell of a timestamp column, in any unit,
+ * is an instant that column can hold. The table itself stays raw (its codec is Fuaran.Core's); a
+ * defect surfaces as `WRONG_TYPE` at the Transform's `.source` path, as every columnar-codec
+ * defect does. A source with no `schema` infers its types, and inference never yields a timestamp.
+ */
+private fun checkColumnTypes(table: JsonObject, path: String) {
+    val schema = table["schema"] as? JsonArray ?: return
+    val columns = table["columns"] as? JsonObject
+    for (entry in schema.items) {
+        val e = entry as? JsonObject ?: continue
+        val name = (e["name"] as? JsonString)?.value ?: continue
+        val tag = (e["type"] as? JsonString)?.value ?: continue
+        val known = COLUMN_TYPE_DIGITS.firstOrNull { it.first == tag }
+        if (known == null) {
+            throw FuaranDecodeException(
+                FuaranDecodeException.WRONG_TYPE,
+                path,
+                "column '$name': unknown column type '$tag' - expected one of " +
+                    COLUMN_TYPE_DIGITS.joinToString(", ") { it.first },
+            )
+        }
+        val digits = known.second ?: continue
+        val column = columns?.get(name) ?: continue
+        val (values, validity) =
+            when (column) {
+                is JsonArray -> column.items to null
+                is JsonObject -> ((column["values"] as? JsonArray)?.items ?: continue) to (column["validity"] as? JsonArray)?.items
+                else -> continue
+            }
+        values.forEachIndexed { i, cell ->
+            if ((validity?.getOrNull(i) as? JsonBool)?.value != false) {
+                instantDefect(tag, digits, cell)?.let {
+                    throw FuaranDecodeException(FuaranDecodeException.WRONG_TYPE, path, "column '$name': $it")
+                }
+            }
+        }
+    }
+}
+
+/** The epoch seconds of 0000-01-01T00:00:00Z and 9999-12-31T23:59:59Z. */
+private const val MIN_EPOCH_SECOND = -62_167_219_200L
+private const val MAX_EPOCH_SECOND = 253_402_300_799L
+
+/**
+ * Why one present cell of a timestamp column of [tag] (holding [digits] fraction digits) is not an
+ * instant the column can hold, or null when it is. Text is read only in its canonical form with a
+ * fraction no finer than the unit; an epoch number (whole, magnitude below 9e15) is read in the
+ * column's unit - by magnitude in a `timestamp` column - and must name an instant in 0000-9999.
+ */
+private fun instantDefect(tag: String, digits: Int, cell: JsonValue): String? =
+    when (cell) {
+        is JsonString -> {
+            val n = canonicalFractionDigits(cell.value)
+            when {
+                n < 0 ->
+                    "a $tag value must be canonical ISO-8601 text, YYYY-MM-DDThh:mm:ssZ or " +
+                        "YYYY-MM-DDThh:mm:ss.FZ, naming a moment that exists"
+                n > digits ->
+                    "a $tag value's fraction is finer than the column's unit holds: " +
+                        "${COLUMN_TYPE_DIGITS.first { (it.second ?: -1) >= n }.first} or finer is needed"
+                else -> null
+            }
+        }
+        is JsonNumber -> {
+            val exact = runCatching { java.math.BigDecimal(cell.raw) }.getOrNull()
+            val whole = exact?.let { runCatching { it.toBigIntegerExact() }.getOrNull() }
+            if (whole == null || whole.abs() >= java.math.BigInteger.valueOf(9_000_000_000_000_000L)) {
+                "expected a $tag value: canonical instant text, or a whole epoch number below 9e15 in magnitude"
+            } else {
+                val i = whole.toLong()
+                val second =
+                    if (digits == 0) {
+                        if (i >= 100_000_000_000L || i <= -100_000_000_000L) i / 1000 else i
+                    } else {
+                        i.floorDiv(pow10(digits))
+                    }
+                if (second < MIN_EPOCH_SECOND || second > MAX_EPOCH_SECOND) {
+                    "the epoch $i names an instant outside the years 0000-9999 the canonical timestamp spells"
+                } else {
+                    null
+                }
+            }
+        }
+        else -> "expected a $tag value: canonical instant text, or a whole epoch number"
+    }
+
+private fun pow10(n: Int): Long = (1..n).fold(1L) { acc, _ -> acc * 10 }
+
+/**
+ * The fraction digits of CANONICAL instant text (`YYYY-MM-DDThh:mm:ssZ`, or `YYYY-MM-DDThh:mm:ss.FZ`
+ * with one to nine digits and no trailing zero, naming a moment that exists), or -1 for any other text.
+ */
+private fun canonicalFractionDigits(s: String): Int {
+    if (s.length < 20 || s[4] != '-' || s[7] != '-' || s[10] != 'T' || s[13] != ':' || s[16] != ':') return -1
+    fun num(at: Int, n: Int): Int {
+        var acc = 0
+        for (k in at until at + n) {
+            if (s[k] !in '0'..'9') return -1
+            acc = acc * 10 + (s[k] - '0')
+        }
+        return acc
+    }
+    val y = num(0, 4)
+    val mo = num(5, 2)
+    val d = num(8, 2)
+    val h = num(11, 2)
+    val mi = num(14, 2)
+    val se = num(17, 2)
+    if (y < 0 || mo !in 1..12 || d < 1 || d > java.time.YearMonth.of(y, mo).lengthOfMonth() ||
+        h !in 0..23 || mi !in 0..59 || se !in 0..59
+    ) {
+        return -1
+    }
+    if (s.length == 20) return if (s[19] == 'Z') 0 else -1
+    if (s.length > 30 || s[19] != '.' || s[s.length - 1] != 'Z' || s[s.length - 2] == '0') return -1
+    if (num(20, s.length - 21) < 0) return -1
+    return s.length - 21
 }
 
 /**
