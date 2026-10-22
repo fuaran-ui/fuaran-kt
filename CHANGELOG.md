@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Changed (Phase 2286)
+
+- The JSON reader refuses two number tokens it read, both as `INVALID_JSON`: an overflowing exponent
+  (`1e999`), which read as an infinity (WIRE_FORMAT.md §20.2 row 7, amended), and an integer token past
+  2^53 that is not the canonical float layout of the double it reads as (`9007199254740993`), which
+  read as the nearest double (§2 rule 5, amended). `1e-999` still reads as zero and
+  `10000000000000000` still reads. This lands with the move of `corpus-pin.json` past the corpus
+  commit that amends both rules: at an earlier pin the corpus still pins the old answers.
+
 ### Changed (Phase 2300, rule 1; Phase 1962)
 
 - A field holding its declared default is omitted from the canonical form on every kind. Fifteen

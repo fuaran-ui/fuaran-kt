@@ -29,9 +29,9 @@ data class JsonString(val value: String) : JsonValue
 data class JsonNumber(val raw: String) : JsonValue {
     /**
      * The lexeme as a `Double`. Total for any value the reader produced: [Json]'s number scanner
-     * admits exactly the RFC 8259 grammar, and `String.toDouble` accepts every lexeme in it —
-     * rounding to the nearest representable value, and to an infinity for an exponent past the
-     * `Double` range, which is what a JSON reader is meant to do rather than an error.
+     * admits exactly the RFC 8259 grammar, and `String.toDouble` accepts every lexeme in it,
+     * rounding to the nearest representable value. The scanner refuses a lexeme past the
+     * `Double` range (Phase 2286), so the result is always finite.
      */
     fun toDouble(): Double = raw.toDouble()
 
@@ -433,7 +433,54 @@ object Json {
                 while (!atEnd() && src[pos] in '0'..'9') pos++
                 if (pos == expStart) malformed()
             }
-            return JsonNumber(src.substring(start, pos))
+            val raw = src.substring(start, pos)
+            checkNumberValue(raw, start)
+            return JsonNumber(raw)
+        }
+
+        /**
+         * The two VALUE rules a well-formed number token must still meet (Phase 2286, the
+         * amended WIRE_FORMAT.md §20.2 row 7 and §2 rule 5). A value outside the finite `Double`
+         * range (`1e999`) is refused: the wire has no non-finite float. An integer token past
+         * 2^53 is read only when it is the canonical float layout of the double it reads as
+         * (`10000000000000000` is; `9007199254740993`, which reads as 2^53, is not). The second
+         * is judged on the TOKEN, because 2^53 + 1 reads as 2^53 and a range check on the value
+         * would admit it.
+         */
+        private fun checkNumberValue(raw: String, start: Int) {
+            val d = raw.toDouble()
+            if (d.isInfinite()) {
+                throw JsonSyntaxException(
+                    "number at offset $start is outside the finite double range; it cannot round-trip on the wire: $raw",
+                )
+            }
+            if (raw.none { it == '.' || it == 'e' || it == 'E' }) {
+                val digits = raw.removePrefix("-")
+                val safe = digits.length < 16 || (digits.length == 16 && digits <= "9007199254740992")
+                if (!safe && canonicalIntegerLayout(d) != raw) {
+                    throw JsonSyntaxException(
+                        "integer literal at offset $start is outside the int53 safe range (|n| > 2^53); " +
+                            "it cannot round-trip without precision loss: $raw",
+                    )
+                }
+            }
+        }
+
+        /**
+         * The canonical float layout (WIRE_FORMAT.md §2 rule 5) of `d` when it is written in
+         * fixed point with no fraction — a base-10 exponent of 15 or 16, the only layouts an
+         * integer token past 2^53 can match — else `null`. The digits are the shortest that
+         * round-trip, which is what `Double.toString` writes (JDK 19 and later).
+         */
+        private fun canonicalIntegerLayout(d: Double): String? {
+            val s = kotlin.math.abs(d).toString()
+            val e = s.indexOf('E')
+            if (e < 0) return null
+            val exponent = s.substring(e + 1).toInt()
+            if (exponent !in 15..16) return null
+            val digits = s.substring(0, e).replace(".", "").trimEnd('0').ifEmpty { "0" }
+            if (digits.length > exponent + 1) return null
+            return (if (d < 0) "-" else "") + digits.padEnd(exponent + 1, '0')
         }
 
         private fun readBool(): JsonBool =

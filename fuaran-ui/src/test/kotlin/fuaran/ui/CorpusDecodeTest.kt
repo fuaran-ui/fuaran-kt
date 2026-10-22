@@ -1589,9 +1589,26 @@ fun main() {
     runner.check("determinism/an-integer-slot-refuses-a-fraction-and-an-out-of-range-value") {
         // Not truncated, not saturated: both used to produce a value the author never
         // wrote, silently, which is the defect §20 closes one layer down in the syntax.
-        for (lit in listOf("2.5", "1e10", "3000000000", "-3000000000", "1e400")) {
+        for (lit in listOf("2.5", "1e10", "3000000000", "-3000000000")) {
             val got = refusalCode(skeleton(lit))
             if (got != FuaranDecodeException.WRONG_TYPE) error("'$lit' must be WRONG_TYPE, got $got")
+        }
+        // Since Phase 2286 an overflowing exponent never reaches the slot: the parse refuses it.
+        val overflow = refusalCode(skeleton("1e400"))
+        if (overflow != "INVALID_JSON") error("'1e400' must be INVALID_JSON, got $overflow")
+    }
+    runner.check("determinism/row-7-and-rule-5-number-tokens (Phase 2286)") {
+        // §20.2 row 7 and §2 rule 5, both amended: an overflowing exponent, and an integer token
+        // past 2^53 that is not the canonical float layout of its double, are refused.
+        fun payload(lit: String) =
+            "{\"id\":\"c\",\"kind\":{\"\$type\":\"Custom\",\"componentId\":\"c\",\"moduleId\":\"m\",\"props\":{\"n\":$lit}}}"
+        for (lit in listOf("1e999", "-1e999", "9007199254740993", "-9007199254740993", "12345678901234567890", "100000000000000000", "36028797018963968")) {
+            val got = refusalCode(payload(lit))
+            if (got != "INVALID_JSON") error("'$lit' must be INVALID_JSON, got $got")
+        }
+        for (lit in listOf("1e-999", "9007199254740991", "9007199254740992", "9007199254740994", "10000000000000000", "36028797018963970")) {
+            val got = refusalCode(payload(lit))
+            if (got != "ACCEPTED") error("'$lit' must decode, got $got")
         }
     }
     runner.check("determinism/an-integer-slot-refuses-a-sentinel-string") {
