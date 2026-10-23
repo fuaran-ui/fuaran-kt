@@ -65,6 +65,13 @@ jobs:
           repository: fuaran-ui/fuaran-rs
           path: _fuaran-rs
 
+      # fuaran-rs depends on the Core spine by path (`../fuaran-core-rs`), so it sits beside it.
+      - name: Checkout fuaran-core-rs (the Core spine fuaran-rs depends on)
+        uses: actions/checkout@v4
+        with:
+          repository: Fuaran-Core/fuaran-core-rs
+          path: fuaran-core-rs
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

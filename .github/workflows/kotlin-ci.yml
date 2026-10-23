@@ -272,6 +272,13 @@ jobs:
           repository: fuaran-ui/fuaran-rs
           path: fuaran-rs
 
+      # fuaran-rs depends on the Core spine by path (`../fuaran-core-rs`), so it sits beside it.
+      - name: Checkout fuaran-core-rs (the Core spine fuaran-rs depends on)
+        uses: actions/checkout@v4
+        with:
+          repository: Fuaran-Core/fuaran-core-rs
+          path: fuaran-core-rs
+
       - name: Read the pinned corpus revision
         id: pin
         run: |
