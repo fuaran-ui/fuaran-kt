@@ -72,7 +72,10 @@ $ErrorActionPreference = "Stop"
 # Seeded before any stage reads it: PowerShell leaves $LASTEXITCODE UNSET until the
 # session's first native command, and `$null -ne 0` is TRUE — so a check reached
 # before `git` has run once reports a failure that did not happen.
-$LASTEXITCODE = 0
+# `global:` is load-bearing: a plain assignment makes a script-scope copy, and when this file
+# is run as `.\corpus-pin.ps1` or `& ./corpus-pin.ps1` every later check reads that copy
+# and never the code a native command set, so a failed stage reads as passed.
+$global:LASTEXITCODE = 0
 
 $Repo = Split-Path $PSScriptRoot -Parent
 $PinFile = Join-Path $Repo "corpus-pin.json"
@@ -88,7 +91,7 @@ function Invoke-Git([string] $Dir, [string[]] $GitArgs) {
     # A git error is an ANSWER here (no such ref, not a clone), never an exception:
     # every caller below distinguishes "cannot tell" from "differs", and a throw
     # would collapse the two into one.
-    $LASTEXITCODE = 0
+    $global:LASTEXITCODE = 0
     $out = & git -C $Dir @GitArgs 2>$null
     if ($LASTEXITCODE -ne 0) { return $null }
     if ($null -eq $out) { return $null }
